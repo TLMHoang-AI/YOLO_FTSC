@@ -32,6 +32,8 @@ from ultralytics.nn.modules import (
     ASFAttention,
     BiLevelRoutingAttention,
     BoundaryFeatureBlock,
+    DBSS,
+    DualIrreducibilityHIT,
     Bottleneck,
     BottleneckCSP,
     C2f,
@@ -632,7 +634,16 @@ class BaseModel(torch.nn.Module):
                 preds = self.forward(batch["img"])
             finally:
                 clear_boundary_context()
-        return self.criterion(preds, batch)
+        loss, items = self.criterion(preds, batch)
+        diagnostics = {}
+        for module in self.modules():
+            if isinstance(module, (DBSS, DualIrreducibilityHIT)):
+                auxiliary, values = module.auxiliary_loss(batch)
+                loss[0] = loss[0] + auxiliary * batch["img"].shape[0]
+                items[0] = items[0] + auxiliary.detach()
+                diagnostics.update({name: float(value) for name, value in values.items()})
+        self.mechanism_metrics = diagnostics
+        return loss, items
 
     def init_criterion(self):
         """Initialize the loss criterion for the BaseModel."""
@@ -2232,7 +2243,7 @@ def parse_model(d, ch, verbose=True):
         elif m is ASFAttention:
             c2 = ch[f]
             args = [c2, *args]
-        elif m in frozenset({AdversarialPerturbationInjection, BoundaryFeatureBlock, FeatureDGFE}):
+        elif m in frozenset({AdversarialPerturbationInjection, BoundaryFeatureBlock, DBSS, DualIrreducibilityHIT, FeatureDGFE}):
             c2 = ch[f]
             args = [c2, *args]
         elif m is EnSimAM:
