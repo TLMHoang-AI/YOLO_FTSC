@@ -65,12 +65,17 @@ def train_variant(args: argparse.Namespace, variant: str, data_yaml: Path) -> di
     model = YOLO(CONFIG_DIR / VARIANTS[variant])
     if args.pretrained:
         model.load(args.pretrained)
-    result = model.train(
-        data=str(data_yaml), epochs=args.epochs, imgsz=args.imgsz, batch=args.batch_size,
-        device=args.device, workers=args.workers, project=str(args.project), name=variant,
-        seed=args.seed, deterministic=True, patience=args.patience,
-    )
-    metrics = dict(getattr(result, "results_dict", {}) or {})
+    try:
+        model.train(
+            data=str(data_yaml), epochs=args.epochs, imgsz=args.imgsz, batch=args.batch_size,
+            device=args.device, workers=args.workers, project=str(args.project), name=variant,
+            seed=args.seed, deterministic=True, patience=args.patience,
+        )
+    except FloatingPointError:
+        if not completed_variant(args.project, variant):
+            raise
+        print(f"Final validation failed for {variant}; retrying from saved best.pt")
+    metrics = evaluate_checkpoint(args, variant, data_yaml)
     trained_model = getattr(getattr(model, "trainer", None), "model", model.model)
     metrics.update(getattr(trained_model, "mechanism_metrics", {}) or {})
     return {"variant": variant, **metrics}
@@ -81,16 +86,19 @@ def completed_variant(project: Path, variant: str) -> bool:
     return all((run / relative).is_file() for relative in ("weights/best.pt", "weights/last.pt", "results.csv"))
 
 
-def validate_completed(args: argparse.Namespace, variant: str, data_yaml: Path) -> dict[str, object]:
+def evaluate_checkpoint(args: argparse.Namespace, variant: str, data_yaml: Path) -> dict[str, object]:
     local_ultralytics()
     from ultralytics import YOLO
 
     checkpoint = args.project / variant / "weights/best.pt"
-    result = YOLO(checkpoint).val(
-        data=str(data_yaml), imgsz=args.imgsz, batch=args.batch_size, device=args.device,
-        workers=args.workers, project=str(args.project / "reused_validation"), name=variant, plots=False,
-    )
-    return {"variant": variant, **dict(getattr(result, "results_dict", {}) or {})}
+    metrics = {}
+    for split in ("val", "test"):
+        result = YOLO(checkpoint).val(
+            data=str(data_yaml), split=split, imgsz=args.imgsz, batch=args.batch_size, device=args.device,
+            workers=args.workers, project=str(args.project / "evaluation"), name=f"{variant}_{split}", plots=False,
+        )
+        metrics.update({f"{split}/{key}": value for key, value in dict(result.results_dict or {}).items()})
+    return metrics
 
 
 def main() -> None:
@@ -120,7 +128,7 @@ def main() -> None:
     for variant in variants:
         if args.reuse_completed and completed_variant(args.project, variant):
             print(f"Reusing completed variant: {variant}")
-            rows.append(validate_completed(args, variant, data_yaml))
+            rows.append({"variant": variant, **evaluate_checkpoint(args, variant, data_yaml)})
         else:
             rows.append(train_variant(args, variant, data_yaml))
     args.project.mkdir(parents=True, exist_ok=True)
