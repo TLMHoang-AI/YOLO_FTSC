@@ -76,6 +76,23 @@ def train_variant(args: argparse.Namespace, variant: str, data_yaml: Path) -> di
     return {"variant": variant, **metrics}
 
 
+def completed_variant(project: Path, variant: str) -> bool:
+    run = project / variant
+    return all((run / relative).is_file() for relative in ("weights/best.pt", "weights/last.pt", "results.csv"))
+
+
+def validate_completed(args: argparse.Namespace, variant: str, data_yaml: Path) -> dict[str, object]:
+    local_ultralytics()
+    from ultralytics import YOLO
+
+    checkpoint = args.project / variant / "weights/best.pt"
+    result = YOLO(checkpoint).val(
+        data=str(data_yaml), imgsz=args.imgsz, batch=args.batch_size, device=args.device,
+        workers=args.workers, project=str(args.project / "reused_validation"), name=variant, plots=False,
+    )
+    return {"variant": variant, **dict(getattr(result, "results_dict", {}) or {})}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     selection = parser.add_mutually_exclusive_group(required=True)
@@ -94,11 +111,18 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--hf-repo-id", default=None)
+    parser.add_argument("--reuse-completed", action="store_true")
     args = parser.parse_args()
 
     data_yaml = prepare(args.data_root, args.dataset_out, args.seed, args.limit)
     variants = list(VARIANTS) if args.all else [args.variant]
-    rows = [train_variant(args, variant, data_yaml) for variant in variants]
+    rows = []
+    for variant in variants:
+        if args.reuse_completed and completed_variant(args.project, variant):
+            print(f"Reusing completed variant: {variant}")
+            rows.append(validate_completed(args, variant, data_yaml))
+        else:
+            rows.append(train_variant(args, variant, data_yaml))
     args.project.mkdir(parents=True, exist_ok=True)
     columns = sorted({key for row in rows for key in row}, key=lambda key: (key != "variant", key))
     with (args.project / "summary.csv").open("w", newline="", encoding="utf-8") as handle:

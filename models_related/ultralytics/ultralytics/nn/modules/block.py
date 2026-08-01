@@ -99,6 +99,8 @@ class DBSS(nn.Module):
         gamma_max: float = 0.6,
         loss_weight: float = 0.0,
         improvement_margin: float = 0.03,
+        diversity_beta: float = 1.0,
+        basis_similarity_threshold: float = 0.9,
     ) -> None:
         super().__init__()
         candidate_count = math.prod(candidate_grid)
@@ -113,56 +115,94 @@ class DBSS(nn.Module):
         self.gamma_max = float(gamma_max)
         self.loss_weight = float(loss_weight)
         self.improvement_margin = float(improvement_margin)
+        self.diversity_beta = float(diversity_beta)
+        self.basis_similarity_threshold = float(basis_similarity_threshold)
         self.embedding = nn.Conv2d(c1, embed_channels, 1)
+        self.embedding_norm = nn.LayerNorm(embed_channels)
         self.direction = nn.Sequential(nn.Conv2d(c1 + embed_channels, 64, 1), nn.SiLU(), nn.Conv2d(64, c1, 1))
         self.magnitude = nn.Sequential(nn.Conv2d(embed_channels, 64, 1), nn.SiLU(), nn.Conv2d(64, 1, 1))
         nn.init.zeros_(self.direction[-1].weight)
         nn.init.zeros_(self.direction[-1].bias)
         self.last_aux: dict[str, torch.Tensor] | None = None
+        self._ridge_retry_count = 0
+        self._ridge_lstsq_count = 0
+
+    def _embed(self, x: torch.Tensor) -> torch.Tensor:
+        embedding = self.embedding(x).permute(0, 2, 3, 1)
+        return self.embedding_norm(embedding).permute(0, 3, 1, 2)
+
+    def _select_bases(self, scores: torch.Tensor, candidates: torch.Tensor) -> torch.Tensor:
+        shortlist = scores.topk(min(self.shortlist_size, scores.numel())).indices
+        chosen = [shortlist[0]]
+        available = torch.ones(shortlist.numel(), dtype=torch.bool, device=scores.device)
+        available[0] = False
+        for _ in range(1, min(self.num_bases, shortlist.numel())):
+            similarity = candidates[shortlist] @ candidates[torch.stack(chosen)].T
+            max_similarity = similarity.max(dim=1).values
+            selection_score = scores[shortlist] - self.diversity_beta * max_similarity
+            diverse = available & (max_similarity <= self.basis_similarity_threshold)
+            eligible = diverse if diverse.any() else available
+            selection_score = selection_score.masked_fill(~eligible, -torch.inf)
+            position = selection_score.argmax()
+            chosen.append(shortlist[position])
+            available[position] = False
+        return torch.stack(chosen)
 
     def _project(self, tokens: torch.Tensor, bases: torch.Tensor) -> torch.Tensor:
         dtype = tokens.dtype
         with torch.autocast(device_type=tokens.device.type, enabled=False):
             tokens32, bases32 = tokens.float(), bases.float()
-            gram = bases32 @ bases32.T
-            gram = gram + self.ridge_lambda * torch.eye(bases.shape[0], device=bases.device)
+            if not torch.isfinite(tokens32).all() or not torch.isfinite(bases32).all():
+                raise FloatingPointError("DBSS ridge input contains non-finite values")
+            base_gram = bases32 @ bases32.T
             rhs = bases32 @ tokens32.T
-            coefficients = torch.linalg.solve(gram, rhs)
+            identity = torch.eye(bases.shape[0], device=bases.device, dtype=torch.float32)
+            gram = base_gram + self.ridge_lambda * identity
+            coefficients, info = torch.linalg.solve_ex(gram, rhs, check_errors=False)
+            if int(info.item()) != 0 or not torch.isfinite(coefficients).all():
+                self._ridge_retry_count += 1
+                gram = base_gram + 1e-2 * identity
+                coefficients, info = torch.linalg.solve_ex(gram, rhs, check_errors=False)
+            if int(info.item()) != 0 or not torch.isfinite(coefficients).all():
+                self._ridge_lstsq_count += 1
+                coefficients = torch.linalg.lstsq(gram, rhs).solution
             projected = coefficients.T @ bases32
-        return projected.to(dtype)
+        projected = projected.to(dtype)
+        if not torch.isfinite(projected).all():
+            raise FloatingPointError("DBSS ridge projection contains non-finite values")
+        return projected
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        embedding = F.normalize(self.embedding(x), dim=1)
-        pooled = F.adaptive_avg_pool2d(embedding, self.candidate_grid)
-        raw_candidates = F.adaptive_avg_pool2d(x, self.candidate_grid)
-        outputs, selected_all = [], []
+        embedding = self._embed(x)
+        outputs, selected_all, residuals = [], [], []
+        retry_start, lstsq_start = self._ridge_retry_count, self._ridge_lstsq_count
         for index in range(x.shape[0]):
-            candidates = pooled[index].flatten(1).T
-            raw = raw_candidates[index].flatten(1).T
-            score = raw.norm(dim=1)
-            shortlist = score.topk(min(self.shortlist_size, score.numel())).indices
-            normalized = F.normalize(candidates[shortlist], dim=1)
-            chosen = [0]
-            for _ in range(1, min(self.num_bases, shortlist.numel())):
-                similarity = normalized @ normalized[chosen].T
-                rank = score[shortlist] - similarity.max(dim=1).values
-                rank[chosen] = -torch.inf
-                chosen.append(int(rank.argmax()))
-            bases = raw[shortlist[torch.tensor(chosen, device=x.device)]]
-            tokens = x[index].flatten(1).T
-            projected = self._project(tokens, bases).T.reshape_as(x[index])
             emb = embedding[index : index + 1]
-            direction = self.direction(torch.cat((x[index : index + 1], emb), 1))
-            gamma = torch.sigmoid(self.magnitude(emb)) * self.gamma_max
-            residual = F.normalize(direction, dim=1) * projected.norm(dim=0, keepdim=True)
-            outputs.append(x[index : index + 1] - gamma * residual)
-            selected_all.append(bases)
+            tokens = emb.flatten(2).squeeze(0).T
+            candidates = F.adaptive_avg_pool2d(emb, self.candidate_grid).flatten(2).squeeze(0).T
+            normalized_tokens = F.normalize(tokens, dim=-1)
+            normalized_candidates = F.normalize(candidates, dim=-1)
+            scores = (normalized_candidates @ normalized_tokens.T).mean(dim=1)
+            indices = self._select_bases(scores, normalized_candidates)
+            projected = self._project(tokens, candidates[indices])
+            residual = (tokens - projected).T.reshape_as(emb)
+            direction = self.direction(torch.cat((x[index : index + 1], residual), 1))
+            gamma = self.magnitude(residual).sigmoid()
+            feature_scale = (x[index : index + 1].square().mean(dim=1, keepdim=True) + 1e-6).sqrt().detach()
+            displacement = self.gamma_max * feature_scale * gamma * direction / (1 + direction.norm(dim=1, keepdim=True))
+            outputs.append(x[index : index + 1] + displacement)
+            raw_candidates = F.adaptive_avg_pool2d(x[index : index + 1], self.candidate_grid).flatten(2).squeeze(0).T
+            selected_all.append(raw_candidates[indices])
+            residuals.append(residual)
         out = torch.cat(outputs)
         self.last_aux = {
             "pre": x,
             "post": out,
             "bases": torch.stack(selected_all),
+            "residual": torch.cat(residuals),
             "displacement_ratio": (out - x).square().mean().sqrt() / x.square().mean().sqrt().clamp_min(1e-6),
+            "ridge_retry": x.new_tensor(self._ridge_retry_count - retry_start),
+            "ridge_lstsq_fallback": x.new_tensor(self._ridge_lstsq_count - lstsq_start),
         } if self.training else None
         return out
 
@@ -190,7 +230,12 @@ class DBSS(nn.Module):
             gap_post = F.cosine_similarity(foreground_post, fg[None]) - F.cosine_similarity(foreground_post, bg[None])
             hinges.append(F.relu(self.improvement_margin - (gap_post - gap_pre)))
         loss = torch.cat(hinges).mean() * self.loss_weight if hinges else self.last_aux["post"].sum() * 0
-        return loss, {"dbss_displacement_ratio": self.last_aux["displacement_ratio"].detach(), "loss_dbss_sep": loss.detach()}
+        return loss, {
+            "dbss_displacement_ratio": self.last_aux["displacement_ratio"].detach(),
+            "dbss_ridge_retry": self.last_aux["ridge_retry"].detach(),
+            "dbss_ridge_lstsq_fallback": self.last_aux["ridge_lstsq_fallback"].detach(),
+            "loss_dbss_sep": loss.detach(),
+        }
 
 
 class _MaskedCenterConv2d(nn.Conv2d):
