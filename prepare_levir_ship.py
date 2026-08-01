@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a leakage-free Ultralytics LEVIR-Ship dataset."""
+"""Prepare reproducible random Ultralytics LEVIR-Ship splits."""
 
 from __future__ import annotations
 
@@ -7,11 +7,12 @@ import argparse
 import json
 import random
 import re
-from collections import defaultdict
+import shutil
 from pathlib import Path
 
 
-SPLITS = {"train": 0.70, "val": 0.15, "test": 0.15}
+PUBLISHED_COUNTS = {"train": 2320, "val": 788, "test": 788}
+SPLITS = {name: count / sum(PUBLISHED_COUNTS.values()) for name, count in PUBLISHED_COUNTS.items()}
 SCENE_RE = re.compile(r"^(.*)_(-?\d+)_(-?\d+)$")
 
 
@@ -33,22 +34,16 @@ def validate_label(path: Path) -> None:
 
 
 def split_samples(samples: list[tuple[Path, Path, str]], seed: int) -> dict[str, list[tuple[Path, Path, str]]]:
-    groups: dict[str, list[tuple[Path, Path, str]]] = defaultdict(list)
-    for sample in samples:
-        groups[sample[2]].append(sample)
-    scenes = list(groups)
-    random.Random(seed).shuffle(scenes)
-    scenes.sort(key=lambda name: len(groups[name]), reverse=True)
-    targets = {name: len(samples) * ratio for name, ratio in SPLITS.items()}
-    counts = dict.fromkeys(SPLITS, 0)
-    output = {name: [] for name in SPLITS}
-    for scene in scenes:
-        size = len(groups[scene])
-        destination = min(SPLITS, key=lambda name: sum(
-            ((counts[key] + (size if key == name else 0) - targets[key]) / targets[key]) ** 2 for key in SPLITS
-        ))
-        output[destination].extend(groups[scene])
-        counts[destination] += size
+    shuffled = samples.copy()
+    random.Random(seed).shuffle(shuffled)
+    raw_counts = {name: len(samples) * ratio for name, ratio in SPLITS.items()}
+    counts = {name: int(value) for name, value in raw_counts.items()}
+    for name in sorted(SPLITS, key=lambda key: raw_counts[key] - counts[key], reverse=True)[:len(samples) - sum(counts.values())]:
+        counts[name] += 1
+    output, start = {}, 0
+    for name in SPLITS:
+        output[name] = shuffled[start:start + counts[name]]
+        start += counts[name]
     return output
 
 
@@ -68,6 +63,9 @@ def prepare(data_root: Path, out_dir: Path, seed: int = 42, limit: int = 0) -> P
         samples.append((image_dir / f"{stem}.png", label, scene_name(stem)))
     assigned = split_samples(samples, seed)
     manifest = {"seed": seed, "ratios": SPLITS, "splits": {}}
+    for generated in (out_dir / "images", out_dir / "labels"):
+        if generated.exists():
+            shutil.rmtree(generated)
     for split, records in assigned.items():
         records = records[:limit] if limit else records
         images_out, labels_out = out_dir / "images" / split, out_dir / "labels" / split
@@ -79,9 +77,6 @@ def prepare(data_root: Path, out_dir: Path, seed: int = 42, limit: int = 0) -> P
                 if not destination.exists():
                     destination.symlink_to(source)
         manifest["splits"][split] = {"images": len(records), "scenes": sorted({record[2] for record in records})}
-    scene_sets = [set(value["scenes"]) for value in manifest["splits"].values()]
-    if any(scene_sets[i] & scene_sets[j] for i in range(3) for j in range(i + 1, 3)):
-        raise AssertionError("Scene leakage detected")
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     yaml_path = out_dir / "levir_ship.yaml"
     yaml_path.write_text(f"path: {out_dir}\ntrain: images/train\nval: images/val\ntest: images/test\nnames:\n  0: ship\n", encoding="utf-8")
