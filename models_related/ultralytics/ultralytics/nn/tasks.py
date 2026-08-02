@@ -102,6 +102,7 @@ from ultralytics.nn.modules import (
     clear_boundary_context,
     set_boundary_context,
     v10Detect,
+    v10GCTSDetect,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, SAFE_LOAD, SETTINGS, WINDOWS, YAML, colorstr, emojis
 from ultralytics.utils.checks import REMOTE_FILE_PREFIXES, check_file, check_requirements, check_suffix, check_yaml
@@ -638,7 +639,7 @@ class BaseModel(torch.nn.Module):
         loss, items = self.criterion(preds, batch)
         diagnostics = {}
         for module in self.modules():
-            if isinstance(module, (DBSS, DualIrreducibilityHIT, GCTS)):
+            if isinstance(module, (DBSS, DualIrreducibilityHIT, GCTS, v10GCTSDetect)):
                 auxiliary, values = module.auxiliary_loss(batch)
                 loss[0] = loss[0] + auxiliary * batch["img"].shape[0]
                 items[0] = items[0] + auxiliary.detach()
@@ -2309,6 +2310,8 @@ def parse_model(d, ch, verbose=True):
         elif m is SemanticSegment:
             args.append([ch[x] for x in f])  # nc, ch tuple
         elif m is v10Detect:
+            args.append([ch[x] for x in f])
+        elif m is v10GCTSDetect:
             args.append([ch[x] for x in f])
         elif m is ImagePoolingAttn:
             args.insert(1, [ch[x] for x in f])  # channels as second arg

@@ -3,7 +3,7 @@ from copy import deepcopy
 import pytest
 import torch
 
-from ultralytics.nn.modules import DBSS, GCTS, Conv, DualIrreducibilityHIT
+from ultralytics.nn.modules import DBSS, GCTS, Conv, DualIrreducibilityHIT, v10GCTSDetect
 from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
 
@@ -59,6 +59,70 @@ def test_gcts_auxiliary_loss_has_selector_gradient_and_handles_empty_gt():
     module(torch.randn(1, 8, 8, 8))
     empty_loss, _ = module.auxiliary_loss(batch(False))
     assert empty_loss == 0 and empty_loss.requires_grad
+
+
+def test_gcts_v2_is_initially_identity_and_preserves_quadrant_coordinates():
+    head = v10GCTSDetect(nc=1, ch=(8, 16, 32, 64)).train()
+    features = [torch.randn(2, 8, 16, 16), torch.randn(2, 16, 8, 8), torch.randn(2, 32, 4, 4), torch.randn(2, 64, 2, 2)]
+    box_features, cls_features = head._route(features)
+    assert torch.equal(box_features[0], features[1])
+    assert torch.equal(cls_features[0], features[1])
+    assert all(torch.equal(a, b) for a, b in zip(box_features[1:], features[2:]))
+
+    centers = torch.tensor([[0.1375, 0.2125], [0.925, 0.8875]])
+    head.last_gcts = {"alpha": torch.empty(1, 4, 8, 8)}
+    batch_data = {"batch_idx": torch.zeros(2), "bboxes": torch.cat((centers, torch.ones(2, 2)), 1)}
+    _, _, _, fractions, target = head._targets(batch_data)
+    expected = torch.stack((target[:, 1] + target[:, 3], target[:, 2] + target[:, 3]), 1)
+    assert torch.allclose(expected, fractions)
+
+
+def test_gcts_v2_routes_separate_box_and_class_features_and_backpropagates():
+    head = v10GCTSDetect(nc=1, epsilon=0.05, tiny_gate=True, ch=(8, 16, 32, 64)).train()
+    head.cls_projection.bias.data.fill_(1)
+    head.pos_projection.bias.data.fill_(1)
+    features = [torch.randn(1, 8, 16, 16), torch.randn(1, 16, 8, 8), torch.randn(1, 32, 4, 4), torch.randn(1, 64, 2, 2)]
+    box_features, cls_features = head._route(features)
+    assert torch.allclose(cls_features[0], features[1] + 1)
+    assert not torch.equal(box_features[0], features[1])
+    assert (box_features[0] - features[1]).abs().max() <= head.epsilon
+
+    batch_data = {
+        "img": torch.rand(1, 3, 64, 64),
+        "batch_idx": torch.tensor([0, 0]),
+        "bboxes": torch.tensor([[0.3, 0.3, 0.1, 0.1], [0.3, 0.3, 0.4, 0.4]]),
+    }
+    loss, metrics = head.auxiliary_loss(batch_data)
+    assert torch.isfinite(loss)
+    assert {"loss_gcts_v2_pos", "loss_gcts_v2_gate", "gcts_v2_coord_mae"} <= metrics.keys()
+    loss.backward()
+    assert head.selector.weight.grad is not None
+
+    no_gate = v10GCTSDetect(nc=1, tiny_gate=False, ch=(8, 16, 32, 64)).train()
+    no_gate._route(features)
+    _, no_gate_metrics = no_gate.auxiliary_loss(batch_data)
+    assert no_gate_metrics["loss_gcts_v2_gate"] == 0
+
+
+def test_gcts_v2_gate_thresholds_collisions_and_background_sampling():
+    head = v10GCTSDetect(nc=1, tiny_gate=True, ch=(8, 16, 32, 64)).train()
+    features = [torch.randn(1, 8, 16, 16), torch.randn(1, 16, 8, 8), torch.randn(1, 32, 4, 4), torch.randn(1, 64, 2, 2)]
+    head._route(features)
+    # All boxes share a cell: the <20 px target must win over ignore (20-24 px) and large (>24 px).
+    boxes = torch.tensor([[0.3, 0.3, 10 / 64, 0.0], [0.3, 0.3, 22 / 64, 0.0], [0.3, 0.3, 30 / 64, 0.0]])
+    batch_data = {"img": torch.rand(1, 3, 64, 64), "batch_idx": torch.zeros(3), "bboxes": boxes}
+    bi, ys, xs, _, _ = head._targets(batch_data)
+    indices, targets = head._gate_targets(batch_data, bi, ys, xs)
+    assert len(indices) == 2  # one labeled cell plus one deterministic background cell
+    assert sorted(targets.tolist()) == [0.0, 1.0]
+
+    # Without the tiny object, a 20-24 px collision remains ignored and only the large cell is labeled.
+    boxes = torch.tensor([[0.3, 0.3, 22 / 64, 0.0], [0.7, 0.7, 30 / 64, 0.0]])
+    batch_data["batch_idx"] = torch.zeros(2)
+    batch_data["bboxes"] = boxes
+    bi, ys, xs, _, _ = head._targets(batch_data)
+    indices, targets = head._gate_targets(batch_data, bi, ys, xs)
+    assert len(indices) == 2 and not targets.any()  # one large negative plus one background negative
 
 
 @pytest.mark.parametrize("module", [DBSS(16, embed_channels=8), DualIrreducibilityHIT(16)])

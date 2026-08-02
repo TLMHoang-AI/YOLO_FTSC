@@ -123,6 +123,7 @@ from .head import (
     YOLOESegment,
     YOLOESegment26,
     v10Detect,
+    v10GCTSDetect,
 )
 from .transformer import (
     AIFI,
@@ -249,4 +250,5 @@ __all__ = (
     "set_boundary_context",
     "set_boundary_enabled",
     "v10Detect",
+    "v10GCTSDetect",
 )

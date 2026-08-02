@@ -31,6 +31,7 @@ __all__ = (
     "YOLOEDetect",
     "YOLOESegment",
     "v10Detect",
+    "v10GCTSDetect",
 )
 
 
@@ -322,6 +323,7 @@ class Detect(nn.Module):
     def forward_head(
         self,
         x: list[torch.Tensor],
+        cls_x: list[torch.Tensor] | None = None,
         box_head: torch.nn.Module = None,
         cls_head: torch.nn.Module = None,
         quality_head: torch.nn.Module = None,
@@ -332,19 +334,20 @@ class Detect(nn.Module):
         """Concatenates and returns predicted bounding boxes and class probabilities."""
         if box_head is None or cls_head is None:  # for fused inference
             return dict()
+        cls_x = x if cls_x is None else cls_x
         bs = x[0].shape[0]  # batch size
         box_features = [self.box_detail[i](x[i]) for i in range(self.nl)]
         if not getattr(self, "cls_geometry_fuse", False):
             boxes_per_level = [box_head[i](box_features[i]) for i in range(self.nl)]
             boxes = torch.cat([b.view(bs, 4 * self.reg_max, -1) for b in boxes_per_level], dim=-1)
-            scores = torch.cat([cls_head[i](x[i]).view(bs, self.nc, -1) for i in range(self.nl)], dim=-1)
+            scores = torch.cat([cls_head[i](cls_x[i]).view(bs, self.nc, -1) for i in range(self.nl)], dim=-1)
         else:
             boxes_per_level, scores_per_level = [], []
             for i in range(self.nl):
                 box_logits = box_head[i](box_features[i])
                 boxes_per_level.append(box_logits)
                 dist_map = self._geometry_dist_map(box_logits)
-                cls_logits = self._geometry_cls_logits(cls_head[i], x[i], dist_map, geom_embed[i], geom_fuse[i])
+                cls_logits = self._geometry_cls_logits(cls_head[i], cls_x[i], dist_map, geom_embed[i], geom_fuse[i])
                 scores_per_level.append(cls_logits.view(bs, self.nc, -1))
             boxes = torch.cat([b.view(bs, 4 * self.reg_max, -1) for b in boxes_per_level], dim=-1)
             scores = torch.cat(scores_per_level, dim=-1)
@@ -2043,6 +2046,151 @@ class v10Detect(Detect):
     def fuse(self):
         """Remove the one2many head for inference optimization."""
         self.cv2 = self.cv3 = None
+
+
+class v10GCTSDetect(v10Detect):
+    """YOLOv10 head with separate P2-guided classification and regression features."""
+
+    def __init__(
+        self,
+        nc: int = 80,
+        epsilon: float = 0.05,
+        tiny_gate: bool = True,
+        ch: tuple = (),
+        detail_ratio: float = 0.25,
+        select_weight: float = 0.1,
+        coord_weight: float = 1.0,
+        gate_weight: float = 0.1,
+    ) -> None:
+        if len(ch) != 4 or epsilon <= 0 or not 0 < detail_ratio <= 1:
+            raise ValueError("v10GCTSDetect requires [P2, P3, P4, P5], positive epsilon, and valid detail_ratio")
+        p2_channels, *detect_channels = ch
+        super().__init__(nc, tuple(detect_channels))
+        detail_channels = max(round(detect_channels[0] * detail_ratio), 1)
+        self.p2_projection = nn.Sequential(nn.Conv2d(p2_channels, detail_channels, 1, bias=False), nn.SiLU())
+        self.selector = nn.Conv2d(4 * detail_channels, 4, 1)
+        self.cls_projection = nn.Conv2d(4 * detail_channels, detect_channels[0], 1)
+        self.pos_projection = nn.Conv2d(7, detect_channels[0], 1)
+        self.tiny_gate_head = nn.Conv2d(detect_channels[0], 1, 1)
+        nn.init.zeros_(self.cls_projection.weight)
+        nn.init.zeros_(self.cls_projection.bias)
+        nn.init.zeros_(self.pos_projection.weight)
+        nn.init.zeros_(self.pos_projection.bias)
+        nn.init.zeros_(self.tiny_gate_head.weight)
+        nn.init.zeros_(self.tiny_gate_head.bias)
+        self.epsilon = float(epsilon)
+        self.tiny_gate = bool(tiny_gate)
+        self.select_weight = float(select_weight)
+        self.coord_weight = float(coord_weight)
+        self.gate_weight = float(gate_weight)
+        self.capture_diagnostics = False
+        self.last_gcts: dict[str, torch.Tensor] | None = None
+
+    def _route(self, x: list[torch.Tensor]) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+        p2, p3, p4, p5 = x
+        projected = self.p2_projection(p2)
+        packed = F.pixel_unshuffle(projected, 2)
+        if packed.shape[-2:] != p3.shape[-2:]:
+            raise ValueError(f"GCTS P2/P3 spatial mismatch: {packed.shape[-2:]} vs {p3.shape[-2:]}")
+        b, _, h, w = packed.shape
+        candidates = packed.reshape(b, -1, 4, h, w)
+        alpha = self.selector(packed).softmax(1)
+        content = (candidates * alpha[:, None]).reshape(b, -1, h, w)
+        cls_p3 = p3 + self.cls_projection(content)
+        x_hat = alpha[:, 1:2] + alpha[:, 3:4]
+        y_hat = alpha[:, 2:3] + alpha[:, 3:4]
+        entropy = -(alpha * alpha.clamp_min(1e-9).log()).sum(1, keepdim=True) / math.log(4)
+        position = torch.cat((alpha, x_hat - 0.5, y_hat - 0.5, entropy), 1)
+        correction = self.epsilon * self.pos_projection(position).tanh()
+        gate = self.tiny_gate_head(p3).sigmoid() if self.tiny_gate else torch.ones_like(x_hat)
+        box_p3 = p3 + gate * correction
+        self.last_gcts = (
+            {"alpha": alpha, "gate": gate, "x_hat": x_hat, "y_hat": y_hat}
+            if self.training or self.capture_diagnostics
+            else None
+        )
+        return [box_p3, p4, p5], [cls_p3, p4, p5]
+
+    def forward(self, x: list[torch.Tensor]):
+        """Route P2 detail separately into YOLOv10 box and classification branches."""
+        box_x, cls_x = self._route(x)
+        preds = self.forward_head(box_x, cls_x=cls_x, **self.one2many)
+        if self.end2end:
+            one2one = self.forward_head(
+                [xi.detach() for xi in box_x], cls_x=[xi.detach() for xi in cls_x], **self.one2one
+            )
+            preds = {"one2many": preds, "one2one": one2one}
+        if self.training:
+            return preds
+        y = self._inference(preds["one2one"] if self.end2end else preds)
+        if self.end2end:
+            y = self.postprocess(y.permute(0, 2, 1))
+        return y if self.export else (y, preds)
+
+    def _targets(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        alpha = self.last_gcts["alpha"]
+        centers = batch["bboxes"][:, :2]
+        coordinates = centers * centers.new_tensor((alpha.shape[-1], alpha.shape[-2]))
+        coordinates[:, 0].clamp_(0, alpha.shape[-1] - 1e-6)
+        coordinates[:, 1].clamp_(0, alpha.shape[-2] - 1e-6)
+        cells = coordinates.floor().long()
+        fractions = coordinates - cells
+        x, y = fractions.unbind(1)
+        q = torch.stack(((1 - x) * (1 - y), x * (1 - y), (1 - x) * y, x * y), 1)
+        return batch["batch_idx"].view(-1).long(), cells[:, 1], cells[:, 0], fractions, q
+
+    def _gate_targets(
+        self, batch: dict, batch_indices: torch.Tensor, ys: torch.Tensor, xs: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        gate = self.last_gcts["gate"]
+        state = torch.full(gate.shape[:1] + gate.shape[-2:], -2, device=gate.device, dtype=torch.int8)
+        image_h, image_w = batch["img"].shape[-2:]
+        sizes = torch.sqrt((batch["bboxes"][:, 2] * image_w).square() + (batch["bboxes"][:, 3] * image_h).square())
+        for bi, y, x, size in zip(batch_indices.tolist(), ys.tolist(), xs.tolist(), sizes.tolist()):
+            current = int(state[bi, y, x])
+            if size < 20:
+                state[bi, y, x] = 1
+            elif size <= 24 and current != 1:
+                state[bi, y, x] = -1
+            elif current == -2:
+                state[bi, y, x] = 0
+        labeled = (state >= 0).nonzero(as_tuple=False)
+        background = (state == -2).nonzero(as_tuple=False)
+        if len(background) and len(labeled):
+            pick = torch.linspace(0, len(background) - 1, min(len(background), len(labeled)), device=gate.device).long()
+            labeled = torch.cat((labeled, background[pick]))
+        targets = (state[labeled[:, 0], labeled[:, 1], labeled[:, 2]] == 1).to(gate.dtype)
+        return labeled, targets
+
+    def _gate_loss(self, batch: dict, batch_indices: torch.Tensor, ys: torch.Tensor, xs: torch.Tensor) -> torch.Tensor:
+        gate = self.last_gcts["gate"]
+        if not self.tiny_gate or not len(batch_indices):
+            return gate.sum() * 0
+        labeled, targets = self._gate_targets(batch, batch_indices, ys, xs)
+        if not len(labeled):
+            return gate.sum() * 0
+        predictions = gate[labeled[:, 0], 0, labeled[:, 1], labeled[:, 2]]
+        return F.binary_cross_entropy(predictions, targets)
+
+    def auxiliary_loss(self, batch: dict) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Supervise selector geometry and the optional tiny-object gate."""
+        if self.last_gcts is None or batch["bboxes"].numel() == 0:
+            zero = self.selector.weight.sum() * 0
+            return zero, {"loss_gcts_v2_pos": zero.detach(), "loss_gcts_v2_gate": zero.detach()}
+        bi, ys, xs, fractions, q = self._targets(batch)
+        alpha = self.last_gcts["alpha"][bi, :, ys, xs]
+        kl = (q * (q.clamp_min(1e-9).log() - alpha.clamp_min(1e-9).log())).sum(1).mean()
+        expected = torch.stack((alpha[:, 1] + alpha[:, 3], alpha[:, 2] + alpha[:, 3]), 1)
+        coordinate = F.smooth_l1_loss(expected, fractions)
+        position_loss = self.select_weight * (kl + self.coord_weight * coordinate)
+        gate_loss = self._gate_loss(batch, bi, ys, xs) * self.gate_weight
+        loss = position_loss + gate_loss
+        return loss, {
+            "loss_gcts_v2_pos": position_loss.detach(),
+            "loss_gcts_v2_gate": gate_loss.detach(),
+            "gcts_v2_coord_mae": (expected - fractions).abs().mean().detach(),
+            "gcts_v2_x_bias": (expected[:, 0] - fractions[:, 0]).mean().detach(),
+        }
 
 
 class SemanticSegment(nn.Module):

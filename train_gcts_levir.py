@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the four YOLOv10n-GCTS ablations on LEVIR-Ship."""
+"""Train a YOLOv10n-GCTS ablation matrix on LEVIR-Ship."""
 
 from __future__ import annotations
 
@@ -14,11 +14,18 @@ from prepare_levir_ship import prepare
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_DIR = ROOT / "models_related/ultralytics/ultralytics/cfg/models/v10"
-VARIANTS = {
-    "bilinear_w01": "yolov10n-gcts-bilinear-w01.yaml",
-    "bilinear_w02": "yolov10n-gcts-bilinear-w02.yaml",
-    "onehot_w01": "yolov10n-gcts-onehot-w01.yaml",
-    "onehot_w02": "yolov10n-gcts-onehot-w02.yaml",
+MATRICES = {
+    "v1": {
+        "bilinear_w01": "yolov10n-gcts-bilinear-w01.yaml",
+        "bilinear_w02": "yolov10n-gcts-bilinear-w02.yaml",
+        "onehot_w01": "yolov10n-gcts-onehot-w01.yaml",
+        "onehot_w02": "yolov10n-gcts-onehot-w02.yaml",
+    },
+    "v2": {
+        "v2_e05": "yolov10n-gcts-v2-e05.yaml",
+        "v2_e10": "yolov10n-gcts-v2-e10.yaml",
+        "v2_e05_nogate": "yolov10n-gcts-v2-e05-nogate.yaml",
+    },
 }
 REQUIRED_ARTIFACTS = ("weights/best.pt", "weights/last.pt", "results.csv")
 
@@ -45,6 +52,7 @@ def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[s
             name=f"{run_dir.name}_{split}", exist_ok=True, plots=False,
         )
         metrics.update({f"{split}/{key}": float(value) for key, value in (result.results_dict or {}).items()})
+        metrics[f"{split}/metrics/mAP75(B)"] = float(result.box.map75)
     return metrics
 
 
@@ -69,7 +77,7 @@ def upload_run(run_dir: Path, config: Path, summary: Path, repo_id: str, token: 
     print(f"Uploaded {run_dir.name} to https://huggingface.co/datasets/{repo_id}", flush=True)
 
 
-def train_variant(variant: str, data_yaml: Path, args: argparse.Namespace) -> Path:
+def train_variant(variant: str, config_name: str, data_yaml: Path, args: argparse.Namespace) -> Path:
     local_ultralytics()
     from ultralytics import YOLO
 
@@ -82,7 +90,7 @@ def train_variant(variant: str, data_yaml: Path, args: argparse.Namespace) -> Pa
         print(f"Resuming partial run: {variant}", flush=True)
         YOLO(last).train(resume=True)
     else:
-        model = YOLO(CONFIG_DIR / VARIANTS[variant])
+        model = YOLO(CONFIG_DIR / config_name)
         model.load(args.pretrained, smart_transfer=True)
         model.train(
             data=str(data_yaml), epochs=args.epochs, imgsz=args.imgsz, batch=args.batch_size,
@@ -102,25 +110,31 @@ def run(args: argparse.Namespace) -> None:
     from huggingface_hub import HfApi
 
     api = HfApi(token=token)
-    repo_id = args.hf_repo_id or f"{api.whoami()['name']}/levir-yolov10n-gcts-ablation"
+    repo_id = args.hf_repo_id or f"{api.whoami()['name']}/levir-yolov10n-gcts-{args.matrix}-ablation"
     api.create_repo(repo_id=repo_id, repo_type="dataset", private=False, exist_ok=True)
     data_yaml = prepare(args.data_root, args.dataset_out, args.seed)
-    variants = [args.variant] if args.variant else list(VARIANTS)
+    matrix = MATRICES[args.matrix]
+    if args.variant and args.variant not in matrix:
+        raise ValueError(f"Variant {args.variant!r} does not belong to matrix {args.matrix!r}")
+    variants = [args.variant] if args.variant else list(matrix)
+    args.project = args.project or ROOT / f"runs/levir_gcts_{args.matrix}"
     rows = []
     for variant in variants:
-        run_dir = train_variant(variant, data_yaml, args)
+        config_name = matrix[variant]
+        run_dir = train_variant(variant, config_name, data_yaml, args)
         rows.append({"variant": variant, **evaluate(run_dir, data_yaml, args)})
         summary = args.project / "summary.csv"
         write_summary(rows, summary)
-        upload_run(run_dir, CONFIG_DIR / VARIANTS[variant], summary, repo_id, token)
+        upload_run(run_dir, CONFIG_DIR / config_name, summary, repo_id, token)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variant", choices=VARIANTS, help="Run one variant; default runs all four in order.")
+    parser.add_argument("--matrix", choices=MATRICES, default="v1")
+    parser.add_argument("--variant", choices=sorted({name for matrix in MATRICES.values() for name in matrix}))
     parser.add_argument("--data-root", type=Path, default=ROOT / "LevirShipData")
     parser.add_argument("--dataset-out", type=Path, default=ROOT / "datasets/levir_gcts_seed42")
-    parser.add_argument("--project", type=Path, default=ROOT / "runs/levir_gcts")
+    parser.add_argument("--project", type=Path)
     parser.add_argument("--pretrained", default="yolov10n.pt")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=512)
