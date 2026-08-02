@@ -126,6 +126,20 @@ def test_gcts_v2_gate_thresholds_collisions_and_background_sampling():
     assert len(indices) == 2 and not targets.any()  # one large negative plus one background negative
 
 
+def test_gcts_v2_gate_loss_is_autocast_safe():
+    head = v10GCTSDetect(nc=1, tiny_gate=True, ch=(8, 16, 32, 64)).train()
+    features = [torch.randn(1, 8, 16, 16), torch.randn(1, 16, 8, 8), torch.randn(1, 32, 4, 4), torch.randn(1, 64, 2, 2)]
+    batch_data = {
+        "img": torch.rand(1, 3, 64, 64),
+        "batch_idx": torch.tensor([0]),
+        "bboxes": torch.tensor([[0.3, 0.3, 0.1, 0.1]]),
+    }
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        head._route(features)
+        loss, _ = head.auxiliary_loss(batch_data)
+    assert torch.isfinite(loss)
+
+
 @pytest.mark.parametrize("module", [DBSS(16, embed_channels=8), DualIrreducibilityHIT(16)])
 def test_levir_module_is_initially_identity_and_finite(module):
     module.train()

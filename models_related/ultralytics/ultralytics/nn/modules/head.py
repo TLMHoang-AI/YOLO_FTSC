@@ -2108,10 +2108,11 @@ class v10GCTSDetect(v10Detect):
         entropy = -(alpha * alpha.clamp_min(1e-9).log()).sum(1, keepdim=True) / math.log(4)
         position = torch.cat((alpha, x_hat - 0.5, y_hat - 0.5, entropy), 1)
         correction = self.epsilon * self.pos_projection(position).tanh()
-        gate = self.tiny_gate_head(p3).sigmoid() if self.tiny_gate else torch.ones_like(x_hat)
+        gate_logits = self.tiny_gate_head(p3) if self.tiny_gate else None
+        gate = gate_logits.sigmoid() if gate_logits is not None else torch.ones_like(x_hat)
         box_p3 = p3 + gate * correction
         self.last_gcts = (
-            {"alpha": alpha, "gate": gate, "x_hat": x_hat, "y_hat": y_hat}
+            {"alpha": alpha, "gate": gate, "gate_logits": gate_logits, "x_hat": x_hat, "y_hat": y_hat}
             if self.training or self.capture_diagnostics
             else None
         )
@@ -2175,8 +2176,8 @@ class v10GCTSDetect(v10Detect):
         labeled, targets = self._gate_targets(batch, batch_indices, ys, xs)
         if not len(labeled):
             return gate.sum() * 0
-        predictions = gate[labeled[:, 0], 0, labeled[:, 1], labeled[:, 2]]
-        return F.binary_cross_entropy(predictions, targets)
+        logits = self.last_gcts["gate_logits"][labeled[:, 0], 0, labeled[:, 1], labeled[:, 2]]
+        return F.binary_cross_entropy_with_logits(logits, targets)
 
     def auxiliary_loss(self, batch: dict) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Supervise selector geometry and the optional tiny-object gate."""
