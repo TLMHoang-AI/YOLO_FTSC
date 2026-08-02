@@ -168,8 +168,23 @@ class DFLoss(nn.Module):
         super().__init__()
         self.reg_max = reg_max
 
-    def __call__(self, pred_dist: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def __call__(
+        self, pred_dist: torch.Tensor, target: torch.Tensor, bin_values: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """Return sum of left and right DFL losses from https://ieeexplore.ieee.org/document/9792391."""
+        if bin_values is not None:
+            values = bin_values.to(device=target.device, dtype=target.dtype)
+            target = target.clamp(values[0], values[-1] - 0.01)
+            right = torch.searchsorted(values, target, right=False).clamp(1, len(values) - 1)
+            left = right - 1
+            left_value, right_value = values[left], values[right]
+            weight_right = (target - left_value) / (right_value - left_value)
+            weight_left = 1 - weight_right
+            losses = (
+                F.cross_entropy(pred_dist, left.view(-1), reduction="none").view(left.shape) * weight_left
+                + F.cross_entropy(pred_dist, right.view(-1), reduction="none").view(right.shape) * weight_right
+            )
+            return losses.mean(-1, keepdim=True)
         target = target.clamp_(0, self.reg_max - 1 - 0.01)
         tl = target.long()  # target left
         tr = tl + 1  # target right
@@ -305,10 +320,17 @@ class WiseIouLoss(nn.Module):
 class BboxLoss(nn.Module):
     """Criterion class for computing training losses for bounding boxes."""
 
-    def __init__(self, reg_max: int = 16, iou_loss: str = "ciou", wiou_monotonous: bool | None = False):
+    def __init__(
+        self,
+        reg_max: int = 16,
+        iou_loss: str = "ciou",
+        wiou_monotonous: bool | None = False,
+        p3_dfl_bins: torch.Tensor | None = None,
+    ):
         """Initialize the BboxLoss module with regularization maximum and DFL settings."""
         super().__init__()
         self.dfl_loss = DFLoss(reg_max) if reg_max > 1 else None
+        self.register_buffer("p3_dfl_bins", p3_dfl_bins.clone().float() if p3_dfl_bins is not None else None)
         self.iou_loss_type = iou_loss.lower()
         if self.iou_loss_type not in {"ciou", "wiou", "iou", "giou", "diou", "eiou", "siou"}:
             raise ValueError(
@@ -347,7 +369,24 @@ class BboxLoss(nn.Module):
         # DFL loss
         if self.dfl_loss:
             target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max - 1)
-            loss_dfl = self.dfl_loss(pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max), target_ltrb[fg_mask]) * weight
+            positive_pred = pred_dist[fg_mask].view(-1, 4, self.dfl_loss.reg_max)
+            positive_target = target_ltrb[fg_mask]
+            if self.p3_dfl_bins is None:
+                loss_dfl = self.dfl_loss(positive_pred.flatten(0, 1), positive_target)
+            else:
+                positive_is_p3 = (stride.view(-1) == stride.min()).unsqueeze(0).expand_as(fg_mask)[fg_mask]
+                loss_dfl = positive_target.new_zeros((len(positive_target), 1))
+                if positive_is_p3.any():
+                    loss_dfl[positive_is_p3] = self.dfl_loss(
+                        positive_pred[positive_is_p3].flatten(0, 1),
+                        positive_target[positive_is_p3],
+                        self.p3_dfl_bins,
+                    )
+                if (~positive_is_p3).any():
+                    loss_dfl[~positive_is_p3] = self.dfl_loss(
+                        positive_pred[~positive_is_p3].flatten(0, 1), positive_target[~positive_is_p3]
+                    )
+            loss_dfl = loss_dfl * weight
             loss_dfl = loss_dfl.sum() / target_scores_sum
         else:
             target_ltrb = bbox2dist(anchor_points, target_bboxes)
@@ -765,6 +804,7 @@ class v8DetectionLoss:
             m.reg_max,
             iou_loss=getattr(h, "bbox_iou_loss", "ciou"),
             wiou_monotonous=getattr(h, "wiou_monotonous", False),
+            p3_dfl_bins=getattr(m, "p3_dfl_bins", None),
         ).to(device)
         # EXPERIMENTAL: optional boundary-aware contrastive objective for
         # Varroa-scale localization. Disabled by default via boundary_contrast=0.
@@ -870,11 +910,22 @@ class v8DetectionLoss:
         anchor_points: torch.Tensor,
         pred_dist: torch.Tensor,
         pred_residual: torch.Tensor | None = None,
+        stride_tensor: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Decode predicted object bounding box coordinates from anchor points and distribution."""
         if self.use_dfl:
             b, a, c = pred_dist.shape  # batch, anchors, channels
-            pred_dist = pred_dist.view(b, a, 4, c // 4).softmax(3).matmul(self.proj.type(pred_dist.dtype))
+            probability = pred_dist.view(b, a, 4, c // 4).softmax(3)
+            if self.bbox_loss.p3_dfl_bins is not None:
+                if stride_tensor is None:
+                    raise ValueError("P3 non-uniform DFL decoding requires stride_tensor")
+                uniform = self.proj.to(pred_dist.dtype).view(1, 1, 1, -1)
+                custom = self.bbox_loss.p3_dfl_bins.to(pred_dist.dtype).view(1, 1, 1, -1)
+                p3 = (stride_tensor.view(1, a, 1, 1) == stride_tensor.min()).to(pred_dist.dtype)
+                values = uniform + p3 * (custom - uniform)
+                pred_dist = (probability * values).sum(3)
+            else:
+                pred_dist = probability.matmul(self.proj.type(pred_dist.dtype))
             # pred_dist = pred_dist.view(b, a, c // 4, 4).transpose(2,3).softmax(3).matmul(self.proj.type(pred_dist.dtype))
             # pred_dist = (pred_dist.view(b, a, c // 4, 4).softmax(2) * self.proj.type(pred_dist.dtype).view(1, 1, -1, 1)).sum(2)
             if pred_residual is not None:
@@ -1204,7 +1255,7 @@ class v8DetectionLoss:
         mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0.0)
 
         # Pboxes
-        pred_bboxes = self.bbox_decode(anchor_points, pred_distri, pred_residual)  # xyxy, (b, h*w, 4)
+        pred_bboxes = self.bbox_decode(anchor_points, pred_distri, pred_residual, stride_tensor)  # xyxy
 
         _, target_bboxes, target_scores, fg_mask, target_gt_idx = self.assigner(
             pred_scores.detach().sigmoid(),

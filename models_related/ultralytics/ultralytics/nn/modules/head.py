@@ -32,7 +32,11 @@ __all__ = (
     "YOLOESegment",
     "v10Detect",
     "v10GCTSDetect",
+    "v10GCTSP3NUDFLDetect",
+    "v10P3NUDFLDetect",
 )
+
+P3_NUDFL_BINS = (0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0)
 
 
 class BoxLocalDetail(nn.Module):
@@ -351,6 +355,8 @@ class Detect(nn.Module):
                 scores_per_level.append(cls_logits.view(bs, self.nc, -1))
             boxes = torch.cat([b.view(bs, 4 * self.reg_max, -1) for b in boxes_per_level], dim=-1)
             scores = torch.cat(scores_per_level, dim=-1)
+        if getattr(self, "capture_dfl_diagnostics", False):
+            self.last_p3_box_logits = boxes_per_level[0].detach()
         out = dict(boxes=boxes, scores=scores, feats=x)
         if getattr(self, "dfl_residual", False) and box_residual_head is not None:
             out["dfl_residual"] = torch.cat(
@@ -421,7 +427,17 @@ class Detect(nn.Module):
             self.anchors, self.strides = (a.transpose(0, 1) for a in make_anchors(x["feats"], self.stride, 0.5))
             self.shape = shape
 
-        dist = self.dfl(x["boxes"])
+        if hasattr(self, "p3_dfl_bins"):
+            boxes = x["boxes"]
+            b, _, anchors = boxes.shape
+            probability = boxes.view(b, 4, self.reg_max, anchors).softmax(2)
+            uniform = torch.arange(self.reg_max, device=boxes.device, dtype=boxes.dtype).view(1, 1, -1, 1)
+            custom = self.p3_dfl_bins.to(device=boxes.device, dtype=boxes.dtype).view(1, 1, -1, 1)
+            p3 = (self.strides.view(1, 1, 1, -1) == self.stride[0]).to(boxes.dtype)
+            values = uniform + p3 * (custom - uniform)
+            dist = (probability * values).sum(2)
+        else:
+            dist = self.dfl(x["boxes"])
         if getattr(self, "dfl_residual", False) and "dfl_residual" in x:
             residual = x["dfl_residual"].tanh() * self.dfl_residual_scale
             dist = (dist + residual).clamp(min=0, max=max(self.reg_max - 1, 0))
@@ -2048,6 +2064,14 @@ class v10Detect(Detect):
         self.cv2 = self.cv3 = None
 
 
+class v10P3NUDFLDetect(v10Detect):
+    """YOLOv10 head using a fixed non-uniform DFL codebook only at P3."""
+
+    def __init__(self, nc: int = 80, ch: tuple = ()) -> None:
+        super().__init__(nc, ch)
+        self.register_buffer("p3_dfl_bins", torch.tensor(P3_NUDFL_BINS), persistent=True)
+
+
 class v10GCTSDetect(v10Detect):
     """YOLOv10 head with separate P2-guided classification and regression features."""
 
@@ -2201,6 +2225,14 @@ class v10GCTSDetect(v10Detect):
         }
         self.last_gcts = None
         return loss, metrics
+
+
+class v10GCTSP3NUDFLDetect(v10GCTSDetect):
+    """GCTS v2 e05 head using the fixed non-uniform DFL codebook at P3."""
+
+    def __init__(self, nc: int = 80, ch: tuple = ()) -> None:
+        super().__init__(nc=nc, epsilon=0.05, tiny_gate=True, ch=ch)
+        self.register_buffer("p3_dfl_bins", torch.tensor(P3_NUDFL_BINS), persistent=True)
 
 
 class SemanticSegment(nn.Module):

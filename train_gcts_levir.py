@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -25,6 +27,10 @@ MATRICES = {
         "v2_e05": "yolov10n-gcts-v2-e05.yaml",
         "v2_e10": "yolov10n-gcts-v2-e10.yaml",
         "v2_e05_nogate": "yolov10n-gcts-v2-e05-nogate.yaml",
+    },
+    "p3_nudfl": {
+        "baseline_p3_nudfl": "yolov10n-p3-nudfl.yaml",
+        "gcts_v2_e05_p3_nudfl": "yolov10n-gcts-v2-e05-p3-nudfl.yaml",
     },
 }
 REQUIRED_ARTIFACTS = ("weights/best.pt", "weights/last.pt", "results.csv")
@@ -65,6 +71,26 @@ def write_summary(rows: list[dict[str, object]], path: Path) -> None:
         writer.writerows(rows)
 
 
+def run_diagnostic(run_dir: Path, data_root: Path, args: argparse.Namespace) -> None:
+    output = run_dir / "diagnostics.json"
+    if output.is_file():
+        return
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "diagnose_gcts_v2.py"),
+            "--weights", str(run_dir / "weights/best.pt"),
+            "--images", str(data_root / "images/test"),
+            "--labels", str(data_root / "labels/test"),
+            "--output", str(output),
+            "--imgsz", str(args.imgsz),
+            "--device", str(args.device),
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+
+
 def upload_run(run_dir: Path, config: Path, summary: Path, repo_id: str, token: str) -> None:
     if not completed(run_dir):
         raise FileNotFoundError(f"Refusing to upload incomplete run: {run_dir}")
@@ -92,6 +118,21 @@ def train_variant(variant: str, config_name: str, data_yaml: Path, args: argpars
     else:
         model = YOLO(CONFIG_DIR / config_name)
         model.load(args.pretrained, smart_transfer=True)
+        epoch0 = run_dir / "epoch0_metrics.json"
+        if not epoch0.is_file():
+            result = model.val(
+                data=str(data_yaml), split="val", imgsz=args.imgsz, batch=args.batch_size,
+                device=args.device, workers=args.workers, project=str(args.project / "evaluation"),
+                name=f"{variant}_epoch0", exist_ok=True, plots=False,
+            )
+            run_dir.mkdir(parents=True, exist_ok=True)
+            epoch0.write_text(
+                json.dumps(
+                    {"map50": float(result.box.map50), "map75": float(result.box.map75), "map": float(result.box.map)},
+                    indent=2,
+                )
+                + "\n"
+            )
         model.train(
             data=str(data_yaml), epochs=args.epochs, imgsz=args.imgsz, batch=args.batch_size,
             device=args.device, workers=args.workers, patience=args.patience, seed=args.seed,
@@ -123,6 +164,7 @@ def run(args: argparse.Namespace) -> None:
         config_name = matrix[variant]
         run_dir = train_variant(variant, config_name, data_yaml, args)
         rows.append({"variant": variant, **evaluate(run_dir, data_yaml, args)})
+        run_diagnostic(run_dir, args.dataset_out, args)
         summary = args.project / "summary.csv"
         write_summary(rows, summary)
         upload_run(run_dir, CONFIG_DIR / config_name, summary, repo_id, token)

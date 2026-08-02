@@ -103,6 +103,8 @@ from ultralytics.nn.modules import (
     set_boundary_context,
     v10Detect,
     v10GCTSDetect,
+    v10GCTSP3NUDFLDetect,
+    v10P3NUDFLDetect,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, SAFE_LOAD, SETTINGS, WINDOWS, YAML, colorstr, emojis
 from ultralytics.utils.checks import REMOTE_FILE_PREFIXES, check_file, check_requirements, check_suffix, check_yaml
@@ -2309,9 +2311,9 @@ def parse_model(d, ch, verbose=True):
                 m.legacy = legacy
         elif m is SemanticSegment:
             args.append([ch[x] for x in f])  # nc, ch tuple
-        elif m is v10Detect:
+        elif m in {v10Detect, v10P3NUDFLDetect}:
             args.append([ch[x] for x in f])
-        elif m is v10GCTSDetect:
+        elif m in {v10GCTSDetect, v10GCTSP3NUDFLDetect}:
             args.append([ch[x] for x in f])
         elif m is ImagePoolingAttn:
             args.insert(1, [ch[x] for x in f])  # channels as second arg

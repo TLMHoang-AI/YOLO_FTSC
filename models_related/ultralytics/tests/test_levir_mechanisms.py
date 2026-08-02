@@ -3,7 +3,16 @@ from copy import deepcopy
 import pytest
 import torch
 
-from ultralytics.nn.modules import DBSS, GCTS, Conv, DualIrreducibilityHIT, v10GCTSDetect
+from ultralytics.nn.modules import (
+    DBSS,
+    GCTS,
+    Conv,
+    DualIrreducibilityHIT,
+    v10GCTSDetect,
+    v10GCTSP3NUDFLDetect,
+    v10P3NUDFLDetect,
+)
+from ultralytics.utils.loss import DFLoss
 from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
 
@@ -138,6 +147,29 @@ def test_gcts_v2_gate_loss_is_autocast_safe():
         head._route(features)
         loss, _ = head.auxiliary_loss(batch_data)
     assert torch.isfinite(loss)
+
+
+def test_p3_nonuniform_dfl_targets_and_expectation():
+    bins = torch.tensor([0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 5, 7, 9, 11, 13, 15.0])
+    targets = torch.tensor([[0.0, 0.3, 1.25, 14.5]])
+    right = torch.searchsorted(bins, targets, right=False).clamp(1, len(bins) - 1)
+    left = right - 1
+    right_weight = (targets - bins[left]) / (bins[right] - bins[left])
+    distribution = torch.zeros(4, len(bins))
+    distribution.scatter_(1, left.view(-1, 1), (1 - right_weight).view(-1, 1))
+    distribution.scatter_add_(1, right.view(-1, 1), right_weight.view(-1, 1))
+    assert torch.allclose(distribution.matmul(bins), targets.flatten())
+    logits = distribution.clamp_min(1e-6).log().requires_grad_()
+    loss = DFLoss(len(bins))(logits, targets, bins)
+    assert loss.shape == (1, 1) and torch.isfinite(loss).all()
+    loss.sum().backward()
+    assert torch.isfinite(logits.grad).all()
+
+
+def test_p3_nonuniform_heads_keep_other_levels_uniform():
+    for head in (v10P3NUDFLDetect(nc=1, ch=(16, 32, 64)), v10GCTSP3NUDFLDetect(nc=1, ch=(8, 16, 32, 64))):
+        assert torch.equal(head.p3_dfl_bins[:8], torch.tensor([0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2.0]))
+        assert torch.equal(head.dfl.conv.weight.flatten(), torch.arange(16, dtype=torch.float))
 
 
 @pytest.mark.parametrize("module", [DBSS(16, embed_channels=8), DualIrreducibilityHIT(16)])

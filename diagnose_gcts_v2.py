@@ -51,13 +51,15 @@ def mean(values: list[float]) -> float | None:
 def diagnose(args: argparse.Namespace) -> dict:
     local_ultralytics()
     from ultralytics import YOLO
-    from ultralytics.nn.modules import v10GCTSDetect
+    from ultralytics.nn.modules import v10Detect, v10GCTSDetect
 
     model = YOLO(args.weights)
     head = model.model.model[-1]
-    if not isinstance(head, v10GCTSDetect):
-        raise TypeError(f"Expected v10GCTSDetect, found {type(head).__name__}")
-    head.capture_diagnostics = True
+    if not isinstance(head, v10Detect):
+        raise TypeError(f"Expected a YOLOv10 detection head, found {type(head).__name__}")
+    is_gcts = isinstance(head, v10GCTSDetect)
+    head.capture_diagnostics = is_gcts
+    head.capture_dfl_diagnostics = True
     images = sorted(path for path in args.images.glob("*.png"))[: args.limit or None]
     stats: dict[str, list[float]] = defaultdict(list)
     buckets: dict[str, list[float]] = defaultdict(list)
@@ -88,28 +90,47 @@ def diagnose(args: argparse.Namespace) -> dict:
                 stats["width_ratio"].append(pred_w / max(gt_w, 1e-9))
                 stats["height_ratio"].append(pred_h / max(gt_h, 1e-9))
 
-        routed = head.last_gcts
-        if routed is None:
-            raise RuntimeError("GCTS diagnostic capture did not receive routing tensors")
-        alpha = routed["alpha"][0].detach().cpu()
-        gate = routed["gate"][0, 0].detach().cpu()
-        occupied = torch.zeros_like(gate, dtype=torch.bool)
+        routed = head.last_gcts if is_gcts else None
+        alpha = routed["alpha"][0].detach().cpu() if routed is not None else None
+        gate = routed["gate"][0, 0].detach().cpu() if routed is not None else None
+        logits = head.last_p3_box_logits[0].detach().float().cpu()
+        grid_h, grid_w = logits.shape[-2:]
+        probability = logits.view(4, head.reg_max, grid_h, grid_w).softmax(1)
+        values = getattr(head, "p3_dfl_bins", torch.arange(head.reg_max)).detach().float().cpu()
+        occupied = torch.zeros((grid_h, grid_w), dtype=torch.bool)
         for center_x, center_y, box_w, box_h in normalized:
-            gx = min(int(center_x * alpha.shape[-1]), alpha.shape[-1] - 1)
-            gy = min(int(center_y * alpha.shape[-2]), alpha.shape[-2] - 1)
-            frac_x = center_x * alpha.shape[-1] - gx
-            frac_y = center_y * alpha.shape[-2] - gy
-            x_hat = float(alpha[1, gy, gx] + alpha[3, gy, gx])
-            y_hat = float(alpha[2, gy, gx] + alpha[3, gy, gx])
-            stats["selector_x_error"].append(x_hat - frac_x)
-            stats["selector_y_error"].append(y_hat - frac_y)
-            stats["selector_coord_abs_error"].extend((abs(x_hat - frac_x), abs(y_hat - frac_y)))
-            entropy = float(-(alpha[:, gy, gx] * alpha[:, gy, gx].clamp_min(1e-9).log()).sum() / np.log(4))
-            stats["selector_entropy"].append(entropy)
+            gx = min(int(center_x * grid_w), grid_w - 1)
+            gy = min(int(center_y * grid_h), grid_h - 1)
+            center_grid = torch.tensor((center_x * grid_w, center_y * grid_h))
+            anchor = torch.tensor((gx + 0.5, gy + 0.5))
+            half = torch.tensor((box_w * grid_w / 2, box_h * grid_h / 2))
+            target_distance = torch.cat((anchor - (center_grid - half), center_grid + half - anchor)).clamp(0, 14.99)
+            cell_probability = probability[:, :, gy, gx]
+            expected_distance = cell_probability.matmul(values)
+            stats["p3_target_distance"].extend(target_distance.tolist())
+            stats["p3_dfl_abs_error"].extend((expected_distance - target_distance).abs().tolist())
+            stats["p3_dfl_entropy"].extend(
+                (-(cell_probability * cell_probability.clamp_min(1e-9).log()).sum(1) / np.log(head.reg_max)).tolist()
+            )
+            for name, low, high in (("0_0.5", 0, 0.5), ("0.5_1", 0.5, 1), ("1_2", 1, 2), ("gt2", 2, float("inf"))):
+                mask = (values >= low) & (values < high)
+                stats[f"p3_mass_{name}"].extend(cell_probability[:, mask].sum(1).tolist())
+            if alpha is not None:
+                frac_x = center_x * grid_w - gx
+                frac_y = center_y * grid_h - gy
+                x_hat = float(alpha[1, gy, gx] + alpha[3, gy, gx])
+                y_hat = float(alpha[2, gy, gx] + alpha[3, gy, gx])
+                stats["selector_x_error"].append(x_hat - frac_x)
+                stats["selector_y_error"].append(y_hat - frac_y)
+                stats["selector_coord_abs_error"].extend((abs(x_hat - frac_x), abs(y_hat - frac_y)))
+                entropy = float(-(alpha[:, gy, gx] * alpha[:, gy, gx].clamp_min(1e-9).log()).sum() / np.log(4))
+                stats["selector_entropy"].append(entropy)
             diagonal = np.hypot(box_w * width, box_h * height)
-            stats["gate_tiny" if diagonal < 20 else "gate_large"].append(float(gate[gy, gx]))
-            occupied[gy, gx] = True
-        stats["gate_background"].extend(gate[~occupied].flatten().tolist())
+            if gate is not None:
+                stats["gate_tiny" if diagonal < 20 else "gate_large"].append(float(gate[gy, gx]))
+                occupied[gy, gx] = True
+        if gate is not None:
+            stats["gate_background"].extend(gate[~occupied].flatten().tolist())
 
     impulse = torch.nn.functional.pixel_unshuffle(torch.tensor([[[[0.0, 1.0], [2.0, 3.0]]]]), 2).flatten().tolist()
     report = {

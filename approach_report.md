@@ -113,3 +113,9 @@ python train_gcts_levir.py --matrix v2 --seed 42 --pretrained yolov10n.pt
 ```
 
 The default v2 output directory is `runs/levir_gcts_v2`, and completed runs upload to `<HF user>/levir-yolov10n-gcts-v2-ablation`. Selection requires AP50 >= `69.55`, AP75 >= `13.53`, no more than one percentage-point loss in IoU>=0.75 for objects at least 20 px, improved tiny localization, and reduced selector x-bias/coordinate MAE.
+
+## P3 non-uniform DFL
+
+The controlled P3 codebook experiment retains 16 logits per box side but replaces the P3 projection values with `[0, .25, .5, .75, 1, 1.25, 1.5, 2, 3, 4, 5, 7, 9, 11, 13, 15]`. Targets interpolate between the two surrounding physical values and decoding uses their expected value. P4/P5 retain uniform `0..15` bins, and standard YAMLs do not enter the new path.
+
+Two seed-42 configs isolate the codebook effect: `yolov10n-p3-nudfl.yaml` and `yolov10n-gcts-v2-e05-p3-nudfl.yaml`. Both preserve the standard head parameter shapes and load `yolov10n.pt`; the codebook is a fixed buffer. Run them with `python train_gcts_levir.py --matrix p3_nudfl`. Each fresh run records pretrained validation in `epoch0_metrics.json` before training.

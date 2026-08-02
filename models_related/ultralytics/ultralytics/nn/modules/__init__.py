@@ -124,6 +124,8 @@ from .head import (
     YOLOESegment26,
     v10Detect,
     v10GCTSDetect,
+    v10GCTSP3NUDFLDetect,
+    v10P3NUDFLDetect,
 )
 from .transformer import (
     AIFI,
@@ -251,4 +253,6 @@ __all__ = (
     "set_boundary_enabled",
     "v10Detect",
     "v10GCTSDetect",
+    "v10GCTSP3NUDFLDetect",
+    "v10P3NUDFLDetect",
 )
