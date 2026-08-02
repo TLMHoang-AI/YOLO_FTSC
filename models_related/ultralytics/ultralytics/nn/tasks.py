@@ -46,6 +46,7 @@ from ultralytics.nn.modules import (
     EnSimAM,
     EnSimAMEdgeRepC2f,
     FeatureDGFE,
+    GCTS,
     C3CBAM,
     C3Ghost,
     C3k2,
@@ -637,7 +638,7 @@ class BaseModel(torch.nn.Module):
         loss, items = self.criterion(preds, batch)
         diagnostics = {}
         for module in self.modules():
-            if isinstance(module, (DBSS, DualIrreducibilityHIT)):
+            if isinstance(module, (DBSS, DualIrreducibilityHIT, GCTS)):
                 auxiliary, values = module.auxiliary_loss(batch)
                 loss[0] = loss[0] + auxiliary * batch["img"].shape[0]
                 items[0] = items[0] + auxiliary.detach()
@@ -2162,6 +2163,7 @@ def parse_model(d, ch, verbose=True):
             NATBlock,
             TopKAdaptiveGroupKVAttention,
             TopKGlobalGroupKVAttention,
+            GCTS,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments

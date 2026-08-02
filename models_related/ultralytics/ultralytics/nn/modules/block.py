@@ -50,6 +50,7 @@ __all__ = (
     "EnSimAM",
     "EnSimAMEdgeRepC2f",
     "FeatureDGFE",
+    "GCTS",
     "C3CBAM",
     "C3Ghost",
     "C3k2",
@@ -83,6 +84,74 @@ __all__ = (
     "set_boundary_context",
     "set_boundary_enabled",
 )
+
+
+class GCTS(Conv):
+    """GT-constrained token selection for the P2-to-P3 downsampling path."""
+
+    def __init__(
+        self,
+        c1: int,
+        c2: int,
+        k: int = 3,
+        s: int = 2,
+        detail_ratio: float = 0.25,
+        target_mode: str = "bilinear",
+        loss_weight: float = 0.1,
+    ) -> None:
+        if s != 2 or not 0 < detail_ratio <= 1 or target_mode not in {"bilinear", "onehot"} or loss_weight < 0:
+            raise ValueError("GCTS requires s=2, 0 < detail_ratio <= 1, a valid target mode, and non-negative loss")
+        super().__init__(c1, c2, k, s)
+        detail_channels = max(round(c2 * detail_ratio), 1)
+        self.detail_projection = nn.Sequential(nn.Conv2d(c1, detail_channels, 1, bias=False), nn.SiLU())
+        self.selector = nn.Conv2d(4 * detail_channels, 4, 1)
+        self.output_projection = nn.Conv2d(detail_channels, c2, 1, bias=False)
+        self.gamma = nn.Parameter(torch.zeros(()))
+        self.target_mode, self.loss_weight = target_mode, float(loss_weight)
+        self.last_alpha: torch.Tensor | None = None
+
+    def _detail(self, x: torch.Tensor) -> torch.Tensor:
+        projected = self.detail_projection(x)
+        b, c, _, _ = projected.shape
+        packed = F.pixel_unshuffle(projected, 2)
+        candidates = packed.reshape(b, c, 4, packed.shape[-2], packed.shape[-1])
+        alpha = self.selector(packed).softmax(1)
+        detail = (candidates * alpha[:, None]).sum(2)
+        self.last_alpha = alpha if self.training else None
+        return self.output_projection(detail)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Downsample with the pretrained Conv branch and add selectively routed P2 detail."""
+        return super().forward(x) + self.gamma * self._detail(x)
+
+    def forward_fuse(self, x: torch.Tensor) -> torch.Tensor:
+        """Preserve GCTS behavior after the base Conv and BatchNorm are fused."""
+        return super().forward_fuse(x) + self.gamma * self._detail(x)
+
+    def _targets(self, centers: torch.Tensor, height: int, width: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        coordinates = centers * centers.new_tensor((width, height))
+        coordinates[:, 0].clamp_(0, width - 1e-6)
+        coordinates[:, 1].clamp_(0, height - 1e-6)
+        cells = coordinates.floor().long()
+        fractions = coordinates - cells
+        if self.target_mode == "onehot":
+            quadrant = (fractions[:, 1] >= 0.5).long() * 2 + (fractions[:, 0] >= 0.5).long()
+            targets = F.one_hot(quadrant, 4).to(centers.dtype)
+        else:
+            x, y = fractions.unbind(1)
+            targets = torch.stack(((1 - x) * (1 - y), x * (1 - y), (1 - x) * y, x * y), 1)
+        return cells[:, 1], cells[:, 0], targets
+
+    def auxiliary_loss(self, batch: dict) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Supervise routing only at P3 cells containing a ground-truth center."""
+        if self.last_alpha is None or self.loss_weight == 0 or batch["bboxes"].numel() == 0:
+            zero = self.gamma * 0
+            return zero, {"loss_gcts_select": zero.detach()}
+        batch_indices = batch["batch_idx"].view(-1).long()
+        y, x, targets = self._targets(batch["bboxes"][:, :2], *self.last_alpha.shape[-2:])
+        alpha = self.last_alpha[batch_indices, :, y, x]
+        loss = -(targets * alpha.clamp_min(1e-9).log()).sum(1).mean() * self.loss_weight
+        return loss, {"loss_gcts_select": loss.detach()}
 
 
 class DBSS(nn.Module):

@@ -1,7 +1,10 @@
+from copy import deepcopy
+
 import pytest
 import torch
 
-from ultralytics.nn.modules import DBSS, DualIrreducibilityHIT
+from ultralytics.nn.modules import DBSS, GCTS, Conv, DualIrreducibilityHIT
+from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
 
 def batch(with_box=True):
@@ -10,6 +13,52 @@ def batch(with_box=True):
         "batch_idx": torch.tensor([0]) if with_box else torch.empty(0),
         "bboxes": torch.tensor([[0.5, 0.5, 0.2, 0.2]]) if with_box else torch.empty(0, 4),
     }
+
+
+def test_gcts_is_initially_the_pretrained_conv_path():
+    module = GCTS(8, 16).eval()
+    baseline = Conv(8, 16, 3, 2).eval()
+    baseline.conv.load_state_dict(module.conv.state_dict())
+    baseline.bn.load_state_dict(module.bn.state_dict())
+    x = torch.randn(2, 8, 12, 12)
+    output = module(x)
+    assert output.shape == (2, 16, 6, 6)
+    assert torch.isfinite(output).all()
+    assert torch.equal(output, baseline(x))
+
+    module.gamma.data.fill_(0.25)
+    expected = module(x)
+    fused = deepcopy(module)
+    fused.conv = fuse_conv_and_bn(fused.conv, fused.bn)
+    delattr(fused, "bn")
+    assert torch.allclose(fused.forward_fuse(x), expected, atol=1e-5, rtol=1e-5)
+
+
+def test_gcts_candidate_order_and_targets():
+    packed = torch.nn.functional.pixel_unshuffle(torch.tensor([[[[0.0, 1.0], [2.0, 3.0]]]]), 2)
+    assert packed.flatten().tolist() == [0.0, 1.0, 2.0, 3.0]  # TL, TR, BL, BR
+
+    onehot = GCTS(4, 8, target_mode="onehot")
+    _, _, target = onehot._targets(torch.tensor([[0.125, 0.125], [0.375, 0.375]]), 2, 2)
+    assert torch.equal(target, torch.tensor([[1.0, 0, 0, 0], [0, 0, 0, 1.0]]))
+
+    bilinear = GCTS(4, 8, target_mode="bilinear")
+    _, _, target = bilinear._targets(torch.tensor([[0.25, 0.25], [1.0, 1.0]]), 2, 2)
+    assert torch.allclose(target[0], torch.full((4,), 0.25))
+    assert torch.allclose(target.sum(1), torch.ones(2))
+
+
+def test_gcts_auxiliary_loss_has_selector_gradient_and_handles_empty_gt():
+    module = GCTS(8, 16, loss_weight=0.2).train()
+    module(torch.randn(1, 8, 8, 8, requires_grad=True))
+    loss, metrics = module.auxiliary_loss(batch())
+    assert torch.isfinite(loss) and "loss_gcts_select" in metrics
+    loss.backward()
+    assert module.selector.weight.grad is not None and torch.isfinite(module.selector.weight.grad).all()
+
+    module(torch.randn(1, 8, 8, 8))
+    empty_loss, _ = module.auxiliary_loss(batch(False))
+    assert empty_loss == 0 and empty_loss.requires_grad
 
 
 @pytest.mark.parametrize("module", [DBSS(16, embed_channels=8), DualIrreducibilityHIT(16)])
