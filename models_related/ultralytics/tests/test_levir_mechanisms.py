@@ -255,8 +255,34 @@ def test_hit_sparse_gate_and_full_auxiliary_loss():
     assert module.last_aux["gate"].sum() == 3
     loss, metrics = module.auxiliary_loss(batch())
     assert torch.isfinite(loss)
-    assert {"loss_hit_recon", "loss_hit_offset"} <= metrics.keys()
+    assert {"loss_hit_recon_spatial", "loss_hit_recon_channel", "loss_hit_offset"} <= metrics.keys()
     (output.mean() + loss).backward()
+
+
+def test_hit_gaussian_splat_conserves_mass_and_gradients():
+    module = DualIrreducibilityHIT(1)
+    source = torch.ones(1, 1, 3, 3)
+    offsets = torch.zeros(1, 2, 3, 3, requires_grad=True)
+    sigma = torch.ones(1, 1, 3, 3, requires_grad=True)
+    output = module._gaussian_splat(source, offsets, sigma)
+    assert torch.allclose(output.sum(), source.sum(), atol=1e-5)
+    output.square().sum().backward()
+    assert offsets.grad is not None and sigma.grad is not None
+
+
+def test_hit_offset_targets_require_selected_support_and_clamp():
+    module = DualIrreducibilityHIT(4, topk=1, source_topq=0.1, max_offset=1, offset_target_margin=0)
+    module.train()
+    module(torch.randn(1, 4, 4, 4))
+    target_batch = {"batch_idx": torch.tensor([[0.0]]), "bboxes": torch.tensor([[0.5, 0.5, 1.0, 1.0]])}
+    module.last_aux["gate"].zero_()
+    prediction, target = module._offset_targets(target_batch)
+    assert prediction.numel() == target.numel() == 0
+    module.last_aux["gate"][0, 0, 0, 0] = 1
+    prediction, target = module._offset_targets(target_batch)
+    assert prediction.shape == target.shape == (1, 2)
+    assert target.abs().max() == 1
+    assert module.last_aux["offset_clamp_rate"] == 1
 
 
 def test_hit_no_transport_and_empty_gt():

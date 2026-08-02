@@ -2,6 +2,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from overfit_levir_positive import prepare_dataset
 from prepare_levir_ship import PUBLISHED_COUNTS, prepare, split_samples
 
 
@@ -32,3 +33,17 @@ def test_published_split_counts_and_seeds():
     assert {name: len(records) for name, records in first.items()} == PUBLISHED_COUNTS
     assert first == repeated
     assert first != different
+
+
+def test_prepare_positive_overfit_uses_only_labeled_images(tmp_path: Path):
+    source = tmp_path / "source"
+    images, labels = source / "All Images", source / "All Annotations"
+    images.mkdir(parents=True); labels.mkdir()
+    for index in range(5):
+        Image.new("RGB", (16, 16)).save(images / f"sample_{index}.png")
+        annotation = "0 0.5 0.5 0.25 0.25\n" if index % 2 == 0 else ""
+        (labels / f"sample_{index}.txt").write_text(annotation, encoding="utf-8")
+    yaml = prepare_dataset(source, tmp_path / "positive", count=3)
+    assert len(list((yaml.parent / "images").iterdir())) == 3
+    assert all(path.read_text().strip() for path in (yaml.parent / "labels").iterdir())
+    assert "train: images\nval: images\ntest: images" in yaml.read_text()
