@@ -51,12 +51,12 @@ def mean(values: list[float]) -> float | None:
 def diagnose(args: argparse.Namespace) -> dict:
     local_ultralytics()
     from ultralytics import YOLO
-    from ultralytics.nn.modules import v10Detect, v10GCTSDetect
+    from ultralytics.nn.modules import Detect, v10GCTSDetect
 
     model = YOLO(args.weights)
     head = model.model.model[-1]
-    if not isinstance(head, v10Detect):
-        raise TypeError(f"Expected a YOLOv10 detection head, found {type(head).__name__}")
+    if not isinstance(head, Detect):
+        raise TypeError(f"Expected a detection head, found {type(head).__name__}")
     is_gcts = isinstance(head, v10GCTSDetect)
     head.capture_diagnostics = is_gcts
     head.capture_dfl_diagnostics = True
@@ -69,6 +69,9 @@ def diagnose(args: argparse.Namespace) -> dict:
         height, width = result.orig_shape
         gt, normalized = read_labels(args.labels / f"{image.stem}.txt", width, height)
         pred = result.boxes.xyxy.detach().cpu().numpy()
+        confidence = result.boxes.conf.detach().cpu().numpy()
+        for threshold in (0.001, 0.01, 0.05, 0.25):
+            stats[f"detections_conf_{threshold:g}"].append(float((confidence >= threshold).sum()))
         ious = box_iou(gt, pred)
         if ious.size:
             gt_indices, pred_indices = linear_sum_assignment(-ious)

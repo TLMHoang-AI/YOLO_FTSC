@@ -15,7 +15,8 @@ from prepare_levir_ship import prepare
 
 
 ROOT = Path(__file__).resolve().parent
-CONFIG_DIR = ROOT / "models_related/ultralytics/ultralytics/cfg/models/v10"
+CONFIG_ROOT = ROOT / "models_related/ultralytics/ultralytics/cfg/models"
+CONFIG_DIR = CONFIG_ROOT / "v10"
 MATRICES = {
     "v1": {
         "bilinear_w01": "yolov10n-gcts-bilinear-w01.yaml",
@@ -32,6 +33,10 @@ MATRICES = {
         "baseline_p3_nudfl": "yolov10n-p3-nudfl.yaml",
         "gcts_v2_e05_p3_nudfl": "yolov10n-gcts-v2-e05-p3-nudfl.yaml",
     },
+    "yolov8_p3_nudfl": {
+        "yolov8n_baseline": "v8/yolov8n-levir-baseline.yaml",
+        "yolov8n_p3_nudfl": "v8/yolov8n-p3-nudfl.yaml",
+    },
 }
 REQUIRED_ARTIFACTS = ("weights/best.pt", "weights/last.pt", "results.csv")
 
@@ -44,6 +49,11 @@ def local_ultralytics() -> None:
 
 def completed(run_dir: Path) -> bool:
     return all((run_dir / relative).is_file() for relative in REQUIRED_ARTIFACTS)
+
+
+def config_path(config_name: str) -> Path:
+    path = Path(config_name)
+    return CONFIG_ROOT / path if len(path.parts) > 1 else CONFIG_DIR / path
 
 
 def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[str, float]:
@@ -116,7 +126,7 @@ def train_variant(variant: str, config_name: str, data_yaml: Path, args: argpars
         print(f"Resuming partial run: {variant}", flush=True)
         YOLO(last).train(resume=True)
     else:
-        model = YOLO(CONFIG_DIR / config_name)
+        model = YOLO(config_path(config_name))
         model.load(args.pretrained, smart_transfer=True)
         epoch0 = run_dir / "epoch0_metrics.json"
         if not epoch0.is_file():
@@ -167,7 +177,7 @@ def run(args: argparse.Namespace) -> None:
         run_diagnostic(run_dir, args.dataset_out, args)
         summary = args.project / "summary.csv"
         write_summary(rows, summary)
-        upload_run(run_dir, CONFIG_DIR / config_name, summary, repo_id, token)
+        upload_run(run_dir, config_path(config_name), summary, repo_id, token)
 
 
 def parse_args() -> argparse.Namespace:

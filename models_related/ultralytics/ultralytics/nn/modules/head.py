@@ -24,6 +24,7 @@ __all__ = (
     "OBB",
     "Classify",
     "Detect",
+    "P3NUDFLDetect",
     "Pose",
     "RTDETRDecoder",
     "Segment",
@@ -514,6 +515,14 @@ class Detect(nn.Module):
     def fuse(self) -> None:
         """Remove the one2many head for inference optimization."""
         self.cv2 = self.cv3 = self.cls_geometry_embed = self.cls_geometry_fuse_conv = None
+
+
+class P3NUDFLDetect(Detect):
+    """Standard NMS-based Detect head with the fixed non-uniform P3 DFL codebook."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.register_buffer("p3_dfl_bins", torch.tensor(P3_NUDFL_BINS), persistent=True)
 
 
 class Segment(Detect):

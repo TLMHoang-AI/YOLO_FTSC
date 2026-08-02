@@ -8,6 +8,7 @@ from ultralytics.nn.modules import (
     GCTS,
     Conv,
     DualIrreducibilityHIT,
+    P3NUDFLDetect,
     v10GCTSDetect,
     v10GCTSP3NUDFLDetect,
     v10P3NUDFLDetect,
@@ -167,7 +168,11 @@ def test_p3_nonuniform_dfl_targets_and_expectation():
 
 
 def test_p3_nonuniform_heads_keep_other_levels_uniform():
-    for head in (v10P3NUDFLDetect(nc=1, ch=(16, 32, 64)), v10GCTSP3NUDFLDetect(nc=1, ch=(8, 16, 32, 64))):
+    for head in (
+        P3NUDFLDetect(nc=1, ch=(16, 32, 64)),
+        v10P3NUDFLDetect(nc=1, ch=(16, 32, 64)),
+        v10GCTSP3NUDFLDetect(nc=1, ch=(8, 16, 32, 64)),
+    ):
         assert torch.equal(head.p3_dfl_bins[:8], torch.tensor([0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2.0]))
         assert torch.equal(head.dfl.conv.weight.flatten(), torch.arange(16, dtype=torch.float))
 
