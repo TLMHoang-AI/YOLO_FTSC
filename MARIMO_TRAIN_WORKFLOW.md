@@ -31,18 +31,18 @@ git diff --check
 
 Review `git status` and stage only files belonging to the task. Commit with a
 specific Conventional Commit message, then push over SSH; never force-push.
-Keep the GitHub remote on its SSH form and verify SSH authentication before
-the first push from a new environment:
+Keep the fetch URL on HTTPS so read-only environments can pull normally, and
+configure a separate SSH push URL:
 
 ```bash
-git remote set-url origin git@github.com:aduy2408/yolo_code.git
+git remote set-url origin https://github.com/aduy2408/yolo_code.git
+git remote set-url --push origin git@github.com:aduy2408/yolo_code.git
 ssh -T git@github.com
 git push origin main
 ```
 
-Do not fall back to an HTTPS token embedded in a command, notebook cell, or
-remote URL. If SSH authentication is unavailable, stop and configure the SSH
-key instead of exposing credentials.
+Do not use an HTTPS token for pushes or embed one in a command, notebook cell,
+or remote URL. Pulls continue to use the public HTTPS fetch URL.
 
 ## 3. Connect and synchronize marimo
 
