@@ -65,6 +65,7 @@ def test_gcts_v2_is_initially_identity_and_preserves_quadrant_coordinates():
     head = v10GCTSDetect(nc=1, ch=(8, 16, 32, 64)).train()
     features = [torch.randn(2, 8, 16, 16), torch.randn(2, 16, 8, 8), torch.randn(2, 32, 4, 4), torch.randn(2, 64, 2, 2)]
     box_features, cls_features = head._route(features)
+    assert deepcopy(head).last_gcts is None
     assert torch.equal(box_features[0], features[1])
     assert torch.equal(cls_features[0], features[1])
     assert all(torch.equal(a, b) for a, b in zip(box_features[1:], features[2:]))

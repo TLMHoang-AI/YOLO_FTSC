@@ -2086,6 +2086,12 @@ class v10GCTSDetect(v10Detect):
         self.capture_diagnostics = False
         self.last_gcts: dict[str, torch.Tensor] | None = None
 
+    def __getstate__(self) -> dict:
+        """Exclude transient autograd tensors when trainers deepcopy the model."""
+        state = super().__getstate__().copy()
+        state["last_gcts"] = None
+        return state
+
     def _route(self, x: list[torch.Tensor]) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
         p2, p3, p4, p5 = x
         projected = self.p2_projection(p2)
@@ -2176,6 +2182,7 @@ class v10GCTSDetect(v10Detect):
         """Supervise selector geometry and the optional tiny-object gate."""
         if self.last_gcts is None or batch["bboxes"].numel() == 0:
             zero = self.selector.weight.sum() * 0
+            self.last_gcts = None
             return zero, {"loss_gcts_v2_pos": zero.detach(), "loss_gcts_v2_gate": zero.detach()}
         bi, ys, xs, fractions, q = self._targets(batch)
         alpha = self.last_gcts["alpha"][bi, :, ys, xs]
@@ -2185,12 +2192,14 @@ class v10GCTSDetect(v10Detect):
         position_loss = self.select_weight * (kl + self.coord_weight * coordinate)
         gate_loss = self._gate_loss(batch, bi, ys, xs) * self.gate_weight
         loss = position_loss + gate_loss
-        return loss, {
+        metrics = {
             "loss_gcts_v2_pos": position_loss.detach(),
             "loss_gcts_v2_gate": gate_loss.detach(),
             "gcts_v2_coord_mae": (expected - fractions).abs().mean().detach(),
             "gcts_v2_x_bias": (expected[:, 0] - fractions[:, 0]).mean().detach(),
         }
+        self.last_gcts = None
+        return loss, metrics
 
 
 class SemanticSegment(nn.Module):
