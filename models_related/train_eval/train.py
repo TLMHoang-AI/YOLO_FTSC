@@ -11,7 +11,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from misc.prepare_dataset import prepare_dataset
+from misc_varroa.train_varroa.prepare_dataset import prepare_dataset
 
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")

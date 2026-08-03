@@ -12,7 +12,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from misc.prepare_dataset import (
+from misc_varroa.train_varroa.prepare_dataset import (
     clamp_xyxy_boxes,
     label_path_for,
     prepare_dataset,
