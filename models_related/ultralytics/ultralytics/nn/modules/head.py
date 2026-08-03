@@ -274,6 +274,10 @@ class Detect(nn.Module):
             if self.cls_geometry_fuse:
                 self.one2one_cls_geometry_embed = copy.deepcopy(self.cls_geometry_embed)
                 self.one2one_cls_geometry_fuse_conv = copy.deepcopy(self.cls_geometry_fuse_conv)
+        if self.nl == 4:
+            self.cv2[0] = P2OffsetRegression(self.cv2[0], self.reg_max)
+            if end2end:
+                self.one2one_cv2[0] = P2OffsetRegression(self.one2one_cv2[0], self.reg_max)
 
     @staticmethod
     def init_dfl_residual_heads(ch: tuple) -> nn.ModuleList:
@@ -2117,8 +2121,6 @@ class v10Detect(Detect):
             for x in ch
         )
         self.one2one_cv3 = copy.deepcopy(self.cv3)
-        self.cv2[0] = P2OffsetRegression(self.cv2[0], self.reg_max)
-        self.one2one_cv2[0] = P2OffsetRegression(self.one2one_cv2[0], self.reg_max)
 
     def fuse(self):
         """Remove the one2many head for inference optimization."""
