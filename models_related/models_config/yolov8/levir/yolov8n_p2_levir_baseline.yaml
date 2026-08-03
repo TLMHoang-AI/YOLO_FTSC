@@ -1,4 +1,5 @@
 nc: 1
+p2_offset_regression: false
 scale: n
 scales: {n: [0.33, 0.25, 1024]}
 backbone:

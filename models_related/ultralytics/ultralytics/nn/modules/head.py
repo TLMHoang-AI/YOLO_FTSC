@@ -172,6 +172,7 @@ class Detect(nn.Module):
         box_detail_scale: float = 0.25,
         box_detail_kernel: int = 3,
         box_detail_gate: bool = True,
+        p2_offset_regression: bool = True,
     ):
         """Initialize the YOLO detection layer with specified number of classes and channels.
 
@@ -274,7 +275,7 @@ class Detect(nn.Module):
             if self.cls_geometry_fuse:
                 self.one2one_cls_geometry_embed = copy.deepcopy(self.cls_geometry_embed)
                 self.one2one_cls_geometry_fuse_conv = copy.deepcopy(self.cls_geometry_fuse_conv)
-        if self.nl == 4:
+        if self.nl == 4 and p2_offset_regression:
             self.cv2[0] = P2OffsetRegression(self.cv2[0], self.reg_max)
             if end2end:
                 self.one2one_cv2[0] = P2OffsetRegression(self.one2one_cv2[0], self.reg_max)
