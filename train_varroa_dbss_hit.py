@@ -6,8 +6,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
-import random
 import shutil
 import statistics
 import sys
@@ -44,17 +42,6 @@ def local_ultralytics() -> None:
         sys.path.insert(0, str(ULTRALYTICS))
 
 
-def seed_everything(seed: int) -> None:
-    import numpy as np
-    import torch
-
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-
 def validate_dataset(data_yaml: Path) -> None:
     import yaml
 
@@ -72,23 +59,25 @@ def validate_dataset(data_yaml: Path) -> None:
             raise ValueError(f"Varroa {split} has {count} images; expected {expected}")
 
 
-def ensure_dataset(args: argparse.Namespace) -> None:
+def dataset_for_seed(args: argparse.Namespace, seed: int) -> Path:
+    output_dir = args.dataset_root / f"varroa_yolo_seed{seed}"
+    data_yaml = output_dir / "varroa.yaml"
     try:
-        validate_dataset(args.data_yaml)
-        return
+        validate_dataset(data_yaml)
     except (FileNotFoundError, ValueError):
         from misc.prepare_dataset import prepare_dataset
 
-        print(f"Preparing fixed Varroa split from {args.data_root}", flush=True)
-        args.data_yaml = prepare_dataset(
+        print(f"Preparing Varroa split seed={seed} from {args.data_root}", flush=True)
+        data_yaml = prepare_dataset(
             args.data_root,
-            args.data_yaml.parent,
+            output_dir,
             gt_source="gt_one",
             only_positives=True,
             class_policy="map-3-to-1",
-            seed=42,
+            seed=seed,
         ).resolve()
-        validate_dataset(args.data_yaml)
+    validate_dataset(data_yaml)
+    return data_yaml
 
 
 def complete(run_dir: Path) -> bool:
@@ -105,18 +94,16 @@ def model_for(model_name: str, mechanism: str):
     return model
 
 
-def train_kwargs(args: argparse.Namespace, seed: int, amp: bool) -> dict[str, object]:
+def train_kwargs(args: argparse.Namespace, data_yaml: Path, amp: bool) -> dict[str, object]:
     return {
-        "data": str(args.data_yaml),
+        "data": str(data_yaml),
         "epochs": args.epochs,
         "imgsz": args.imgsz,
         "batch": args.batch_size,
         "device": args.device,
         "workers": args.workers,
         "patience": args.patience,
-        "seed": seed,
         "amp": amp,
-        "deterministic": True,
         "plots": False,
     }
 
@@ -130,7 +117,7 @@ def archive_failed_amp(run_dir: Path) -> Path | None:
 
 
 def train_one(
-    model_name: str, mechanism: str, seed: int, amp: bool, args: argparse.Namespace
+    model_name: str, mechanism: str, seed: int, data_yaml: Path, amp: bool, args: argparse.Namespace
 ) -> Path:
     run_dir = args.project / model_name / mechanism / f"seed_{seed}"
     if complete(run_dir):
@@ -143,12 +130,10 @@ def train_one(
         from ultralytics import YOLO
 
         print(f"Resuming {run_dir}", flush=True)
-        seed_everything(seed)
         YOLO(last).train(resume=True)
     else:
-        kwargs = train_kwargs(args, seed, amp)
+        kwargs = train_kwargs(args, data_yaml, amp)
         kwargs.update(project=str(args.project / model_name / mechanism), name=f"seed_{seed}", exist_ok=True)
-        seed_everything(seed)
         try:
             model_for(model_name, mechanism).train(**kwargs)
         except Exception as error:
@@ -160,7 +145,6 @@ def train_one(
                 f"archived={archived}; retrying with amp=False",
                 flush=True,
             )
-            seed_everything(seed)
             kwargs["amp"] = False
             model_for(model_name, mechanism).train(**kwargs)
     if not complete(run_dir):
@@ -168,9 +152,9 @@ def train_one(
     return run_dir
 
 
-def smoke_amp(model_name: str, mechanism: str, args: argparse.Namespace) -> None:
+def smoke_amp(model_name: str, mechanism: str, data_yaml: Path, args: argparse.Namespace) -> None:
     smoke_root = args.project / "_amp_smoke"
-    kwargs = train_kwargs(args, args.seeds[0], True)
+    kwargs = train_kwargs(args, data_yaml, True)
     kwargs.update(
         epochs=1,
         imgsz=min(args.imgsz, 256),
@@ -183,7 +167,6 @@ def smoke_amp(model_name: str, mechanism: str, args: argparse.Namespace) -> None
         name=mechanism,
         exist_ok=True,
     )
-    seed_everything(args.seeds[0])
     try:
         model_for(model_name, mechanism).train(**kwargs)
     except Exception as error:
@@ -256,6 +239,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44])
     parser.add_argument("--data-yaml", type=Path, default=ROOT / "datasets/varroa_yolo/varroa.yaml")
     parser.add_argument("--data-root", type=Path, default=ROOT.parent)
+    parser.add_argument("--dataset-root", type=Path, default=ROOT / "datasets")
     parser.add_argument("--project", type=Path, default=ROOT / "runs/varroa_dbss_hit")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=640)
@@ -274,20 +258,23 @@ def main() -> None:
     args = parse_args()
     args.data_yaml = args.data_yaml.resolve()
     args.data_root = args.data_root.resolve()
+    args.dataset_root = args.dataset_root.resolve()
     args.project = args.project.resolve()
     args.amp_overrides = {}
-    ensure_dataset(args)
+    smoke_data_yaml = dataset_for_seed(args, args.seeds[0])
     if args.smoke_amp:
         for model_name in args.models:
             for mechanism in args.mechanisms:
-                smoke_amp(model_name, mechanism, args)
+                smoke_amp(model_name, mechanism, smoke_data_yaml, args)
     if args.smoke_only:
         return
     for seed in args.seeds:
+        data_yaml = dataset_for_seed(args, seed)
+        args.data_yaml = data_yaml
         for model_name in args.models:
             for mechanism in args.mechanisms:
                 amp = args.amp_overrides.get((model_name, mechanism), args.amp)
-                run_dir = train_one(model_name, mechanism, seed, amp, args)
+                run_dir = train_one(model_name, mechanism, seed, data_yaml, amp, args)
                 evaluate(run_dir, args)
                 write_summaries(args)
 

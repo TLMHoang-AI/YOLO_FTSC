@@ -1,5 +1,4 @@
 import argparse
-import json
 from pathlib import Path
 
 import pytest
@@ -59,8 +58,15 @@ def test_amp_failure_is_archived_and_retried_without_amp(tmp_path: Path, monkeyp
                 path.write_text("ok")
 
     monkeypatch.setattr(train, "model_for", lambda *_: FakeModel())
-    monkeypatch.setattr(train, "seed_everything", lambda _: None)
-    run_dir = train.train_one("yolov8n", "dbss", 42, True, args)
+    data_yaml = tmp_path / "data.yaml"
+    run_dir = train.train_one("yolov8n", "dbss", 42, data_yaml, True, args)
     assert calls == [True, False]
     assert train.complete(run_dir)
     assert len(list((tmp_path / "yolov8n/dbss").glob("seed_42_amp_failed_*"))) == 1
+
+
+def test_training_kwargs_do_not_seed_framework_rngs(tmp_path: Path):
+    args = argparse.Namespace(epochs=1, imgsz=64, batch_size=1, device="cpu", workers=0, patience=0)
+    kwargs = train.train_kwargs(args, tmp_path / "data.yaml", amp=True)
+    assert "seed" not in kwargs
+    assert "deterministic" not in kwargs
