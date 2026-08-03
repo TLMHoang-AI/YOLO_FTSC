@@ -276,7 +276,19 @@ def test_hit_gaussian_splat_accepts_amp_mixed_dtypes():
     offsets = torch.zeros(1, 2, 3, 3, dtype=torch.float32)
     output = module._gaussian_splat(source, offsets)
     assert output.dtype == source.dtype
-    assert torch.allclose(output.float().sum(), source.float().sum(), atol=1e-2)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_hit_gaussian_splat_large_feature_indices_stay_in_bounds(dtype):
+    module = DualIrreducibilityHIT(1)
+    source = torch.ones(1, 1, 128, 128, dtype=dtype)
+    offsets = torch.zeros(1, 2, 128, 128, dtype=dtype)
+
+    output = module._gaussian_splat(source, offsets)
+
+    assert output.shape == source.shape
+    assert torch.isfinite(output).all()
+    assert torch.allclose(output.float().sum(), source.float().sum(), rtol=1e-3)
 
 
 def test_hit_offset_targets_require_selected_support_and_clamp():
