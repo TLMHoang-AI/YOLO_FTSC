@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import os
+import random
 import statistics
 import sys
 import time
@@ -51,9 +52,22 @@ def ready_for_upload(run_dir: Path) -> bool:
     return trained(run_dir) and (run_dir / "evaluation_metrics.json").is_file()
 
 
-def prepare_seed(args: argparse.Namespace, seed: int) -> Path:
-    out = args.dataset_root / f"levir_ship_yolo_seed{seed}"
-    return prepare(args.data_root, out, seed, args.limit)
+def prepare_dataset(args: argparse.Namespace) -> Path:
+    """Create one fixed split shared by every training RNG seed."""
+    out = args.dataset_root / f"levir_ship_yolo_seed{args.split_seed}"
+    return prepare(args.data_root, out, args.split_seed, args.limit)
+
+
+def seed_training(seed: int) -> None:
+    """Seed model/training randomness without changing dataset membership."""
+    import numpy as np
+    import torch
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[str, float]:
@@ -83,6 +97,8 @@ def train(model_name: str, mechanism: str, seed: int, data_yaml: Path, args: arg
         return run_dir
     local_ultralytics()
     from ultralytics import YOLO
+
+    seed_training(seed)
 
     last = run_dir / "weights/last.pt"
     if last.is_file():
@@ -191,8 +207,10 @@ class Uploader:
         for model_name, spec in MODELS.items():
             for mechanism in ("dbss", "hit"):
                 files.append((spec[mechanism], f"configs/{model_name}/{mechanism}.yaml"))
-        for seed in args.seeds:
-            files.append((args.dataset_root / f"levir_ship_yolo_seed{seed}/manifest.json", f"datasets/manifests/seed_{seed}.json"))
+        files.append((
+            args.dataset_root / f"levir_ship_yolo_seed{args.split_seed}/manifest.json",
+            f"datasets/manifests/fixed_split_seed_{args.split_seed}.json",
+        ))
         for local, remote in files:
             if local.is_file():
                 self.retry(lambda local=local, remote=remote: self.api.upload_file(
@@ -205,6 +223,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--models", nargs="+", choices=MODELS, default=list(MODELS))
     parser.add_argument("--mechanisms", nargs="+", choices=("dbss", "hit"), default=["dbss", "hit"])
     parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44])
+    parser.add_argument("--split-seed", type=int, default=42)
     parser.add_argument("--data-root", type=Path, default=ROOT / "LevirShipData")
     parser.add_argument("--dataset-root", type=Path, default=ROOT / "datasets")
     parser.add_argument("--project", type=Path, default=ROOT / "runs/levir_dbss_hit")
@@ -230,8 +249,8 @@ def main() -> None:
     if args.upload_only and args.no_upload:
         raise ValueError("--upload-only and --no-upload are mutually exclusive")
     uploader = None if args.no_upload else Uploader(args)
+    data_yaml = prepare_dataset(args)
     for seed in args.seeds:
-        data_yaml = prepare_seed(args, seed)
         for model_name in args.models:
             for mechanism in args.mechanisms:
                 run_dir = args.project / model_name / mechanism / f"seed_{seed}"
