@@ -41,6 +41,7 @@ def test_amp_failure_is_archived_and_retried_without_amp(tmp_path: Path, monkeyp
         device="cpu",
         workers=0,
         patience=0,
+        seed_scope="all",
     )
     calls = []
 
@@ -67,6 +68,10 @@ def test_amp_failure_is_archived_and_retried_without_amp(tmp_path: Path, monkeyp
 
 def test_training_kwargs_do_not_seed_framework_rngs(tmp_path: Path):
     args = argparse.Namespace(epochs=1, imgsz=64, batch_size=1, device="cpu", workers=0, patience=0)
-    kwargs = train.train_kwargs(args, tmp_path / "data.yaml", amp=True)
+    args.seed_scope = "dataset"
+    kwargs = train.train_kwargs(args, tmp_path / "data.yaml", 42, amp=True)
     assert "seed" not in kwargs
     assert "deterministic" not in kwargs
+    args.seed_scope = "all"
+    kwargs = train.train_kwargs(args, tmp_path / "data.yaml", 42, amp=True)
+    assert kwargs["seed"] == 42 and kwargs["deterministic"] is True

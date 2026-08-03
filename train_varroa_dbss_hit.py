@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import random
 import shutil
 import statistics
 import sys
@@ -40,6 +41,17 @@ REQUIRED_ARTIFACTS = ("weights/best.pt", "weights/last.pt", "results.csv")
 def local_ultralytics() -> None:
     if str(ULTRALYTICS) not in sys.path:
         sys.path.insert(0, str(ULTRALYTICS))
+
+
+def seed_everything(seed: int) -> None:
+    import numpy as np
+    import torch
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def validate_dataset(data_yaml: Path) -> None:
@@ -94,8 +106,10 @@ def model_for(model_name: str, mechanism: str):
     return model
 
 
-def train_kwargs(args: argparse.Namespace, data_yaml: Path, amp: bool) -> dict[str, object]:
-    return {
+def train_kwargs(
+    args: argparse.Namespace, data_yaml: Path, seed: int, amp: bool
+) -> dict[str, object]:
+    kwargs = {
         "data": str(data_yaml),
         "epochs": args.epochs,
         "imgsz": args.imgsz,
@@ -106,6 +120,9 @@ def train_kwargs(args: argparse.Namespace, data_yaml: Path, amp: bool) -> dict[s
         "amp": amp,
         "plots": False,
     }
+    if args.seed_scope == "all":
+        kwargs.update(seed=seed, deterministic=True)
+    return kwargs
 
 
 def archive_failed_amp(run_dir: Path) -> Path | None:
@@ -130,10 +147,14 @@ def train_one(
         from ultralytics import YOLO
 
         print(f"Resuming {run_dir}", flush=True)
+        if args.seed_scope == "all":
+            seed_everything(seed)
         YOLO(last).train(resume=True)
     else:
-        kwargs = train_kwargs(args, data_yaml, amp)
+        kwargs = train_kwargs(args, data_yaml, seed, amp)
         kwargs.update(project=str(args.project / model_name / mechanism), name=f"seed_{seed}", exist_ok=True)
+        if args.seed_scope == "all":
+            seed_everything(seed)
         try:
             model_for(model_name, mechanism).train(**kwargs)
         except Exception as error:
@@ -146,6 +167,8 @@ def train_one(
                 flush=True,
             )
             kwargs["amp"] = False
+            if args.seed_scope == "all":
+                seed_everything(seed)
             model_for(model_name, mechanism).train(**kwargs)
     if not complete(run_dir):
         raise FileNotFoundError(f"Training ended without required artifacts: {run_dir}")
@@ -154,7 +177,7 @@ def train_one(
 
 def smoke_amp(model_name: str, mechanism: str, data_yaml: Path, args: argparse.Namespace) -> None:
     smoke_root = args.project / "_amp_smoke"
-    kwargs = train_kwargs(args, data_yaml, True)
+    kwargs = train_kwargs(args, data_yaml, args.seeds[0], True)
     kwargs.update(
         epochs=1,
         imgsz=min(args.imgsz, 256),
@@ -167,6 +190,8 @@ def smoke_amp(model_name: str, mechanism: str, data_yaml: Path, args: argparse.N
         name=mechanism,
         exist_ok=True,
     )
+    if args.seed_scope == "all":
+        seed_everything(args.seeds[0])
     try:
         model_for(model_name, mechanism).train(**kwargs)
     except Exception as error:
@@ -237,6 +262,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--models", nargs="+", choices=MODELS, default=list(MODELS))
     parser.add_argument("--mechanisms", nargs="+", choices=("dbss", "hit"), default=["dbss", "hit"])
     parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44])
+    parser.add_argument(
+        "--seed-scope", choices=("all", "dataset"), default="all",
+        help="Seed dataset split only, or also Python/NumPy/Torch/CUDA training RNGs.",
+    )
     parser.add_argument("--data-yaml", type=Path, default=ROOT / "datasets/varroa_yolo/varroa.yaml")
     parser.add_argument("--data-root", type=Path, default=ROOT.parent)
     parser.add_argument("--dataset-root", type=Path, default=ROOT / "datasets")
