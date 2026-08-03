@@ -389,6 +389,7 @@ class DualIrreducibilityHIT(nn.Module):
         weights = torch.stack(weights, 1); weights /= weights.sum(1, keepdim=True).clamp_min(self.eps)
         flat = source.flatten(2)
         for index, weight in zip(indices, weights.unbind(1)):
+            weight = weight.to(source.dtype)
             out.scatter_add_(2, index[:, None].expand(-1, c, -1), flat * weight[:, None])
         return out.reshape_as(source)
 

@@ -270,6 +270,15 @@ def test_hit_gaussian_splat_conserves_mass_and_gradients():
     assert offsets.grad is not None and sigma.grad is not None
 
 
+def test_hit_gaussian_splat_accepts_amp_mixed_dtypes():
+    module = DualIrreducibilityHIT(1)
+    source = torch.ones(1, 1, 3, 3, dtype=torch.bfloat16)
+    offsets = torch.zeros(1, 2, 3, 3, dtype=torch.float32)
+    output = module._gaussian_splat(source, offsets)
+    assert output.dtype == source.dtype
+    assert torch.allclose(output.float().sum(), source.float().sum(), atol=1e-2)
+
+
 def test_hit_offset_targets_require_selected_support_and_clamp():
     module = DualIrreducibilityHIT(4, topk=1, source_topq=0.1, max_offset=1, offset_target_margin=0)
     module.train()
