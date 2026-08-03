@@ -57,6 +57,48 @@ class BoxLocalDetail(nn.Module):
         return x + self.scale * gate * detail
 
 
+class P2OffsetRegression(nn.Module):
+    """Four-side sub-cell sampling regression head for the P2 feature map."""
+
+    def __init__(self, old_head: nn.Sequential, reg_max: int, rho: float = 0.5):
+        super().__init__()
+        self.reg_max = reg_max
+        self.rho = rho
+        self.stem = nn.Sequential(old_head[0], old_head[1])
+        channels = old_head[1].conv.out_channels
+        self.offset = nn.Sequential(DWConv(channels, channels, 3), nn.Conv2d(channels, 8, 1))
+        nn.init.zeros_(self.offset[-1].weight)
+        nn.init.zeros_(self.offset[-1].bias)
+        old_logits = old_head[-1]
+        self.sides = nn.ModuleList(nn.Conv2d(channels, reg_max, 1) for _ in range(4))
+        with torch.no_grad():
+            for side, start in zip(self.sides, range(0, 4 * reg_max, reg_max)):
+                side.weight.copy_(old_logits.weight[start : start + reg_max])
+                side.bias.copy_(old_logits.bias[start : start + reg_max])
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        feature = self.stem(x)
+        b, _, h, w = feature.shape
+        offset = self.rho * self.offset(feature).tanh().reshape(b, 4, 2, h, w)
+        yy, xx = torch.meshgrid(
+            torch.arange(h, device=feature.device, dtype=feature.dtype),
+            torch.arange(w, device=feature.device, dtype=feature.dtype),
+            indexing="ij",
+        )
+        base = torch.stack((2 * (xx + 0.5) / w - 1, 2 * (yy + 0.5) / h - 1), dim=-1)
+        grids = base[None, None] + torch.stack(
+            (2 * offset[:, :, 0] / w, 2 * offset[:, :, 1] / h), dim=-1
+        )
+        sampled = F.grid_sample(
+            feature[:, None].expand(-1, 4, -1, -1, -1).reshape(4 * b, -1, h, w),
+            grids.reshape(4 * b, h, w, 2),
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=False,
+        ).reshape(b, 4, -1, h, w)
+        return torch.cat([self.sides[i](sampled[:, i]) for i in range(4)], dim=1)
+
+
 class Detect(nn.Module):
     """YOLO Detect head for object detection models.
 
@@ -448,7 +490,11 @@ class Detect(nn.Module):
     def bias_init(self):
         """Initialize Detect() biases, WARNING: requires stride availability."""
         for i, (a, b) in enumerate(zip(self.one2many["box_head"], self.one2many["cls_head"])):  # from
-            a[-1].bias.data[:] = 2.0  # box
+            if isinstance(a, P2OffsetRegression):
+                for side in a.sides:
+                    side.bias.data[:] = 2.0
+            else:
+                a[-1].bias.data[:] = 2.0  # box
             b[-1].bias.data[: self.nc] = math.log(
                 5 / self.nc / (640 / self.stride[i]) ** 2
             )  # cls (.01 objects, 80 classes, 640 img)
@@ -457,7 +503,11 @@ class Detect(nn.Module):
                 q[-1].bias.data[:] = math.log(0.01 / 0.99)
         if self.end2end:
             for i, (a, b) in enumerate(zip(self.one2one["box_head"], self.one2one["cls_head"])):  # from
-                a[-1].bias.data[:] = 2.0  # box
+                if isinstance(a, P2OffsetRegression):
+                    for side in a.sides:
+                        side.bias.data[:] = 2.0
+                else:
+                    a[-1].bias.data[:] = 2.0  # box
                 b[-1].bias.data[: self.nc] = math.log(
                     5 / self.nc / (640 / self.stride[i]) ** 2
                 )  # cls (.01 objects, 80 classes, 640 img)
@@ -2067,6 +2117,8 @@ class v10Detect(Detect):
             for x in ch
         )
         self.one2one_cv3 = copy.deepcopy(self.cv3)
+        self.cv2[0] = P2OffsetRegression(self.cv2[0], self.reg_max)
+        self.one2one_cv2[0] = P2OffsetRegression(self.one2one_cv2[0], self.reg_max)
 
     def fuse(self):
         """Remove the one2many head for inference optimization."""
