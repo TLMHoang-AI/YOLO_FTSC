@@ -3,6 +3,13 @@
 Use this checklist for changes that are developed locally and executed in a
 running marimo session.
 
+## Experiment runner naming
+
+Every multi-run experiment must have a dedicated root-level runner named
+`train_all_<experiment_slug>.py`. Use the same stable slug for its project
+directory, log, PID, and Hugging Face repository; do not repurpose a generic
+runner or change the meaning of another experiment's runner.
+
 ## 1. Collect connection details
 
 Ask for the marimo URL, session ID, and a fresh auth token. Keep the token out
