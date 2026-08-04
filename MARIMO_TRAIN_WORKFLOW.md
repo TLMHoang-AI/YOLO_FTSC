@@ -21,8 +21,10 @@ read -rs MARIMO_TOKEN
 export MARIMO_TOKEN
 ```
 
-Also confirm that `HF_TOKEN` is already configured in the marimo runtime. Never
-print either token.
+Also confirm that `HF_TOKEN` is already configured in the marimo runtime. It
+may be a notebook/kernel variable rather than an `os.environ` entry. Check the
+active kernel globals first and do not ask for the token again when a non-empty
+`HF_TOKEN` variable exists. Never print either token.
 
 ## 2. Develop and verify locally
 
@@ -71,7 +73,7 @@ that `HEAD` equals the pushed commit.
 
 Before training, verify without exposing secrets:
 
-- `HF_TOKEN` exists.
+- `HF_TOKEN` exists as either an active kernel variable or environment entry.
 - CUDA is available.
 - local Ultralytics imports successfully.
 - either `/marimo/yolo_code/LevirShipData` or `/marimo/data/LevirShipData`
@@ -91,6 +93,11 @@ Start it as a detached process, save its PID to
 path. If it exits early, inspect the log and report the error; do not restart
 blindly. Rerunning the same command later is safe because completed runs are
 reused and partial runs resume from `last.pt`.
+
+When `HF_TOKEN` is a kernel variable, launch the detached process from the
+marimo scratchpad with a copied environment and set `child_env["HF_TOKEN"] =
+HF_TOKEN` only in memory before `subprocess.Popen(..., env=child_env)`. Do not
+persist the value in a cell, command, file, PID file, log, or notebook output.
 
 ## 5. Monitor
 
