@@ -14,9 +14,6 @@ import sys
 import time
 from pathlib import Path
 
-from misc.prepare_levir_ship import PUBLISHED_COUNTS, prepare
-
-
 ROOT = Path(__file__).resolve().parent
 ULTRALYTICS = ROOT / "models_related/ultralytics"
 CONFIG_ROOT = ROOT / "models_related/models_config/yolov8/levir"
@@ -27,6 +24,7 @@ VARIANTS = {
     "gcts_backbone_p2_p3": CONFIG_ROOT / "yolov8n_p2_levir_gcts_backbone.yaml",
 }
 REQUIRED_TRAIN_ARTIFACTS = ("weights/best.pt", "weights/last.pt", "results.csv")
+PUBLISHED_COUNTS = {"train": 2320, "val": 788, "test": 788}
 
 
 def local_ultralytics() -> None:
@@ -56,12 +54,48 @@ def validate_split(data_yaml: Path) -> None:
             raise ValueError(f"LEVIR {split} has {count} images; expected {expected}")
 
 
+def create_fixed_split(data_root: Path, output: Path, seed: int) -> Path:
+    image_dir, label_dir = data_root / "All Images", data_root / "All Annotations"
+    image_stems = {path.stem for path in image_dir.glob("*.png")}
+    label_stems = {path.stem for path in label_dir.glob("*.txt")}
+    if len(image_stems) != sum(PUBLISHED_COUNTS.values()) or image_stems != label_stems:
+        raise ValueError("Expected 3,896 matching LEVIR PNG images and TXT annotations")
+    stems = sorted(image_stems)
+    random.Random(seed).shuffle(stems)
+    for generated in (output / "images", output / "labels"):
+        if generated.exists():
+            shutil.rmtree(generated)
+    start = 0
+    manifest = {"seed": seed, "splits": {}}
+    for split, count in PUBLISHED_COUNTS.items():
+        selected = stems[start:start + count]
+        start += count
+        images_out, labels_out = output / "images" / split, output / "labels" / split
+        images_out.mkdir(parents=True, exist_ok=True)
+        labels_out.mkdir(parents=True, exist_ok=True)
+        for stem in selected:
+            for source, destination in (
+                (image_dir / f"{stem}.png", images_out / f"{stem}.png"),
+                (label_dir / f"{stem}.txt", labels_out / f"{stem}.txt"),
+            ):
+                if not destination.exists():
+                    destination.symlink_to(source)
+        manifest["splits"][split] = {"images": count}
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    data_yaml = output / "levir_ship.yaml"
+    data_yaml.write_text(
+        f"path: {output.resolve()}\ntrain: images/train\nval: images/val\ntest: images/test\nnames:\n  0: ship\n",
+        encoding="utf-8",
+    )
+    return data_yaml
+
+
 def prepare_fixed_split(args: argparse.Namespace) -> Path:
     data_yaml = args.dataset_root / f"levir_ship_yolo_seed{args.split_seed}" / "levir_ship.yaml"
     try:
         validate_split(data_yaml)
     except (FileNotFoundError, KeyError, ValueError):
-        data_yaml = prepare(args.data_root, data_yaml.parent, args.split_seed)
+        data_yaml = create_fixed_split(args.data_root, data_yaml.parent, args.split_seed)
     validate_split(data_yaml)
     return data_yaml
 

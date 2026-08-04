@@ -34,6 +34,7 @@ def test_experiment_defaults_are_fixed_and_complete():
     assert args.seeds == [42, 43, 44]
     assert args.split_seed == 42
     assert args.hf_repo_id == "duyle2408/levir-yolov8n-p2-routing-3seed"
+    assert train.PUBLISHED_COUNTS == {"train": 2320, "val": 788, "test": 788}
 
 
 def test_dbss_model_restores_shifted_pretrained_backbone():
