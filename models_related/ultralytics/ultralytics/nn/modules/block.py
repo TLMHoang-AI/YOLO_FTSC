@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
 from dataclasses import dataclass
 
@@ -260,13 +261,15 @@ class DBSS(nn.Module):
             feature_scale = (x[index : index + 1].square().mean(dim=1, keepdim=True) + 1e-6).sqrt().detach()
             displacement = self.gamma_max * feature_scale * gamma * direction / (1 + direction.norm(dim=1, keepdim=True))
             outputs.append(x[index : index + 1] + displacement)
-            raw_candidates = F.adaptive_avg_pool2d(x[index : index + 1], self.candidate_grid).flatten(2).squeeze(0).T
-            selected_all.append(raw_candidates[indices])
+            selected_all.append(candidates[indices])
             residuals.append(residual)
         out = torch.cat(outputs)
+        post_embedding = self._embed(out) if self.training else None
         self.last_aux = {
             "pre": x,
             "post": out,
+            "z_pre": embedding,
+            "z_post": post_embedding,
             "bases": torch.stack(selected_all),
             "residual": torch.cat(residuals),
             "displacement_ratio": (out - x).square().mean().sqrt() / x.square().mean().sqrt().clamp_min(1e-6),
@@ -275,35 +278,70 @@ class DBSS(nn.Module):
         } if self.training else None
         return out
 
-    @staticmethod
-    def _sample_centers(feature: torch.Tensor, boxes: torch.Tensor) -> torch.Tensor:
-        if boxes.numel() == 0:
-            return feature.new_empty((0, feature.shape[1]))
-        grid = (boxes[:, :2] * 2 - 1).view(1, -1, 1, 2)
-        return F.grid_sample(feature, grid, mode="bilinear", padding_mode="border", align_corners=True).squeeze(0).squeeze(-1).T
+    def _residual_ratio(self, embedding: torch.Tensor, bases: torch.Tensor) -> torch.Tensor:
+        ratios = []
+        for index in range(embedding.shape[0]):
+            tokens = embedding[index].flatten(1).T
+            projected = self._project(tokens, bases[index])
+            ratios.append(
+                (tokens - projected).square().sum(-1)
+                / (tokens.square().sum(-1) + 1e-6)
+            )
+        return torch.stack(ratios)
 
-    def auxiliary_loss(self, batch: dict) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        if self.last_aux is None or self.loss_weight == 0:
+    def auxiliary_loss(
+        self, batch: dict, assignment_context: dict[str, torch.Tensor] | None = None
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        if self.last_aux is None:
             zero = next(self.parameters()).sum() * 0
             return zero, {}
-        hinges = []
-        for index in range(self.last_aux["pre"].shape[0]):
-            boxes = batch["bboxes"][batch["batch_idx"].view(-1).long() == index]
-            foreground_pre = self._sample_centers(self.last_aux["pre"][index : index + 1], boxes)
-            foreground_post = self._sample_centers(self.last_aux["post"][index : index + 1], boxes)
-            if not foreground_pre.numel():
-                continue
-            fg = foreground_pre.mean(0).detach()
-            bg = self.last_aux["bases"][index].mean(0).detach()
-            gap_pre = F.cosine_similarity(foreground_pre, fg[None]) - F.cosine_similarity(foreground_pre, bg[None])
-            gap_post = F.cosine_similarity(foreground_post, fg[None]) - F.cosine_similarity(foreground_post, bg[None])
-            hinges.append(F.relu(self.improvement_margin - (gap_post - gap_pre)))
-        loss = torch.cat(hinges).mean() * self.loss_weight if hinges else self.last_aux["post"].sum() * 0
+        zero = self.last_aux["post"].sum() * 0
+        context = assignment_context or {}
+        mask = context.get("p2_fg_mask")
+        scores = context.get("p2_target_scores")
+        if mask is None or scores is None:
+            return zero, {
+                "loss_dbss_pos": zero.detach(),
+                "dbss_displacement_ratio": self.last_aux["displacement_ratio"].detach(),
+            }
+
+        height, width = self.last_aux["z_pre"].shape[2:]
+        mask = mask.detach().bool().reshape(mask.shape[0], -1)
+        scores = scores.detach().reshape(mask.shape[0], height * width, -1)
+        if mask.shape != (self.last_aux["z_pre"].shape[0], height * width):
+            raise ValueError("DBSS P2 assignment mask does not match the cached feature map")
+        compute = torch.no_grad() if self.loss_weight == 0 else contextlib.nullcontext()
+        with compute:
+            with torch.no_grad():
+                q_pre = self._residual_ratio(self.last_aux["z_pre"].detach(), self.last_aux["bases"].detach())
+            q_post = self._residual_ratio(self.last_aux["z_post"], self.last_aux["bases"].detach())
+            weights = scores.max(-1).values
+            positive_weights = weights[mask]
+            weight_sum = positive_weights.sum()
+            if positive_weights.numel() and weight_sum > 0:
+                pre_pos, post_pos = q_pre[mask], q_post[mask]
+                loss_raw = (
+                    positive_weights * F.relu(self.improvement_margin - post_pos + pre_pos.detach())
+                ).sum() / (weight_sum + 1e-6)
+                q_pre_pos = (positive_weights * pre_pos.detach()).sum() / weight_sum
+                q_post_pos = (positive_weights * post_pos.detach()).sum() / weight_sum
+            else:
+                loss_raw = zero
+                q_pre_pos = q_pre.sum() * 0
+                q_post_pos = q_post.sum() * 0
+        loss = loss_raw * self.loss_weight
+        p2_count = mask.sum().to(dtype=loss.dtype)
+        total_count = context.get("total_positive_count", p2_count).detach().to(dtype=loss.dtype)
         return loss, {
             "dbss_displacement_ratio": self.last_aux["displacement_ratio"].detach(),
             "dbss_ridge_retry": self.last_aux["ridge_retry"].detach(),
             "dbss_ridge_lstsq_fallback": self.last_aux["ridge_lstsq_fallback"].detach(),
-            "loss_dbss_sep": loss.detach(),
+            "loss_dbss_pos": loss.detach(),
+            "dbss_q_pre_pos": q_pre_pos.detach(),
+            "dbss_q_post_pos": q_post_pos.detach(),
+            "dbss_delta_q_pos": (q_post_pos - q_pre_pos).detach(),
+            "p2_positive_count": p2_count.detach(),
+            "_total_positive_count": total_count,
         }
 
 

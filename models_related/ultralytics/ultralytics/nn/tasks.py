@@ -641,14 +641,51 @@ class BaseModel(torch.nn.Module):
                 clear_boundary_context()
         loss, items = self.criterion(preds, batch)
         diagnostics = {}
+        assignment_context = getattr(self.criterion, "dbss_assignment_context", None)
+        self.criterion.dbss_assignment_context = None
         for module in self.modules():
             if isinstance(module, (DBSS, DualIrreducibilityHIT, GCTS, v10GCTSDetect)):
-                auxiliary, values = module.auxiliary_loss(batch)
+                auxiliary, values = (
+                    module.auxiliary_loss(batch, assignment_context) if isinstance(module, DBSS)
+                    else module.auxiliary_loss(batch)
+                )
                 loss[0] = loss[0] + auxiliary * batch["img"].shape[0]
                 items[0] = items[0] + auxiliary.detach()
                 diagnostics.update({name: float(value) for name, value in values.items()})
+        total_positive_count = diagnostics.pop("_total_positive_count", None)
+        p2_positive_count = diagnostics.get("p2_positive_count", 0.0)
+        if total_positive_count is not None:
+            diagnostics["p2_positive_fraction"] = p2_positive_count / max(total_positive_count, 1.0)
         self.mechanism_metrics = diagnostics
+        if diagnostics:
+            sums = getattr(self, "_mechanism_epoch_sums", {})
+            for name, value in diagnostics.items():
+                sums[name] = sums.get(name, 0.0) + value
+            sums["_batch_count"] = sums.get("_batch_count", 0.0) + 1.0
+            sums["_p2_positive_count"] = sums.get("_p2_positive_count", 0.0) + p2_positive_count
+            sums["_total_positive_count"] = sums.get("_total_positive_count", 0.0) + (total_positive_count or 0.0)
+            self._mechanism_epoch_sums = sums
         return loss, items
+
+    def reset_mechanism_metrics(self) -> None:
+        """Reset train-batch diagnostics at the start of an epoch."""
+        self._mechanism_epoch_sums = {}
+
+    def mechanism_epoch_metrics(self) -> dict[str, float]:
+        """Return mean batch diagnostics plus epoch-level P2 assignment counts."""
+        sums = getattr(self, "_mechanism_epoch_sums", {})
+        batches = sums.get("_batch_count", 0.0)
+        if not batches:
+            return {}
+        metrics = {
+            name: value / batches
+            for name, value in sums.items()
+            if not name.startswith("_") and name not in {"p2_positive_count", "p2_positive_fraction"}
+        }
+        p2_count = sums.get("_p2_positive_count", 0.0)
+        metrics["p2_positive_count"] = p2_count
+        metrics["p2_positive_fraction"] = p2_count / max(sums.get("_total_positive_count", 0.0), 1.0)
+        return metrics
 
     def init_criterion(self):
         """Initialize the loss criterion for the BaseModel."""

@@ -1,4 +1,5 @@
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 import torch
@@ -13,6 +14,7 @@ from ultralytics.nn.modules import (
     v10GCTSP3NUDFLDetect,
     v10P3NUDFLDetect,
 )
+from ultralytics.nn.tasks import DetectionModel
 from ultralytics.utils.loss import DFLoss
 from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
@@ -189,14 +191,104 @@ def test_levir_module_is_initially_identity_and_finite(module):
     assert torch.isfinite(x.grad).all()
 
 
-def test_dbss_full_auxiliary_loss_has_gradient():
+def test_dbss_tal_positive_auxiliary_loss_has_gradient():
     module = DBSS(16, embed_channels=8, loss_weight=0.5)
     module.train()
     module(torch.randn(1, 16, 16, 16, requires_grad=True))
-    loss, metrics = module.auxiliary_loss(batch())
+    mask = torch.zeros(1, 16 * 16, dtype=torch.bool)
+    mask[:, [17, 34]] = True
+    scores = torch.zeros(1, 16 * 16, 1)
+    scores[:, [17, 34]] = torch.tensor((0.25, 0.75)).view(1, 2, 1)
+    context = {"p2_fg_mask": mask, "p2_target_scores": scores, "total_positive_count": torch.tensor(4)}
+    loss, metrics = module.auxiliary_loss(batch(), context)
     assert torch.isfinite(loss)
-    assert "loss_dbss_sep" in metrics
+    assert {
+        "loss_dbss_pos", "dbss_q_pre_pos", "dbss_q_post_pos", "dbss_delta_q_pos",
+        "dbss_displacement_ratio", "p2_positive_count",
+    } <= metrics.keys()
+    assert metrics["p2_positive_count"] == 2
+    assert not context["p2_fg_mask"].requires_grad
+    assert not context["p2_target_scores"].requires_grad
+    with torch.no_grad():
+        q_pre = module._residual_ratio(module.last_aux["z_pre"], module.last_aux["bases"])
+        q_post = module._residual_ratio(module.last_aux["z_post"], module.last_aux["bases"])
+        weights = scores.max(-1).values[mask]
+        expected = 0.5 * (
+            weights * torch.relu(module.improvement_margin - q_post[mask] + q_pre[mask])
+        ).sum() / (weights.sum() + 1e-6)
+    assert torch.allclose(loss, expected)
     loss.backward()
+    assert module.direction[-1].weight.grad is not None
+
+
+@pytest.mark.parametrize("positive", [False, True])
+def test_dbss_routed_without_auxiliary_still_reports_diagnostics(positive):
+    module = DBSS(8, embed_channels=4, candidate_grid=(2, 2), shortlist_size=4, num_bases=2, loss_weight=0)
+    module.train()
+    module(torch.randn(1, 8, 4, 4, requires_grad=True))
+    mask = torch.zeros(1, 16, dtype=torch.bool)
+    mask[:, 0] = positive
+    scores = mask.unsqueeze(-1).float()
+    loss, metrics = module.auxiliary_loss(
+        batch(), {"p2_fg_mask": mask, "p2_target_scores": scores, "total_positive_count": mask.sum()}
+    )
+    assert loss == 0
+    assert torch.isfinite(torch.stack([value.float() for value in metrics.values()])).all()
+    assert "dbss_delta_q_pos" in metrics
+
+
+@pytest.mark.parametrize("name,loss_weight", [("routed", 0.0), ("aware", 0.05)])
+def test_dbss_p2_yaml_routes_bottom_up_around_dbss(name, loss_weight):
+    config = (
+        Path(__file__).parents[2]
+        / f"models_config/yolov8/levir/yolov8n_p2_levir_dbss_p2_{name}.yaml"
+    )
+    model = DetectionModel(config, verbose=False)
+    assert model.model[19].f == -1
+    assert model.model[19].loss_weight == loss_weight
+    assert model.model[20].f == 18
+    assert model.model[-1].f == [19, 22, 25, 28]
+
+
+def test_dbss_p2_correction_only_changes_detect_p2():
+    config = (
+        Path(__file__).parents[2]
+        / "models_config/yolov8/levir/yolov8n_p2_levir_dbss_p2_routed.yaml"
+    )
+    model = DetectionModel(config, verbose=False).eval()
+    captured = {}
+    model.model[20].register_forward_pre_hook(lambda _module, args: captured.setdefault("bottom_up", []).append(args[0].detach().clone()))
+    model.model[-1].register_forward_pre_hook(
+        lambda _module, args: captured.setdefault("detect_p2", []).append(args[0][0].detach().clone())
+    )
+    image = torch.randn(1, 3, 64, 64)
+    with torch.no_grad():
+        model(image)
+        model.model[19].direction[-1].bias.fill_(0.5)
+        model(image)
+    assert torch.equal(captured["bottom_up"][0], captured["bottom_up"][1])
+    assert not torch.equal(captured["detect_p2"][0], captured["detect_p2"][1])
+
+
+def test_dbss_epoch_metrics_use_batch_means_and_global_positive_fraction():
+    model = DetectionModel.__new__(DetectionModel)
+    torch.nn.Module.__init__(model)
+    model._mechanism_epoch_sums = {
+        "loss_dbss_pos": 0.3,
+        "dbss_q_pre_pos": 0.8,
+        "p2_positive_count": 12.0,
+        "p2_positive_fraction": 1.25,
+        "_batch_count": 2.0,
+        "_p2_positive_count": 12.0,
+        "_total_positive_count": 15.0,
+    }
+    metrics = model.mechanism_epoch_metrics()
+    assert metrics["loss_dbss_pos"] == pytest.approx(0.15)
+    assert metrics["dbss_q_pre_pos"] == pytest.approx(0.4)
+    assert metrics["p2_positive_count"] == 12
+    assert metrics["p2_positive_fraction"] == pytest.approx(0.8)
+    model.reset_mechanism_metrics()
+    assert model.mechanism_epoch_metrics() == {}
 
 
 def test_dbss_matches_reference_displacement():

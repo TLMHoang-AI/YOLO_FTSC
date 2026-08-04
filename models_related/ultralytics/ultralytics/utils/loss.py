@@ -1266,6 +1266,12 @@ class v8DetectionLoss:
             mask_gt,
         )
         fg_mask = fg_mask.bool()
+        n_p2 = math.prod(preds["feats"][0].shape[2:])
+        self.dbss_assignment_context = {
+            "p2_fg_mask": fg_mask[:, :n_p2].detach(),
+            "p2_target_scores": target_scores[:, :n_p2].detach(),
+            "total_positive_count": fg_mask.sum().detach(),
+        }
 
         target_scores_sum = max(target_scores.sum(), 1)
         cls_target_scores = target_scores
@@ -2277,6 +2283,7 @@ class E2ELoss:
         one2many, one2one = preds["one2many"], preds["one2one"]
         loss_one2many = self.one2many.loss(one2many, batch)
         loss_one2one = self.one2one.loss(one2one, batch)
+        self.dbss_assignment_context = self.one2many.dbss_assignment_context
         return loss_one2many[0] * self.o2m + loss_one2one[0] * self.o2o, loss_one2one[1]
 
     def update(self) -> None:

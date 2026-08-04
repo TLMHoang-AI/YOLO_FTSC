@@ -399,6 +399,9 @@ class BaseTrainer:
                 self.scheduler.step()
 
             self._model_train()
+            train_model = unwrap_model(self.model)
+            if hasattr(train_model, "reset_mechanism_metrics"):
+                train_model.reset_mechanism_metrics()
             if RANK != -1:
                 self.train_loader.sampler.set_epoch(epoch)
             pbar = enumerate(self.train_loader)
@@ -534,6 +537,10 @@ class BaseTrainer:
                     _m._epoch = epoch
 
             self.run_callbacks("on_train_epoch_end")
+            mechanism_metrics = (
+                unwrap_model(self.model).mechanism_epoch_metrics()
+                if hasattr(unwrap_model(self.model), "mechanism_epoch_metrics") else {}
+            )
             if RANK in {-1, 0}:
                 self.ema.update_attr(self.model, include=["yaml", "nc", "args", "names", "stride", "class_weights"])
 
@@ -549,7 +556,9 @@ class BaseTrainer:
 
             self.nan_recovery_attempts = 0
             if RANK in {-1, 0}:
-                self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
+                self.save_metrics(
+                    metrics={**self.label_loss_items(self.tloss), **mechanism_metrics, **self.metrics, **self.lr}
+                )
                 self.stop |= self.stopper(epoch + 1, self.fitness) or final_epoch
                 if self.args.time:
                     self.stop |= (time.time() - self.train_time_start) > (self.args.time * 3600)
