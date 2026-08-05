@@ -2136,7 +2136,7 @@ def parse_model(d, ch, verbose=True):
     box_detail_scale = d.get("box_detail_scale", 0.25)
     box_detail_kernel = d.get("box_detail_kernel", 3)
     box_detail_gate = d.get("box_detail_gate", True)
-    p2_offset_regression = d.get("p2_offset_regression", True)
+    p2_offset_regression = d.get("p2_offset_regression", False)
     depth, width, kpt_shape = (d.get(x, 1.0) for x in ("depth_multiple", "width_multiple", "kpt_shape"))
     scale = d.get("scale")
     if scales:

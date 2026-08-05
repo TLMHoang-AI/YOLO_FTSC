@@ -177,7 +177,7 @@ class Detect(nn.Module):
         box_detail_scale: float = 0.25,
         box_detail_kernel: int = 3,
         box_detail_gate: bool = True,
-        p2_offset_regression: bool = True,
+        p2_offset_regression: bool = False,
     ):
         """Initialize the YOLO detection layer with specified number of classes and channels.
 

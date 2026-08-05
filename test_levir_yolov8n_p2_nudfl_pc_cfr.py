@@ -8,6 +8,7 @@ sys.path.insert(0, str(ROOT / "models_related/ultralytics"))
 
 from ultralytics import YOLO
 from ultralytics.nn.modules import ConflictFineReconstruction, P2NUDFLDetect
+from ultralytics.nn.modules.head import P2OffsetRegression
 from ultralytics.utils.loss import BboxLoss, DFLoss
 
 
@@ -36,6 +37,7 @@ def test_model_routes_original_p2_and_disables_decoder_in_eval():
     cfr = next(module for module in model.modules() if isinstance(module, ConflictFineReconstruction))
     detect = next(module for module in model.modules() if isinstance(module, P2NUDFLDetect))
     assert torch.equal(detect.p2_dfl_bins.cpu(), EXPECTED_BINS)
+    assert not isinstance(detect.cv2[0], P2OffsetRegression)
     assert model.model[19].f == [18, 0]
     assert model.model[20].f == 18
     assert model.model[-1].f == [19, 22, 25, 28]

@@ -6,7 +6,7 @@ import torch
 sys.path.insert(0, "models_related/ultralytics")
 
 from ultralytics.nn.modules import Conv
-from ultralytics.nn.modules.head import P2OffsetRegression, v10Detect
+from ultralytics.nn.modules.head import Detect, P2OffsetRegression, v10Detect
 
 
 def make_old_head():
@@ -32,11 +32,17 @@ def test_zero_offset_preserves_old_regression_logits():
         assert torch.allclose(new(x), old(x), atol=1e-5, rtol=1e-5)
 
 
-def test_v10_uses_offset_regression_on_both_assignment_heads():
+def test_nondefault_offset_regression_is_disabled_by_default():
+    head = Detect(nc=3, ch=(16, 32, 64, 128))
+    assert not isinstance(head.cv2[0], P2OffsetRegression)
+
+
+def test_v10_keeps_standard_regression_on_both_assignment_heads():
     head = v10Detect(nc=3, ch=(16, 32, 64, 128))
+    assert not isinstance(head.cv2[0], P2OffsetRegression)
+    assert not isinstance(head.one2one_cv2[0], P2OffsetRegression)
     features = [torch.randn(1, 16, 8, 9), torch.randn(1, 32, 4, 5), torch.randn(1, 64, 2, 3), torch.randn(1, 128, 1, 2)]
     head.train()
     output = head(features)
     assert set(output) == {"one2many", "one2one"}
     assert output["one2many"]["boxes"].shape == output["one2one"]["boxes"].shape
-
