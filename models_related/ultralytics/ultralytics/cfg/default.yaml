@@ -180,6 +180,12 @@ dfl_residual_scale: 0.25 # (float) EXPERIMENTAL max residual offset in DFL-bin u
 cls: 0.5 # (float) classification loss gain
 cls_pw: 0.0 # (float) class weights power for handling class imbalance (0.0=disable, 1.0=full inverse frequency)
 dfl: 1.5 # (float) distribution focal loss gain
+pc_dfl_gain: 0.0 # (float) P2 non-uniform DFL target-pair competition gain
+pc_dfl_margin: 1.5 # (float) logit margin over adjacent DFL bins
+cfr_gain: 0.0 # (float) conflict-guided fine reconstruction gain
+cfr_detail_gain: 1.0 # (float) local-detail reconstruction term gain
+cfr_cos_gain: 1.0 # (float) feature cosine reconstruction term gain
+cfr_conflict_weight: 3.0 # (float) P2 DFL conflict spatial weight
 pose: 12.0 # (float) pose loss gain (pose tasks)
 kobj: 1.0 # (float) keypoint objectness loss gain (pose tasks)
 rle: 1.0 # (float) rle loss gain (pose tasks)

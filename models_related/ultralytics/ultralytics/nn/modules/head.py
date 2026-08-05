@@ -25,6 +25,7 @@ __all__ = (
     "Classify",
     "Detect",
     "P3NUDFLDetect",
+    "P2NUDFLDetect",
     "Pose",
     "RTDETRDecoder",
     "Segment",
@@ -37,6 +38,10 @@ __all__ = (
     "v10P3NUDFLDetect",
 )
 
+P2_NUDFL_BINS = (
+    0.0, 0.35, 0.70, 1.05, 1.40, 1.80, 2.30, 2.90,
+    3.60, 4.50, 5.60, 6.90, 8.40, 10.20, 12.40, 15.00,
+)
 P3_NUDFL_BINS = (0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0)
 
 
@@ -475,14 +480,15 @@ class Detect(nn.Module):
             self.anchors, self.strides = (a.transpose(0, 1) for a in make_anchors(x["feats"], self.stride, 0.5))
             self.shape = shape
 
-        if hasattr(self, "p3_dfl_bins"):
+        bin_values = getattr(self, "p2_dfl_bins", getattr(self, "p3_dfl_bins", None))
+        if bin_values is not None:
             boxes = x["boxes"]
             b, _, anchors = boxes.shape
             probability = boxes.view(b, 4, self.reg_max, anchors).softmax(2)
             uniform = torch.arange(self.reg_max, device=boxes.device, dtype=boxes.dtype).view(1, 1, -1, 1)
-            custom = self.p3_dfl_bins.to(device=boxes.device, dtype=boxes.dtype).view(1, 1, -1, 1)
-            p3 = (self.strides.view(1, 1, 1, -1) == self.stride[0]).to(boxes.dtype)
-            values = uniform + p3 * (custom - uniform)
+            custom = bin_values.to(device=boxes.device, dtype=boxes.dtype).view(1, 1, -1, 1)
+            is_p2 = (self.strides.view(1, 1, 1, -1) == self.stride.min()).to(boxes.dtype)
+            values = uniform + is_p2 * (custom - uniform)
             dist = (probability * values).sum(2)
         else:
             dist = self.dfl(x["boxes"])
@@ -573,11 +579,19 @@ class Detect(nn.Module):
 
 
 class P3NUDFLDetect(Detect):
-    """Standard NMS-based Detect head with the fixed non-uniform P3 DFL codebook."""
+    """Detect head with the legacy non-uniform DFL codebook at its finest level."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.register_buffer("p3_dfl_bins", torch.tensor(P3_NUDFL_BINS), persistent=True)
+
+
+class P2NUDFLDetect(Detect):
+    """Detect head with the fixed non-uniform DFL codebook at P2."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.register_buffer("p2_dfl_bins", torch.tensor(P2_NUDFL_BINS), persistent=True)
 
 
 class Segment(Detect):

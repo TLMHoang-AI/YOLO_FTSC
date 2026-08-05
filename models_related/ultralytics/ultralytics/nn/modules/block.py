@@ -37,6 +37,7 @@ __all__ = (
     "BiLevelRoutingAttention",
     "BNContrastiveHead",
     "BoundaryFeatureBlock",
+    "ConflictFineReconstruction",
     "DBSS",
     "DualIrreducibilityHIT",
     "Bottleneck",
@@ -153,6 +154,74 @@ class GCTS(Conv):
         alpha = self.last_alpha[batch_indices, :, y, x]
         loss = -(targets * alpha.clamp_min(1e-9).log()).sum(1).mean() * self.loss_weight
         return loss, {"loss_gcts_select": loss.detach()}
+
+
+class ConflictFineReconstruction(nn.Module):
+    """Training-only decoder that makes fused P2 retain detached P1 detail."""
+
+    def __init__(self, channels: list[int], hidden: int = 64) -> None:
+        super().__init__()
+        c_p2, c_p1 = channels
+        self.decoder = nn.Sequential(
+            Conv(c_p2, hidden, 1),
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            DWConv(hidden, hidden, 3),
+            nn.Conv2d(hidden, 2 * c_p1, 1),
+        )
+        self.last_aux: dict[str, torch.Tensor] | None = None
+
+    def forward(self, inputs: list[torch.Tensor]) -> torch.Tensor:
+        p2, p1 = inputs
+        if self.training:
+            reconstruction = self.decoder(p2)
+            if reconstruction.shape[-2:] != p1.shape[-2:]:
+                reconstruction = F.interpolate(reconstruction, p1.shape[-2:], mode="bilinear", align_corners=False)
+            rec_feature, rec_detail = reconstruction.chunk(2, dim=1)
+            self.last_aux = {
+                "rec_feature": rec_feature,
+                "rec_detail": rec_detail,
+                "target_feature": p1.detach(),
+                "target_detail": (p1 - F.avg_pool2d(p1, 3, stride=1, padding=1)).detach(),
+            }
+        else:
+            self.last_aux = None
+        return p2
+
+    def auxiliary_loss(self, context: dict | None, hyp) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        if self.last_aux is None or context is None:
+            zero = self.decoder[-1].weight.sum() * 0.0
+            return zero, {"loss_cfr": zero.detach()}
+        conflict = context["p2_dfl_conflict"].float().unsqueeze(1)
+        mask = context["p2_fg_mask"].reshape_as(context["p2_dfl_conflict"]).float().unsqueeze(1)
+        mask = F.max_pool2d(mask, 3, stride=1, padding=1)
+        size = self.last_aux["target_feature"].shape[-2:]
+        mask = F.interpolate(mask, size=size, mode="nearest")
+        conflict = F.interpolate(conflict, size=size, mode="nearest")
+        weight = mask * (1.0 + float(getattr(hyp, "cfr_conflict_weight", 3.0)) * conflict)
+        denominator = weight.sum().clamp_min(1e-9)
+
+        def weighted(pixel_loss: torch.Tensor) -> torch.Tensor:
+            return (pixel_loss * weight).sum() / denominator
+
+        aux = self.last_aux
+        full = weighted(F.smooth_l1_loss(aux["rec_feature"], aux["target_feature"], reduction="none").mean(1, keepdim=True))
+        detail = weighted(F.smooth_l1_loss(aux["rec_detail"], aux["target_detail"], reduction="none").mean(1, keepdim=True))
+        cosine = weighted((1.0 - F.cosine_similarity(aux["rec_feature"], aux["target_feature"], dim=1)).unsqueeze(1))
+        loss = float(getattr(hyp, "cfr_gain", 2.0)) * (
+            full
+            + float(getattr(hyp, "cfr_detail_gain", 1.0)) * detail
+            + float(getattr(hyp, "cfr_cos_gain", 1.0)) * cosine
+        )
+        self.last_aux = None
+        positive_conflict = context["p2_dfl_conflict"][context["p2_fg_mask"].reshape_as(context["p2_dfl_conflict"])]
+        return loss, {
+            "loss_cfr": loss.detach(),
+            "loss_cfr_full": full.detach(),
+            "loss_cfr_detail": detail.detach(),
+            "loss_cfr_cos": cosine.detach(),
+            "loss_pc_dfl": context.get("loss_pc_dfl", loss.detach() * 0.0),
+            "p2_dfl_conflict_mean": positive_conflict.mean() if positive_conflict.numel() else loss.detach() * 0.0,
+        }
 
 
 class DBSS(nn.Module):

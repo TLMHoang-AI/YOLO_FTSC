@@ -325,12 +325,18 @@ class BboxLoss(nn.Module):
         reg_max: int = 16,
         iou_loss: str = "ciou",
         wiou_monotonous: bool | None = False,
-        p3_dfl_bins: torch.Tensor | None = None,
+        dfl_bins: torch.Tensor | None = None,
+        pc_dfl_gain: float = 0.0,
+        pc_dfl_margin: float = 1.5,
     ):
         """Initialize the BboxLoss module with regularization maximum and DFL settings."""
         super().__init__()
         self.dfl_loss = DFLoss(reg_max) if reg_max > 1 else None
-        self.register_buffer("p3_dfl_bins", p3_dfl_bins.clone().float() if p3_dfl_bins is not None else None)
+        self.register_buffer("dfl_bins", dfl_bins.clone().float() if dfl_bins is not None else None)
+        self.pc_dfl_gain = float(pc_dfl_gain)
+        self.pc_dfl_margin = float(pc_dfl_margin)
+        self.last_p2_conflict: torch.Tensor | None = None
+        self.last_pc_loss: torch.Tensor | None = None
         self.iou_loss_type = iou_loss.lower()
         if self.iou_loss_type not in {"ciou", "wiou", "iou", "giou", "diou", "eiou", "siou"}:
             raise ValueError(
@@ -371,20 +377,29 @@ class BboxLoss(nn.Module):
             target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max - 1)
             positive_pred = pred_dist[fg_mask].view(-1, 4, self.dfl_loss.reg_max)
             positive_target = target_ltrb[fg_mask]
-            if self.p3_dfl_bins is None:
+            self.last_p2_conflict = torch.zeros_like(fg_mask, dtype=positive_target.dtype)
+            if self.dfl_bins is None:
                 loss_dfl = self.dfl_loss(positive_pred.flatten(0, 1), positive_target)
             else:
-                positive_is_p3 = (stride.view(-1) == stride.min()).unsqueeze(0).expand_as(fg_mask)[fg_mask]
+                positive_is_p2 = (stride.view(-1) == stride.min()).unsqueeze(0).expand_as(fg_mask)[fg_mask]
                 loss_dfl = positive_target.new_zeros((len(positive_target), 1))
-                if positive_is_p3.any():
-                    loss_dfl[positive_is_p3] = self.dfl_loss(
-                        positive_pred[positive_is_p3].flatten(0, 1),
-                        positive_target[positive_is_p3],
-                        self.p3_dfl_bins,
+                if positive_is_p2.any():
+                    p2_pred, p2_target = positive_pred[positive_is_p2], positive_target[positive_is_p2]
+                    loss_dfl[positive_is_p2] = self.dfl_loss(
+                        p2_pred.flatten(0, 1),
+                        p2_target,
+                        self.dfl_bins,
                     )
-                if (~positive_is_p3).any():
-                    loss_dfl[~positive_is_p3] = self.dfl_loss(
-                        positive_pred[~positive_is_p3].flatten(0, 1), positive_target[~positive_is_p3]
+                    if self.pc_dfl_gain > 0:
+                        pc_loss, conflict = self.pair_competitive_loss(p2_pred, p2_target)
+                        self.last_pc_loss = pc_loss.detach().mean()
+                        loss_dfl[positive_is_p2] += self.pc_dfl_gain * pc_loss
+                        dense_conflict = positive_target.new_zeros(len(positive_target))
+                        dense_conflict[positive_is_p2] = conflict.detach()
+                        self.last_p2_conflict[fg_mask] = dense_conflict
+                if (~positive_is_p2).any():
+                    loss_dfl[~positive_is_p2] = self.dfl_loss(
+                        positive_pred[~positive_is_p2].flatten(0, 1), positive_target[~positive_is_p2]
                     )
             loss_dfl = loss_dfl * weight
             loss_dfl = loss_dfl.sum() / target_scores_sum
@@ -403,6 +418,32 @@ class BboxLoss(nn.Module):
             loss_dfl = loss_dfl.sum() / target_scores_sum
 
         return loss_iou, loss_dfl
+
+    def pair_competitive_loss(
+        self, logits: torch.Tensor, target: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Make the interpolated target pair beat its two adjacent competitors."""
+        values = self.dfl_bins.to(device=target.device, dtype=target.dtype)
+        target = target.clamp(values[0], values[-1] - 0.01)
+        right = torch.searchsorted(values, target, right=False).clamp(1, len(values) - 1)
+        left = right - 1
+        weight_right = (target - values[left]) / (values[right] - values[left])
+        weight_left = 1.0 - weight_right
+        target_score = torch.logsumexp(
+            torch.stack(
+                (
+                    logits.gather(-1, left.unsqueeze(-1)).squeeze(-1) + weight_left.clamp_min(1e-9).log(),
+                    logits.gather(-1, right.unsqueeze(-1)).squeeze(-1) + weight_right.clamp_min(1e-9).log(),
+                )
+            ),
+            dim=0,
+        )
+        competitor_indices = torch.stack((left - 1, right + 1), dim=-1)
+        valid = (competitor_indices >= 0) & (competitor_indices < len(values))
+        competitor_score = logits.gather(-1, competitor_indices.clamp(0, len(values) - 1))
+        competitor_score = torch.logsumexp(competitor_score.masked_fill(~valid, -torch.inf), dim=-1)
+        per_side = F.softplus(self.pc_dfl_margin + competitor_score - target_score)
+        return per_side.mean(-1, keepdim=True), per_side.max(-1).values
 
 
 # EXPERIMENTAL: Boundary-aware contrastive loss for tiny-object localization.
@@ -804,7 +845,9 @@ class v8DetectionLoss:
             m.reg_max,
             iou_loss=getattr(h, "bbox_iou_loss", "ciou"),
             wiou_monotonous=getattr(h, "wiou_monotonous", False),
-            p3_dfl_bins=getattr(m, "p3_dfl_bins", None),
+            dfl_bins=getattr(m, "p2_dfl_bins", getattr(m, "p3_dfl_bins", None)),
+            pc_dfl_gain=float(getattr(h, "pc_dfl_gain", 0.0)) if hasattr(m, "p2_dfl_bins") else 0.0,
+            pc_dfl_margin=float(getattr(h, "pc_dfl_margin", 1.5)),
         ).to(device)
         # EXPERIMENTAL: optional boundary-aware contrastive objective for
         # Varroa-scale localization. Disabled by default via boundary_contrast=0.
@@ -916,13 +959,13 @@ class v8DetectionLoss:
         if self.use_dfl:
             b, a, c = pred_dist.shape  # batch, anchors, channels
             probability = pred_dist.view(b, a, 4, c // 4).softmax(3)
-            if self.bbox_loss.p3_dfl_bins is not None:
+            if self.bbox_loss.dfl_bins is not None:
                 if stride_tensor is None:
-                    raise ValueError("P3 non-uniform DFL decoding requires stride_tensor")
+                    raise ValueError("Non-uniform DFL decoding requires stride_tensor")
                 uniform = self.proj.to(pred_dist.dtype).view(1, 1, 1, -1)
-                custom = self.bbox_loss.p3_dfl_bins.to(pred_dist.dtype).view(1, 1, 1, -1)
-                p3 = (stride_tensor.view(1, a, 1, 1) == stride_tensor.min()).to(pred_dist.dtype)
-                values = uniform + p3 * (custom - uniform)
+                custom = self.bbox_loss.dfl_bins.to(pred_dist.dtype).view(1, 1, 1, -1)
+                is_finest = (stride_tensor.view(1, a, 1, 1) == stride_tensor.min()).to(pred_dist.dtype)
+                values = uniform + is_finest * (custom - uniform)
                 pred_dist = (probability * values).sum(3)
             else:
                 pred_dist = probability.matmul(self.proj.type(pred_dist.dtype))
@@ -1270,6 +1313,9 @@ class v8DetectionLoss:
         self.dbss_assignment_context = {
             "p2_fg_mask": fg_mask[:, :n_p2].detach(),
             "p2_target_scores": target_scores[:, :n_p2].detach(),
+            "p2_dfl_conflict": fg_mask[:, :n_p2].new_zeros(
+                (batch_size, *preds["feats"][0].shape[-2:]), dtype=pred_distri.dtype
+            ),
             "total_positive_count": fg_mask.sum().detach(),
         }
 
@@ -1337,6 +1383,8 @@ class v8DetectionLoss:
             loss[1] = bce_loss.sum() / cls_target_scores_sum  # BCE
 
         # Bbox loss. Optionally use a localization-only positive set that does not affect cls targets.
+        self.bbox_loss.last_p2_conflict = None
+        self.bbox_loss.last_pc_loss = None
         if loc_fg_mask.sum():
             quality_weights = None
             if bool(getattr(self.hyp, "vfl_weight_box_by_q", False)):
@@ -1360,6 +1408,12 @@ class v8DetectionLoss:
                 stride_tensor,
                 quality_weights,
             )
+            if self.bbox_loss.last_p2_conflict is not None:
+                h2, w2 = preds["feats"][0].shape[-2:]
+                self.dbss_assignment_context["p2_dfl_conflict"] = self.bbox_loss.last_p2_conflict[:, :n_p2].reshape(
+                    batch_size, h2, w2
+                )
+                self.dbss_assignment_context["loss_pc_dfl"] = self.bbox_loss.last_pc_loss
 
         loss[0] *= self.hyp.box  # box gain
         loss[1] *= self.hyp.cls  # cls gain

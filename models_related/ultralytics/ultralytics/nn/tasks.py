@@ -32,6 +32,7 @@ from ultralytics.nn.modules import (
     ASFAttention,
     BiLevelRoutingAttention,
     BoundaryFeatureBlock,
+    ConflictFineReconstruction,
     DBSS,
     DualIrreducibilityHIT,
     Bottleneck,
@@ -59,6 +60,7 @@ from ultralytics.nn.modules import (
     Conv2,
     ConvTranspose,
     Detect,
+    P2NUDFLDetect,
     P3NUDFLDetect,
     DWConv,
     DWConvTranspose2d,
@@ -644,9 +646,11 @@ class BaseModel(torch.nn.Module):
         assignment_context = getattr(self.criterion, "dbss_assignment_context", None)
         self.criterion.dbss_assignment_context = None
         for module in self.modules():
-            if isinstance(module, (DBSS, DualIrreducibilityHIT, GCTS, v10GCTSDetect)):
+            if isinstance(module, (ConflictFineReconstruction, DBSS, DualIrreducibilityHIT, GCTS, v10GCTSDetect)):
                 auxiliary, values = (
                     module.auxiliary_loss(batch, assignment_context) if isinstance(module, DBSS)
+                    else module.auxiliary_loss(assignment_context, self.criterion.hyp)
+                    if isinstance(module, ConflictFineReconstruction)
                     else module.auxiliary_loss(batch)
                 )
                 loss[0] = loss[0] + auxiliary * batch["img"].shape[0]
@@ -2290,6 +2294,9 @@ def parse_model(d, ch, verbose=True):
         elif m in frozenset({AdversarialPerturbationInjection, BoundaryFeatureBlock, DBSS, DualIrreducibilityHIT, FeatureDGFE}):
             c2 = ch[f]
             args = [c2, *args]
+        elif m is ConflictFineReconstruction:
+            c2 = ch[f[0]]
+            args = [[ch[x] for x in f], *args]
         elif m is EnSimAM:
             c2 = ch[f]
         elif m is WeightedAdd:
@@ -2311,6 +2318,7 @@ def parse_model(d, ch, verbose=True):
         elif m in frozenset(
             {
                 Detect,
+                P2NUDFLDetect,
                 P3NUDFLDetect,
                 WorldDetect,
                 YOLOEDetect,
@@ -2325,7 +2333,7 @@ def parse_model(d, ch, verbose=True):
             }
         ):
             args.extend([reg_max, end2end, [ch[x] for x in f]])
-            if m in {Detect, P3NUDFLDetect}:
+            if m in {Detect, P2NUDFLDetect, P3NUDFLDetect}:
                 args.extend(
                     [
                         cls_geometry_fuse,
@@ -2350,6 +2358,7 @@ def parse_model(d, ch, verbose=True):
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
             if m in {
                 Detect,
+                P2NUDFLDetect,
                 P3NUDFLDetect,
                 YOLOEDetect,
                 Segment,

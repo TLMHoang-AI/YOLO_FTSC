@@ -285,7 +285,7 @@ class Uploader:
         paths = [
             (VARIANTS[variant], f"configs/{VARIANTS[variant].name}") for variant in args.variants
         ] + [
-            (Path(__file__), f"code/{Path(__file__).name}"),
+            (getattr(args, "runner", Path(__file__)), f"code/{getattr(args, 'runner', Path(__file__)).name}"),
             (data_yaml.parent / "manifest.json", "dataset/fixed_split_seed_42.json"),
             (args.project / "summary_runs.csv", "summary_runs.csv"),
             (args.project / "summary_aggregate.csv", "summary_aggregate.csv"),

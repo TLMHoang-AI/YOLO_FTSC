@@ -109,3 +109,24 @@ tail -f /marimo/yolo_code/runs/levir_ship_baselines/train_all.log
 
 Each completed run is uploaded before the next model starts. Missing
 `HF_TOKEN`, incomplete artifacts, or a failed upload stops the matrix.
+
+## P2 NUDFL-PC-CFR matrix
+
+The dedicated runner is `train_all_levir_yolov8n_p2_nudfl_pc_cfr.py`. It runs only YOLOv8n with seeds 42/43/44,
+uses the fixed split, evaluates val and test, and uploads each completed seed before continuing. Its stable artifacts are:
+
+- project: `runs/levir_yolov8n_p2_nudfl_pc_cfr`
+- log: `runs/levir_yolov8n_p2_nudfl_pc_cfr/train_all.log`
+- PID: `runs/levir_yolov8n_p2_nudfl_pc_cfr/train_all.pid`
+- Hugging Face: `duyle2408/levir-yolov8n-p2-nudfl-pc-cfr-3seed`
+
+Launch from `/marimo/yolo_code` with the discovered LEVIR root:
+
+```bash
+python train_all_levir_yolov8n_p2_nudfl_pc_cfr.py \
+  --data-root "$LEVIR_DATA_ROOT" --device cuda \
+  >>runs/levir_yolov8n_p2_nudfl_pc_cfr/train_all.log 2>&1
+```
+
+The run is complete only after the PID exits successfully and all three run directories contain both checkpoints,
+`results.csv`, `evaluation_metrics.json`, aggregate/config/manifest files, and upload evidence.
