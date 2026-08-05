@@ -147,10 +147,10 @@ def train_kwargs(args: argparse.Namespace, data_yaml: Path, seed: int, amp: bool
     }
 
 
-def smoke(variant: str, data_yaml: Path, args: argparse.Namespace) -> bool:
+def smoke(variant: str, data_yaml: Path, args: argparse.Namespace, amp: bool = True) -> bool:
     seed = args.seeds[0]
     seed_everything(seed)
-    kwargs = train_kwargs(args, data_yaml, seed, True)
+    kwargs = train_kwargs(args, data_yaml, seed, amp)
     kwargs.update(
         epochs=1, imgsz=min(args.imgsz, 256), batch=1, workers=0, patience=0,
         val=False, fraction=args.smoke_fraction, project=str(args.project / "_smoke"),
@@ -159,9 +159,11 @@ def smoke(variant: str, data_yaml: Path, args: argparse.Namespace) -> bool:
     try:
         model_for(variant, args.pretrained).train(**kwargs)
     except Exception as error:
+        if not amp:
+            raise
         print(f"AMP smoke failed for {variant}: {error!r}; using amp=False", flush=True)
         return False
-    return True
+    return amp
 
 
 def train(variant: str, seed: int, data_yaml: Path, amp: bool, args: argparse.Namespace) -> Path:

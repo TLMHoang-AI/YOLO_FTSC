@@ -34,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--imgsz", type=int, default=512)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--smoke-fraction", type=float, default=0.01)
@@ -69,9 +70,9 @@ def main() -> None:
     args.project = args.project.resolve()
     data_yaml = workflow.prepare_fixed_split(args)
     uploader = None if args.no_upload or args.smoke_only else workflow.Uploader(args)
-    amp = {variant: True for variant in args.variants}
+    amp = {variant: args.amp for variant in args.variants}
     if not args.no_smoke:
-        amp = {variant: workflow.smoke(variant, data_yaml, args) for variant in args.variants}
+        amp = {variant: workflow.smoke(variant, data_yaml, args, amp=args.amp) for variant in args.variants}
     if args.smoke_only:
         return
     for seed in args.seeds:
