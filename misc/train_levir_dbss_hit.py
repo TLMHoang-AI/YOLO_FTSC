@@ -24,6 +24,10 @@ MODELS = {
         "weights": "yolov8n.pt",
         "dbss_p2_routed": CONFIG_ROOT / "yolov8/levir/yolov8n_p2_levir_dbss_p2_routed.yaml",
         "dbss_p2_aware": CONFIG_ROOT / "yolov8/levir/yolov8n_p2_levir_dbss_p2_aware.yaml",
+        **{
+            f"k{k}": CONFIG_ROOT / f"yolov8/levir/yolov8n_p2_levir_dbss_p2_aware_k{k}.yaml"
+            for k in (4, 12, 16, 20)
+        },
     },
 }
 MECHANISMS = ("dbss_p2_routed", "dbss_p2_aware")
@@ -124,7 +128,7 @@ def train(model_name: str, mechanism: str, seed: int, data_yaml: Path, args: arg
 def collect_rows(args: argparse.Namespace) -> list[dict[str, object]]:
     rows = []
     for model_name in MODELS:
-        for mechanism in MECHANISMS:
+        for mechanism in args.mechanisms:
             for seed in args.seeds:
                 run_dir = args.project / model_name / mechanism / f"seed_{seed}"
                 metrics = run_dir / "evaluation_metrics.json"
@@ -148,7 +152,7 @@ def write_summaries(args: argparse.Namespace) -> None:
     write_csv(rows, args.project / "summary_runs.csv")
     aggregate = []
     for model_name in MODELS:
-        for mechanism in MECHANISMS:
+        for mechanism in args.mechanisms:
             group = [row for row in rows if row["model"] == model_name and row["mechanism"] == mechanism]
             if not group:
                 continue
@@ -170,7 +174,7 @@ class Uploader:
 
         self.api = HfApi(token=token)
         namespace = self.api.whoami()["name"]
-        self.repo_id = args.hf_repo_id or f"{namespace}/levir_dbss_p2_aware"
+        self.repo_id = args.hf_repo_id or f"{namespace}/{args.hf_repo_name}"
         self.api.create_repo(repo_id=self.repo_id, repo_type="dataset", private=False, exist_ok=True)
         args.project.mkdir(parents=True, exist_ok=True)
         (args.project / "hf_repo.txt").write_text(f"https://huggingface.co/datasets/{self.repo_id}\n", encoding="utf-8")
@@ -196,7 +200,7 @@ class Uploader:
     def upload_metadata(self, args: argparse.Namespace) -> None:
         files = [(args.project / name, name) for name in ("summary_runs.csv", "summary_aggregate.csv", "hf_repo.txt")]
         for model_name, spec in MODELS.items():
-            for mechanism in MECHANISMS:
+            for mechanism in args.mechanisms:
                 files.append((spec[mechanism], f"configs/{model_name}/{mechanism}.yaml"))
         files.append((
             args.dataset_root / f"levir_ship_yolo_seed{args.split_seed}/manifest.json",
@@ -209,15 +213,20 @@ class Uploader:
                 ))
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(
+    default_mechanisms: tuple[str, ...] = MECHANISMS,
+    default_project: str = "levir_dbss_p2_aware",
+    default_hf_repo_name: str = "levir_dbss_p2_aware",
+    default_seeds: tuple[int, ...] = (42, 43, 44),
+) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--models", nargs="+", choices=MODELS, default=list(MODELS))
-    parser.add_argument("--mechanisms", nargs="+", choices=MECHANISMS, default=list(MECHANISMS))
-    parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44])
+    parser.add_argument("--mechanisms", nargs="+", choices=tuple(MODELS["yolov8n"])[1:], default=list(default_mechanisms))
+    parser.add_argument("--seeds", nargs="+", type=int, default=list(default_seeds))
     parser.add_argument("--split-seed", type=int, default=42)
     parser.add_argument("--data-root", type=Path, default=ROOT / "LevirShipData")
     parser.add_argument("--dataset-root", type=Path, default=ROOT / "datasets")
-    parser.add_argument("--project", type=Path, default=ROOT / "runs/levir_dbss_p2_aware")
+    parser.add_argument("--project", type=Path, default=ROOT / f"runs/{default_project}")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=512)
     parser.add_argument("--batch-size", type=int, default=8)
@@ -227,13 +236,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--hf-repo-id")
+    parser.set_defaults(hf_repo_name=default_hf_repo_name)
     parser.add_argument("--upload-only", action="store_true")
     parser.add_argument("--no-upload", action="store_true")
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
+def main(
+    default_mechanisms: tuple[str, ...] = MECHANISMS,
+    default_project: str = "levir_dbss_p2_aware",
+    default_hf_repo_name: str = "levir_dbss_p2_aware",
+    default_seeds: tuple[int, ...] = (42, 43, 44),
+) -> None:
+    args = parse_args(default_mechanisms, default_project, default_hf_repo_name, default_seeds)
     args.data_root = args.data_root.resolve()
     args.dataset_root = args.dataset_root.resolve()
     args.project = args.project.resolve()
