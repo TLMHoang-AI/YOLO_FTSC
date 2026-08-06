@@ -16,7 +16,9 @@ sys.path.insert(0, str(ROOT.parent / "models_related/ultralytics"))
 from ultralytics import YOLO
 from ultralytics.models.yolo.detect import DetectionValidator
 from ultralytics.data.utils import check_det_dataset
-from ultralytics.utils.ops import non_max_suppression, xywh2xyxy, box_iou
+from ultralytics.utils.ops import xywh2xyxy
+from ultralytics.utils.nms import non_max_suppression
+from ultralytics.utils.metrics import box_iou
 from ultralytics.utils.tal import dist2bbox
 
 def translate_image(img, dx, dy):
