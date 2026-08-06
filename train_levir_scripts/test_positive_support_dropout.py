@@ -18,7 +18,7 @@ class MockDetect(nn.Module):
         self.p2_dfl_bins = None
         self.loc_quality_enabled = False
         self.quality_head = False
-        self.box_detail = False
+        self.box_detail_head = False
         self.dfl_residual = False
         
         # Mock cv2[0] with Conv2d and BatchNorm2d to inspect buffer behavior

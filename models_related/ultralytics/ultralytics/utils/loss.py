@@ -946,7 +946,7 @@ class v8DetectionLoss:
             assert not getattr(m, "dfl_residual", False), "PSD is not compatible with dfl_residual"
             assert getattr(m, "p2_dfl_bins", None) is None, "PSD is not compatible with non-uniform DFL (NUDFL)"
             assert getattr(h, "bbox_iou_loss", "ciou") == "ciou", "PSD currently requires CIoU loss"
-            assert not getattr(m, "box_detail", False), "PSD currently requires box_detail == False"
+            assert not getattr(m, "box_detail_head", False), "PSD currently requires box_detail_head == False"
         self.epoch = 0
         self.dfl_residual = bool(getattr(m, "dfl_residual", False))
         self.dfl_residual_scale = float(getattr(m, "dfl_residual_scale", getattr(h, "dfl_residual_scale", 0.25)))
