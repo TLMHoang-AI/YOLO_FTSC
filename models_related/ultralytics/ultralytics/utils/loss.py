@@ -1804,7 +1804,7 @@ class v8DetectionLoss:
                             continue
                         
                         pred_box_alt = aux_bboxes[b, p_g_alt]
-                        target_box_alt = target_bboxes_scaled[b, p_g_alt]
+                        target_box_alt = target_bboxes_scaled[b, :n_p2][p_g_alt]
                         
                         # CIoU
                         iou_aux = bbox_iou(pred_box_alt, target_box_alt, xywh=False, CIoU=True)
@@ -1822,7 +1822,7 @@ class v8DetectionLoss:
                         num_gt_losses += 1
                         
                         with torch.no_grad():
-                            main_box_alt = pred_bboxes[b, p_g_alt]
+                            main_box_alt = pred_bboxes[b, :n_p2][p_g_alt]
                             iou_main = bbox_iou(main_box_alt, target_box_alt, xywh=False, CIoU=True)
                             total_iou_main += float(iou_main.sum().item())
                             total_iou_aux += float(iou_aux.sum().item())
