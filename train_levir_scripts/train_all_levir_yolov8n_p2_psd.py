@@ -25,7 +25,7 @@ _base_train_kwargs = workflow.train_kwargs
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44])
+    parser.add_argument("--seeds", nargs="+", type=int, default=[42])
     parser.add_argument("--split-seed", type=int, default=42)
     parser.add_argument("--data-root", type=Path, default=ROOT.parent / "LevirShipData")
     parser.add_argument("--dataset-root", type=Path, default=ROOT.parent / "datasets")
