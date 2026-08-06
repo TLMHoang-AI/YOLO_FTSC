@@ -55,3 +55,23 @@ Phân tích sai số định vị thành phần để xác định mô hình b�
 *Nhận xét:* 
 - Sai số tuyệt đối trung bình (MAE) của việc lệch tâm X/Y (~0.8 px) nhỏ hơn nhiều so với sai số MAE của chiều rộng/chiều cao (~1.7-1.8 px). Điều này cho thấy mô hình xác định tâm vật thể tương đối ổn định, nhưng dự đoán kích cỡ (width/height) lại có phương sai rất lớn.
 - Signed Mean của chiều rộng (+0.49 px) và chiều cao (+0.17 px) mang giá trị dương, cho thấy mô hình có xu hướng dự đoán kích thước box hơi to hơn so với Ground Truth một cách hệ thống.
+
+---
+
+## 5. Phân tích bổ sung: Đặc trưng Tần số không gian (Spatial Frequency Analysis)
+Để kiểm chứng mối liên hệ giữa vật thể (ships) và sự bất ổn định kích thước dưới dịch chuyển pixel (nhận xét từ Probe 1), chúng tôi thực hiện phân tích đặc trưng tần số không gian (Laplacian Variance và Gradient Magnitude) trên **3,219 nhãn đối tượng** trên toàn bộ tập dữ liệu (Train + Val + Test).
+
+### Kết quả so sánh định lượng:
+
+| Vùng Ảnh | Laplacian Variance (Độ sắc nét / Tần số cao) | Gradient Magnitude (Cường độ biên) |
+| :--- | :---: | :---: |
+| **Ground Truth (Tàu)** | **25.6681** | **15.3428** |
+| **Random Background** | **9.6547** (~2.66x lower) | **6.4755** (~2.37x lower) |
+| **Adjacent Background** (Nền sát cạnh) | **5.9865** (~4.29x lower) | **4.8861** (~3.14x lower) |
+
+### Biểu đồ phân phối tần số (GT vs. Adjacent BG):
+![Phân phối tần số không gian](/home/duylearch/.gemini/antigravity-ide/brain/6c51aafe-02a0-491a-b18e-1ec9a07d1bec/gt_vs_adjacent_bg_frequency.png)
+
+*Nhận xét*: 
+- Vùng chứa tàu (GT) có các thành phần tần số cao vượt trội hoàn toàn (gấp hơn 4 lần so với nước biển xung quanh).
+- Điều này khẳng định tàu là các "điểm dị biệt tần số cao" trên nền đại dương tần số thấp. Khi mô hình downsampling qua các lớp tích chập, các chi tiết tần số cao này bị răng cưa/mất pha trầm trọng, trực tiếp gây ra sự thiếu bất biến tịnh tiến kích thước ở Probe 1.
