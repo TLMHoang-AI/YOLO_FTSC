@@ -200,7 +200,7 @@ def main():
 
         # 2. Raw-Candidate Oracle Gap + 3 & 4: Uncertainty & Edge errors
         # Anchor details
-        from ultralytics.utils.ops import make_anchors
+        from ultralytics.utils.tal import make_anchors
         anchor_points, stride_tensor = make_anchors(raw_logits["feats"], model.model.stride, 0.5)
         n_p2 = math.prod(raw_logits["feats"][0].shape[2:])
         p2_anchors = anchor_points[:n_p2]
