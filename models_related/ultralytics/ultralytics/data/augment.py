@@ -2180,7 +2180,189 @@ class Albumentations(BaseTransform):
                 labels["instances"].update(bboxes=bboxes)
         else:
             labels["img"] = self.transform(image=labels["img"])["image"]  # transformed
+        return labels
 
+class TargetedPartialClip(BaseTransform):
+    """
+    Apply targeted partial-view clipping augmentation to training samples.
+    """
+    def __init__(self, dataset):
+        self.dataset = dataset
+        self.p_max = 0.25
+        self.negative_indices = []
+        if hasattr(dataset, "labels"):
+            for idx, lbl in enumerate(dataset.labels):
+                if len(lbl.get("cls", [])) == 0 or len(lbl.get("bboxes", [])) == 0:
+                    self.negative_indices.append(idx)
+                    
+    def __call__(self, labels):
+        if not getattr(self.dataset, "augment", False):
+            return labels
+            
+        import os
+        variant = os.environ.get("YOLO_VARIANT", "")
+        if "partial_clip" not in variant:
+            return labels
+            
+        epoch = getattr(self.dataset, "epoch", 0)
+        if epoch < 5:
+            p = 0.0
+        elif epoch < 10:
+            p = self.p_max * (epoch - 4) / 5.0
+        else:
+            p = self.p_max
+            
+        if p <= 0.0 or random.random() > p:
+            return labels
+            
+        img = labels["img"]
+        h_img, w_img = img.shape[:2]
+        instances = labels["instances"]
+        cls = labels["cls"]
+        
+        if len(cls) == 0:
+            return labels
+            
+        instances.convert_bbox("xywh")
+        bboxes = instances.bboxes
+        absolute_w = bboxes[:, 2] * w_img
+        absolute_h = bboxes[:, 3] * h_img
+        areas = absolute_w * absolute_h
+        
+        small_indices = np.where(areas < 400.0)[0]
+        if len(small_indices) == 0:
+            return labels
+            
+        for _ in range(5):
+            target_idx = random.choice(small_indices)
+            target_bbox = bboxes[target_idx]
+            
+            target_w_abs = absolute_w[target_idx]
+            target_h_abs = absolute_h[target_idx]
+            target_cx_abs = target_bbox[0] * w_img
+            target_cy_abs = target_bbox[1] * h_img
+            
+            target_x1 = target_cx_abs - target_w_abs / 2.0
+            target_y1 = target_cy_abs - target_h_abs / 2.0
+            target_x2 = target_cx_abs + target_w_abs / 2.0
+            target_y2 = target_cy_abs + target_h_abs / 2.0
+            
+            r_visible = random.uniform(0.55, 0.85)
+            touch_corner = random.random() < 0.25
+            
+            edges = ["left", "right", "top", "bottom"]
+            random.shuffle(edges)
+            selected_edges = edges[:2] if touch_corner else edges[:1]
+            
+            dx, dy = 0.0, 0.0
+            for edge in selected_edges:
+                if edge == "left":
+                    dx = - (1.0 - r_visible) * target_w_abs - target_x1
+                elif edge == "right":
+                    dx = w_img + (1.0 - r_visible) * target_w_abs - target_x2
+                elif edge == "top":
+                    dy = - (1.0 - r_visible) * target_h_abs - target_y1
+                elif edge == "bottom":
+                    dy = h_img + (1.0 - r_visible) * target_h_abs - target_y2
+            
+            M = np.float32([[1, 0, dx], [0, 1, dy]])
+            filled_bg = None
+            if len(self.negative_indices) > 0:
+                try:
+                    neg_idx = random.choice(self.negative_indices)
+                    neg_img, _, _ = self.dataset.load_image(neg_idx)
+                    if neg_img.shape[:2] != img.shape[:2]:
+                        neg_img = cv2.resize(neg_img, (w_img, h_img), interpolation=cv2.INTER_LINEAR)
+                    filled_bg = neg_img
+                except Exception:
+                    pass
+            
+            if filled_bg is None:
+                border_pixels = np.concatenate([img[:5, :, :], img[-5:, :, :], img[:, :5, :], img[:, -5:, :]], axis=0)
+                median_color = np.median(border_pixels, axis=(0, 1))
+                filled_bg = np.zeros_like(img) + median_color
+                noise = np.random.normal(0, 2, img.shape).astype(np.uint8)
+                filled_bg = np.clip(filled_bg.astype(np.int16) + noise.astype(np.int16), 0, 255).astype(np.uint8)
+                
+            translated_img = cv2.warpAffine(img, M, (w_img, h_img), borderMode=cv2.BORDER_TRANSPARENT)
+            mask = np.ones((h_img, w_img), dtype=np.uint8) * 255
+            mask_warped = cv2.warpAffine(mask, M, (w_img, h_img))
+            mask_inv = cv2.bitwise_not(mask_warped)
+            
+            final_img = translated_img.copy()
+            final_img[mask_inv > 0] = filled_bg[mask_inv > 0]
+            
+            instances.convert_bbox("xyxy")
+            instances.denormalize(w_img, h_img)
+            
+            shifted_bboxes = instances.bboxes.copy()
+            shifted_bboxes[:, [0, 2]] += dx
+            shifted_bboxes[:, [1, 3]] += dy
+            
+            t_box = shifted_bboxes[target_idx]
+            t_x1, t_y1, t_x2, t_y2 = t_box
+            t_w_clipped = max(0.0, min(t_x2, w_img) - max(0.0, t_x1))
+            t_h_clipped = max(0.0, min(t_y2, h_img) - max(0.0, t_y1))
+            actual_visible_ratio = (t_w_clipped * t_h_clipped) / (target_w_abs * target_h_abs + 1e-6)
+            
+            if actual_visible_ratio < 0.50 or t_w_clipped < 4 or t_h_clipped < 4:
+                continue
+                
+            keep_indices = []
+            for idx in range(len(shifted_bboxes)):
+                if idx == target_idx:
+                    keep_indices.append(idx)
+                    continue
+                box = shifted_bboxes[idx]
+                x1_b, y1_b, x2_b, y2_b = box
+                w_orig = x2_b - x1_b
+                h_orig = y2_b - y1_b
+                w_clip = max(0.0, min(x2_b, w_img) - max(0.0, x1_b))
+                h_clip = max(0.0, min(y2_b, h_img) - max(0.0, y1_b))
+                
+                if w_orig * h_orig > 0:
+                    vis_ratio = (w_clip * h_clip) / (w_orig * h_orig)
+                    if vis_ratio >= 0.30 and w_clip >= 3 and h_clip >= 3:
+                        keep_indices.append(idx)
+                        
+            if len(keep_indices) < 0.80 * len(cls):
+                continue
+                
+            labels["img"] = final_img
+            labels["cls"] = cls[keep_indices]
+            
+            clipped_bboxes = shifted_bboxes[keep_indices]
+            clipped_bboxes[:, [0, 2]] = np.clip(clipped_bboxes[:, [0, 2]], 0, w_img)
+            clipped_bboxes[:, [1, 3]] = np.clip(clipped_bboxes[:, [1, 3]], 0, h_img)
+            
+            instances_new = instances[keep_indices]
+            if instances_new.segments is not None and len(instances_new.segments):
+                instances_new.segments[..., 0] += dx
+                instances_new.segments[..., 1] += dy
+                instances_new.segments[..., 0] = np.clip(instances_new.segments[..., 0], 0, w_img)
+                instances_new.segments[..., 1] = np.clip(instances_new.segments[..., 1], 0, h_img)
+            if instances_new.keypoints is not None:
+                instances_new.keypoints[..., 0] += dx
+                instances_new.keypoints[..., 1] += dy
+                oob = (
+                    (instances_new.keypoints[..., 0] < 0)
+                    | (instances_new.keypoints[..., 0] > w_img)
+                    | (instances_new.keypoints[..., 1] < 0)
+                    | (instances_new.keypoints[..., 1] > h_img)
+                )
+                instances_new.keypoints[..., 2][oob] = 0.0
+                instances_new.keypoints[..., 0] = np.clip(instances_new.keypoints[..., 0], 0, w_img)
+                instances_new.keypoints[..., 1] = np.clip(instances_new.keypoints[..., 1], 0, h_img)
+                
+            if hasattr(instances_new, "ori_bboxes") and instances_new.ori_bboxes is not None:
+                instances_new.ori_bboxes[:, [0, 2]] += dx
+                instances_new.ori_bboxes[:, [1, 3]] += dy
+                
+            instances_new.update(bboxes=clipped_bboxes, segments=instances_new.segments, keypoints=instances_new.keypoints)
+            instances_new.normalize(w_img, h_img)
+            labels["instances"] = instances_new
+            return labels
+            
         return labels
 
 
@@ -2333,6 +2515,10 @@ class Format(BaseTransform):
             labels["sem_masks"] = sem_masks.float()
         labels["cls"] = torch.from_numpy(cls) if nl else torch.zeros(nl, 1)
         labels["bboxes"] = torch.from_numpy(instances.bboxes) if nl else torch.zeros((nl, 4))
+        if hasattr(instances, "ori_bboxes") and instances.ori_bboxes is not None:
+            labels["ori_bboxes"] = torch.from_numpy(instances.ori_bboxes) if nl else torch.zeros((nl, 4))
+        else:
+            labels["ori_bboxes"] = torch.from_numpy(instances.bboxes) if nl else torch.zeros((nl, 4))
         if self.return_keypoint:
             labels["keypoints"] = (
                 torch.empty(0, 3) if instances.keypoints is None else torch.from_numpy(instances.keypoints)
@@ -2348,6 +2534,8 @@ class Format(BaseTransform):
         if self.normalize:
             labels["bboxes"][:, [0, 2]] /= w
             labels["bboxes"][:, [1, 3]] /= h
+            labels["ori_bboxes"][:, [0, 2]] /= w
+            labels["ori_bboxes"][:, [1, 3]] /= h
         # Then we can use collate_fn
         if self.batch_idx:
             labels["batch_idx"] = torch.zeros(nl)

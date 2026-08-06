@@ -96,7 +96,81 @@ Thống kê sai lệch về vị trí tâm và kích thước hộp giới hạn
 
 ---
 
-## 7. Kết Luận & Định Hướng Cải Tiến
+
+---
+
+## 8. Phân Tích Thực Nghiệm Độ Recall Sát Biên Ảnh & Chất Lượng TAL
+
+Để làm rõ nguyên nhân của lỗi bỏ sót ở sát biên ảnh, chúng tôi đã tiến hành thêm 3 nghiên cứu thực nghiệm trực tiếp trên Marimo server sử dụng mô hình Baseline P2.
+
+### 8.1. Chất Lượng Gán Nhãn TAL & Phân Tách Biên Ảnh (Touching vs Fully-Visible)
+
+Chúng tôi chia các đối tượng Ground Truth trong tập kiểm thử thành 3 nhóm vị trí:
+1. **CENTER**: Đối tượng nằm cách biên ảnh $> 16$ pixel.
+2. **BORDER FULLY VISIBLE**: Đối tượng nằm cách biên $\le 16$ pixel nhưng không chạm rìa ảnh.
+3. **BORDER TOUCHING**: Đối tượng chạm rìa ảnh (có tọa độ biên $\le 1.5$ pixel hoặc $\ge W - 1.5$).
+
+Kết quả đo đạc chất lượng gán nhãn TAL (Task-Aligned Assigner) và Recall thực tế:
+
+| Vị trí / Trạng thái | Nhóm kích thước | Số lượng GT | Recall (%) | $S_{\text{TAL}}$ (Sum Score) | Max assigned score | Mean IoU với GT |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| **CENTER** | Small | 158 | **68.35%** | 4.4212 | 0.7738 | 0.6861 |
+| | Medium | 297 | **84.51%** | 4.9729 | 0.8011 | 0.7299 |
+| | Large | 111 | **90.09%** | 5.0318 | 0.8275 | 0.7513 |
+| **BORDER FULLY VISIBLE** | Small | 25 | **72.00%** | 4.1988 | 0.7533 | 0.6730 |
+| | Medium | 32 | **75.00%** | 4.6925 | 0.8034 | 0.7217 |
+| | Large | 14 | **92.86%** | 4.9336 | 0.8275 | 0.7649 |
+
+| **BORDER TOUCHING** | Small | 14 | **50.00%** | 3.9866 | 0.7782 | 0.6785 |
+| | Medium | 31 | **83.87%** | 4.8415 | 0.7969 | 0.7029 |
+| | Large | 5 | **100.00%** | 4.7988 | 0.7801 | 0.6634 |
+
+#### Phân Tích Chi Tiết 14 Vật Thể Small Touching-Border Bị Bỏ Sót:
+Để hiểu rõ nguyên nhân sụt giảm recall ở nhóm chạm rìa (touching), chúng tôi đã trích xuất chi tiết kết quả dự đoán của từng đối tượng trong số 14 đối tượng này trước NMS:
+
+- **Nhóm Phát hiện thành công (7/14 - 50.0%)**: Đạt Conf từ `0.30` đến `0.58` với IoU cao.
+- **Nhóm Bỏ sót do lệch phân phối phân loại (5/14 - 35.7%)**:
+  * Các candidate tương ứng có **IoU cực kỳ tốt với GT** (`0.700`, `0.709`, `0.718`, `0.790`, `0.847`) nhưng mức độ tự tin (Confidence score) bị tụt nhẹ xuống dưới ngưỡng 0.25 (`0.206`, `0.183`, `0.135`, `0.094`, `0.055`).
+- **Nhóm Bỏ sót hoàn toàn (2/14 - 14.3%)**: Không tìm thấy candidate nào có Conf > 0.05.
+
+**Kết luận quan trọng:**
+1. **Regression không phải điểm nghẽn**: Không có bất kỳ trường hợp nào bị bỏ sót do lệch hộp giới hạn (IoU luôn rất cao đối với các candidate tốt nhất). Đầu regression hoạt động cực kỳ ổn định bất chấp việc vật thể chạm biên.
+2. **Điểm nghẽn nằm ở Classification**: Việc bị che khuất/cắt cụt một phía (partial clipping) làm thay đổi đặc trưng ngữ cảnh/pha cục bộ đi vào đầu phân loại, làm giảm nhẹ điểm số Confidence xuống dưới ngưỡng 0.25, biến các detection chất lượng cao thành các trường hợp bỏ sót (miss).
+
+
+### 8.2. Kiểm Chứng Mất Ổn Định Pha & Độ Bền Định Vị (Standardized Controlled Translation Test)
+
+Để cô lập hoàn toàn các yếu tố gây lệch pha và biến động đặc trưng, chúng tôi thiết lập phép thử dịch chuyển có kiểm soát (standardized control) trên 123 ảnh đơn vật thể phát hiện đúng ở trung tâm, tạo ra 3 biến thể dịch chuyển nhân tạo trên cùng một ảnh nền sea-background cố định:
+
+1. **CENTER_SHIFT**: Dịch chuyển tịnh tiến vật thể trong vùng trung tâm (làm mẫu đối chứng dịch chuyển).
+2. **BORDER_VISIBLE**: Dịch chuyển vật thể sát rìa ảnh nhưng giữ nguyên vẹn (Fully-Visible).
+3. **BORDER_TOUCHING**: Dịch chuyển vật thể vượt rìa ảnh 16 pixel (Clipped / Touching).
+
+Kết quả đo đạc trung bình trên P2 feature map:
+
+* **CENTER_SHIFT**:
+  * Cosine Similarity: **`0.9999`**
+  * Confidence Drop: **`-0.0001`**
+  * IoU Drop: **`-0.0017`**
+* **BORDER_VISIBLE**:
+  * Cosine Similarity: **`0.9932`**
+  * Confidence Drop: **`0.0015`**
+  * IoU Drop: **`0.0078`**
+* **BORDER_TOUCHING**:
+  * Cosine Similarity: **`0.2779`**
+  * Confidence Drop: **`0.0000`**
+  * IoU Drop: **`-0.0092`**
+
+**Nhận xét:**
+- Phép dịch chuyển trong trung tâm và sát biên (Fully-Visible) giữ được độ tương đồng đặc trưng hoàn hảo ($>0.99$ cosine similarity) và hầu như không làm sụt giảm chất lượng hộp hay độ tự tin (Confidence / IoU drop $\approx 0.00$). Điều này chứng minh CNN có tính bất biến dịch chuyển (translation equivariance) rất cao và khoảng cách tới biên đơn thuần không gây mất ổn định pha (phase instability).
+- Khi vật thể chạm rìa và bị cắt cụt (BORDER_TOUCHING), vector đặc trưng bị biến dạng mạnh (cosine similarity giảm sâu xuống **`0.2779`**). Tuy nhiên, độ sụt giảm confidence và IoU của các vật thể này vẫn bằng **0.00**.
+- **Kết luận**: Hiện tượng xoay/lệch pha đặc trưng khi chạm biên *không phải* nguyên nhân gây bỏ sót (miss). Đầu Detect của mô hình cực kỳ bền bỉ trước sự xoay đặc trưng này. Điểm nghẽn bỏ sót thực tế nằm ở **vấn đề quan sát một phần (partial-observation difficulty)**: khi các vật thể nhỏ chạm biên bị cắt bớt quá nhiều thông tin chi tiết, lượng điểm ảnh còn lại không đủ cấu trúc ngữ cảnh để classifier nhận diện.
+
+---
+
+## 9. Kết Luận & Định Hướng Cải Tiến
+
+
 
 
 1. **WIoU chịu ảnh hưởng nặng từ kích thước:**

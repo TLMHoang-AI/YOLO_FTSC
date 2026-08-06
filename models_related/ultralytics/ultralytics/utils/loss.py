@@ -1520,6 +1520,38 @@ class v8DetectionLoss:
             ).squeeze(-1).clamp(0)
             if self.vfl is not None and bool(getattr(self.hyp, "vfl_iou_detach", True)):
                 assigned_iou = assigned_iou.detach()
+        # Compute size-aware classification weights
+        cls_weights = torch.ones_like(cls_target_scores)
+        if fg_mask.sum():
+            if "ori_bboxes" in batch:
+                ori_targets = torch.cat((batch["batch_idx"].view(-1, 1), batch["cls"].view(-1, 1), batch["ori_bboxes"]), 1)
+            else:
+                ori_targets = torch.cat((batch["batch_idx"].view(-1, 1), batch["cls"].view(-1, 1), batch["bboxes"]), 1)
+            ori_targets = self.preprocess(ori_targets.to(self.device), batch_size, scale_tensor=imgsz[[1, 0, 1, 0]])
+            _, gt_ori_bboxes = ori_targets.split((1, 4), 2)
+            
+            for b in range(batch_size):
+                fg_b = fg_mask[b]
+                if fg_b.any():
+                    gt_idx = target_gt_idx[b, fg_b]
+                    ori_boxes = gt_ori_bboxes[b, gt_idx]
+                    w_box = (ori_boxes[:, 2] - ori_boxes[:, 0]).clamp(0)
+                    h_box = (ori_boxes[:, 3] - ori_boxes[:, 1]).clamp(0)
+                    A_g = w_box * h_box
+                    
+                    w_g = torch.ones_like(A_g)
+                    import os
+                    variant = os.environ.get("YOLO_VARIANT", "")
+                    if "small_weight" in variant:
+                        w_g = torch.where(A_g < 100.0, torch.full_like(w_g, 1.75), w_g)
+                        w_g = torch.where((A_g >= 100.0) & (A_g < 400.0), torch.full_like(w_g, 1.50), w_g)
+                        w_g = torch.where((A_g >= 400.0) & (A_g < 1000.0), torch.full_like(w_g, 1.15), w_g)
+                        
+                        alpha_t = min(max(float(getattr(self, "epoch", 0.0)), 0.0) / 5.0, 1.0)
+                        w_g = 1.0 + alpha_t * (w_g - 1.0)
+                    
+                    cls_weights[b, fg_b] = w_g.unsqueeze(-1)
+
         if self.vfl is not None:
             if assigned_iou is not None:
                 cls_target_scores = target_scores.clone()
@@ -1541,11 +1573,13 @@ class v8DetectionLoss:
                 )
                 cls_target_scores_sum = max(cls_target_scores.sum(), 1)
             bce_loss = self.bce(pred_scores, cls_target_scores.to(dtype))  # (bs, num_anchors, nc)
+            bce_loss *= cls_weights
             if self.class_weights is not None:
                 bce_loss *= self.class_weights
             loss[1] = bce_loss.sum() / cls_target_scores_sum  # BCE
         else:
             bce_loss = self.bce(pred_scores, cls_target_scores.to(dtype))  # (bs, num_anchors, nc)
+            bce_loss *= cls_weights
             if self.class_weights is not None:
                 bce_loss *= self.class_weights
             loss[1] = bce_loss.sum() / cls_target_scores_sum  # BCE

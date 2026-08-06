@@ -221,6 +221,7 @@ class Instances:
         keypoints: np.ndarray = None,
         bbox_format: str = "xywh",
         normalized: bool = True,
+        ori_bboxes: np.ndarray = None,
     ) -> None:
         """Initialize the Instances object with bounding boxes, segments, and keypoints.
 
@@ -230,11 +231,16 @@ class Instances:
             keypoints (np.ndarray, optional): Keypoints with shape (N, 17, 3) in format (x, y, visible).
             bbox_format (str): Format of bboxes.
             normalized (bool): Whether the coordinates are normalized.
+            ori_bboxes (np.ndarray, optional): Original unclipped bounding boxes.
         """
         self._bboxes = Bboxes(bboxes=bboxes, format=bbox_format)
         self.keypoints = keypoints
         self.normalized = normalized
         self.segments = segments
+        if ori_bboxes is None:
+            self.ori_bboxes = bboxes.copy() if len(bboxes) else np.zeros((0, 4))
+        else:
+            self.ori_bboxes = ori_bboxes.copy()
 
     def convert_bbox(self, format: str) -> None:
         """Convert bounding box format.
@@ -258,6 +264,8 @@ class Instances:
             bbox_only (bool, optional): Whether to scale only bounding boxes.
         """
         self._bboxes.mul(scale=(scale_w, scale_h, scale_w, scale_h))
+        if hasattr(self, "ori_bboxes") and self.ori_bboxes is not None:
+            self.ori_bboxes = self.ori_bboxes * np.array([scale_w, scale_h, scale_w, scale_h], dtype=np.float32)
         if bbox_only:
             return
         self.segments[..., 0] *= scale_w
@@ -276,6 +284,8 @@ class Instances:
         if not self.normalized:
             return
         self._bboxes.mul(scale=(w, h, w, h))
+        if hasattr(self, "ori_bboxes") and self.ori_bboxes is not None:
+            self.ori_bboxes = self.ori_bboxes * np.array([w, h, w, h], dtype=np.float32)
         self.segments[..., 0] *= w
         self.segments[..., 1] *= h
         if self.keypoints is not None:
@@ -293,6 +303,8 @@ class Instances:
         if self.normalized:
             return
         self._bboxes.mul(scale=(1 / w, 1 / h, 1 / w, 1 / h))
+        if hasattr(self, "ori_bboxes") and self.ori_bboxes is not None:
+            self.ori_bboxes = self.ori_bboxes * np.array([1 / w, 1 / h, 1 / w, 1 / h], dtype=np.float32)
         self.segments[..., 0] /= w
         self.segments[..., 1] /= h
         if self.keypoints is not None:
@@ -309,6 +321,13 @@ class Instances:
         """
         assert not self.normalized, "you should add padding with absolute coordinates."
         self._bboxes.add(offset=(padw, padh, padw, padh))
+        if hasattr(self, "ori_bboxes") and self.ori_bboxes is not None:
+            if self._bboxes.format == "xyxy":
+                self.ori_bboxes[:, [0, 2]] += padw
+                self.ori_bboxes[:, [1, 3]] += padh
+            else:
+                self.ori_bboxes[:, 0] += padw
+                self.ori_bboxes[:, 1] += padh
         self.segments[..., 0] += padw
         self.segments[..., 1] += padh
         if self.keypoints is not None:
@@ -332,12 +351,14 @@ class Instances:
         keypoints = self.keypoints[index] if self.keypoints is not None else None
         bboxes = self.bboxes[index]
         bbox_format = self._bboxes.format
+        ori_bboxes = self.ori_bboxes[index] if (hasattr(self, "ori_bboxes") and self.ori_bboxes is not None) else None
         return Instances(
             bboxes=bboxes,
             segments=segments,
             keypoints=keypoints,
             bbox_format=bbox_format,
             normalized=self.normalized,
+            ori_bboxes=ori_bboxes,
         )
 
     def flipud(self, h: int) -> None:
@@ -477,7 +498,11 @@ class Instances:
         else:
             cat_segments = np.concatenate([b.segments for b in instances_list], axis=axis)
         cat_keypoints = np.concatenate([b.keypoints for b in instances_list], axis=axis) if use_keypoint else None
-        return cls(cat_boxes, cat_segments, cat_keypoints, bbox_format, normalized)
+        
+        has_ori = all(hasattr(ins, "ori_bboxes") and ins.ori_bboxes is not None for ins in instances_list)
+        cat_ori = np.concatenate([ins.ori_bboxes for ins in instances_list], axis=axis) if has_ori else None
+        
+        return cls(cat_boxes, cat_segments, cat_keypoints, bbox_format, normalized, ori_bboxes=cat_ori)
 
     @property
     def bboxes(self) -> np.ndarray:
