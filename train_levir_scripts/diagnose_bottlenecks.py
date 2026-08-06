@@ -276,9 +276,9 @@ def main():
                 # Convert prediction to dist form to align with DFL
                 # edge sequence: l, t, r, b
                 gt_l = (p2_anchors[best_anchor_idx, 0] * p2_strides[best_anchor_idx, 0] - gt[0]) / p2_strides[best_anchor_idx, 0]
-                gt_t = (p2_anchors[best_anchor_idx, 1] * p2_strides[best_anchor_idx, 1] - gt[1]) / p2_strides[best_anchor_idx, 1]
+                gt_t = (p2_anchors[best_anchor_idx, 1] * p2_strides[best_anchor_idx, 0] - gt[1]) / p2_strides[best_anchor_idx, 0]
                 gt_r = (gt[2] - p2_anchors[best_anchor_idx, 0] * p2_strides[best_anchor_idx, 0]) / p2_strides[best_anchor_idx, 0]
-                gt_b = (gt[3] - p2_anchors[best_anchor_idx, 1] * p2_strides[best_anchor_idx, 1]) / p2_strides[best_anchor_idx, 1]
+                gt_b = (gt[3] - p2_anchors[best_anchor_idx, 1] * p2_strides[best_anchor_idx, 0]) / p2_strides[best_anchor_idx, 0]
                 
                 true_dists = [gt_l.item(), gt_t.item(), gt_r.item(), gt_b.item()]
                 
