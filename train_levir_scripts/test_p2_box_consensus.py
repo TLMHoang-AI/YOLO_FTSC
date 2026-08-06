@@ -6,7 +6,7 @@ import torch
 import yaml
 
 ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT / "models_related/ultralytics"))
+sys.path.insert(0, str(ROOT.parent / "models_related/ultralytics"))
 
 from ultralytics.utils.loss import v8DetectionLoss
 
@@ -33,7 +33,7 @@ def test_consensus_uses_only_grouped_p2_tal_positives():
 
 def test_consensus_config_keeps_assignment_off():
     config = yaml.safe_load(
-        (ROOT / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_consensus.yaml").read_text()
+        (ROOT.parent / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_consensus.yaml").read_text()
     )
     assert config["loc_assign"] is False
     assert config["box_consensus_gain"] == 0.1

@@ -4,7 +4,7 @@ import sys
 import torch
 
 ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT / "models_related/ultralytics"))
+sys.path.insert(0, str(ROOT.parent / "models_related/ultralytics"))
 
 from ultralytics import YOLO
 from ultralytics.nn.modules import ConflictFineReconstruction, P2NUDFLDetect
@@ -12,7 +12,7 @@ from ultralytics.nn.modules.head import P2OffsetRegression
 from ultralytics.utils.loss import BboxLoss, DFLoss
 
 
-CONFIG = ROOT / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_nudfl_pc_cfr.yaml"
+CONFIG = ROOT.parent / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_nudfl_pc_cfr.yaml"
 EXPECTED_BINS = torch.tensor(
     [0.0, 0.35, 0.70, 1.05, 1.40, 1.80, 2.30, 2.90, 3.60, 4.50, 5.60, 6.90, 8.40, 10.20, 12.40, 15.0]
 )

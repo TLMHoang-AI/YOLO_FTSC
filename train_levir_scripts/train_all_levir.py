@@ -17,7 +17,7 @@ SEEDS = (42, 43, 44)
 
 
 def local_ultralytics() -> None:
-    local = ROOT / "models_related/ultralytics"
+    local = ROOT.parent / "models_related/ultralytics"
     if (local / "ultralytics/__init__.py").is_file() and str(local) not in sys.path:
         sys.path.insert(0, str(local))
 
@@ -75,9 +75,9 @@ def run(args: argparse.Namespace) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-root", type=Path, default=ROOT / "LevirShipData")
-    parser.add_argument("--dataset-root", type=Path, default=ROOT / "datasets")
-    parser.add_argument("--project", type=Path, default=ROOT / "runs/levir_ship_baselines")
+    parser.add_argument("--data-root", type=Path, default=ROOT.parent / "LevirShipData")
+    parser.add_argument("--dataset-root", type=Path, default=ROOT.parent / "datasets")
+    parser.add_argument("--project", type=Path, default=ROOT.parent / "runs/levir_ship_baselines")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=512)
     parser.add_argument("--batch-size", type=int, default=8)

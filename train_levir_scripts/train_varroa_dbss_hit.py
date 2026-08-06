@@ -15,8 +15,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-ULTRALYTICS = ROOT / "models_related/ultralytics"
-CONFIG_ROOT = ROOT / "models_related/models_config"
+ULTRALYTICS = ROOT.parent / "models_related/ultralytics"
+CONFIG_ROOT = ROOT.parent / "models_related/models_config"
 MODELS = {
     "yolov5n": {
         "weights": "yolov5nu.pt",
@@ -266,10 +266,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--seed-scope", choices=("all", "dataset"), default="all",
         help="Seed dataset split only, or also Python/NumPy/Torch/CUDA training RNGs.",
     )
-    parser.add_argument("--data-yaml", type=Path, default=ROOT / "datasets/varroa_yolo/varroa.yaml")
+    parser.add_argument("--data-yaml", type=Path, default=ROOT.parent / "datasets/varroa_yolo/varroa.yaml")
     parser.add_argument("--data-root", type=Path, default=ROOT.parent)
-    parser.add_argument("--dataset-root", type=Path, default=ROOT / "datasets")
-    parser.add_argument("--project", type=Path, default=ROOT / "runs/varroa_dbss_hit")
+    parser.add_argument("--dataset-root", type=Path, default=ROOT.parent / "datasets")
+    parser.add_argument("--project", type=Path, default=ROOT.parent / "runs/varroa_dbss_hit")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--batch-size", type=int, default=4)

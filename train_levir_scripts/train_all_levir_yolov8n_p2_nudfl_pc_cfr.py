@@ -12,8 +12,7 @@ ROOT = Path(__file__).resolve().parent
 EXPERIMENT = "levir_yolov8n_p2_nudfl_pc_cfr"
 HF_REPO = "duyle2408/levir-yolov8n-p2-nudfl-pc-cfr-3seed"
 VARIANTS = {
-    "nudfl_pc_cfr": ROOT
-    / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_nudfl_pc_cfr.yaml"
+    "nudfl_pc_cfr": ROOT.parent / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_nudfl_pc_cfr.yaml"
 }
 
 workflow.EXPERIMENT = EXPERIMENT
@@ -26,9 +25,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44])
     parser.add_argument("--split-seed", type=int, default=42)
-    parser.add_argument("--data-root", type=Path, default=ROOT / "LevirShipData")
-    parser.add_argument("--dataset-root", type=Path, default=ROOT / "datasets")
-    parser.add_argument("--project", type=Path, default=ROOT / f"runs/{EXPERIMENT}")
+    parser.add_argument("--data-root", type=Path, default=ROOT.parent / "LevirShipData")
+    parser.add_argument("--dataset-root", type=Path, default=ROOT.parent / "datasets")
+    parser.add_argument("--project", type=Path, default=ROOT.parent / f"runs/{EXPERIMENT}")
     parser.add_argument("--pretrained", default="yolov8n.pt")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=512)

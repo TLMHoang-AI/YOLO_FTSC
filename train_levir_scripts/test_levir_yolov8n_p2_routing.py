@@ -5,7 +5,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT / "models_related/ultralytics"))
+sys.path.insert(0, str(ROOT.parent / "models_related/ultralytics"))
 
 from ultralytics import YOLO
 from ultralytics.nn.modules import DBSS, GCTS

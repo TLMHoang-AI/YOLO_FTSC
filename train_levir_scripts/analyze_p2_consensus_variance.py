@@ -14,7 +14,7 @@ import numpy as np
 import torch
 
 ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT / "models_related/ultralytics"))
+sys.path.insert(0, str(ROOT.parent / "models_related/ultralytics"))
 
 from ultralytics import YOLO  # noqa: E402
 from ultralytics.data.augment import LetterBox  # noqa: E402

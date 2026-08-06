@@ -15,8 +15,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-ULTRALYTICS = ROOT / "models_related/ultralytics"
-CONFIG_ROOT = ROOT / "models_related/models_config/yolov8/levir"
+ULTRALYTICS = ROOT.parent / "models_related/ultralytics"
+CONFIG_ROOT = ROOT.parent / "models_related/models_config/yolov8/levir"
 EXPERIMENT = "levir_yolov8n_p2_routing"
 HF_REPO = "duyle2408/levir-yolov8n-p2-routing-3seed"
 VARIANTS = {
@@ -304,9 +304,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--variants", nargs="+", choices=VARIANTS, default=list(VARIANTS))
     parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44])
     parser.add_argument("--split-seed", type=int, default=42)
-    parser.add_argument("--data-root", type=Path, default=ROOT / "LevirShipData")
-    parser.add_argument("--dataset-root", type=Path, default=ROOT / "datasets")
-    parser.add_argument("--project", type=Path, default=ROOT / f"runs/{EXPERIMENT}")
+    parser.add_argument("--data-root", type=Path, default=ROOT.parent / "LevirShipData")
+    parser.add_argument("--dataset-root", type=Path, default=ROOT.parent / "datasets")
+    parser.add_argument("--project", type=Path, default=ROOT.parent / f"runs/{EXPERIMENT}")
     parser.add_argument("--pretrained", default="yolov8n.pt")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=512)

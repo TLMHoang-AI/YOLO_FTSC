@@ -12,8 +12,7 @@ ROOT = Path(__file__).resolve().parent
 EXPERIMENT = "levir_yolov8n_p2_local_detail_repc2f"
 HF_REPO = "duyle2408/levir-yolov8n-p2-local-detail-repc2f-seed42"
 VARIANTS = {
-    "local_detail_repc2f": ROOT
-    / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_local_detail_repc2f.yaml"
+    "local_detail_repc2f": ROOT.parent / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_local_detail_repc2f.yaml"
 }
 
 # Reuse the proven LEVIR split/train/evaluate/upload workflow with this experiment's identity.
@@ -26,9 +25,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seeds", nargs="+", type=int, default=[42])
     parser.add_argument("--split-seed", type=int, default=42)
-    parser.add_argument("--data-root", type=Path, default=ROOT / "LevirShipData")
-    parser.add_argument("--dataset-root", type=Path, default=ROOT / "datasets")
-    parser.add_argument("--project", type=Path, default=ROOT / f"runs/{EXPERIMENT}")
+    parser.add_argument("--data-root", type=Path, default=ROOT.parent / "LevirShipData")
+    parser.add_argument("--dataset-root", type=Path, default=ROOT.parent / "datasets")
+    parser.add_argument("--project", type=Path, default=ROOT.parent / f"runs/{EXPERIMENT}")
     parser.add_argument("--pretrained", default="yolov8n.pt")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=512)

@@ -10,7 +10,7 @@ VARIANT = "p2_consensus_g01"
 workflow.EXPERIMENT = "levir_yolov8n_p2_consensus"
 workflow.HF_REPO = "duyle2408/levir-yolov8n-p2-consensus-seed42"
 workflow.VARIANTS = {
-    VARIANT: ROOT / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_consensus.yaml"
+    VARIANT: ROOT.parent / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_consensus.yaml"
 }
 _baseline_train_kwargs = workflow.train_kwargs
 

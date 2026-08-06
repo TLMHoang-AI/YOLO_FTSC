@@ -5,7 +5,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT / "models_related/ultralytics"))
+sys.path.insert(0, str(ROOT.parent / "models_related/ultralytics"))
 
 from ultralytics import YOLO
 from ultralytics.nn.modules import DBSS
@@ -32,5 +32,5 @@ def test_ablation_defaults_exclude_existing_k8(monkeypatch):
     )
     assert args.mechanisms == ["k4", "k12", "k16", "k20"]
     assert args.seeds == [42]
-    assert args.project == ROOT / "runs/levir_yolov8n_dbss_basis_ablation"
+    assert args.project == ROOT.parent / "runs/levir_yolov8n_dbss_basis_ablation"
     assert args.hf_repo_name == "levir-yolov8n-dbss-basis-ablation"
