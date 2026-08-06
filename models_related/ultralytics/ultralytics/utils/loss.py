@@ -1797,28 +1797,18 @@ class v8DetectionLoss:
             
             p2_aux = p2 * (1 - drop_mask) + local_mean * drop_mask
             
-            # Temporary BatchNorm buffers snapshot to prevent running stats updates
+            # Temporary BatchNorm settings to prevent running stats updates
             bn_states = []
             for m_sub in self.detect_head.cv2[0].modules():
                 if isinstance(m_sub, nn.BatchNorm2d):
-                    bn_states.append((
-                        m_sub,
-                        m_sub.running_mean.clone() if m_sub.running_mean is not None else None,
-                        m_sub.running_var.clone() if m_sub.running_var is not None else None,
-                        m_sub.num_batches_tracked.clone() if m_sub.num_batches_tracked is not None else None,
-                        m_sub.training
-                    ))
+                    bn_states.append((m_sub, m_sub.track_running_stats, m_sub.training))
+                    m_sub.track_running_stats = False
                     m_sub.train(True)
             try:
                 aux_logits_map = self.detect_head.cv2[0](p2_aux)
             finally:
-                for m_sub, mean, var, batches, training in bn_states:
-                    if mean is not None:
-                        m_sub.running_mean.copy_(mean)
-                    if var is not None:
-                        m_sub.running_var.copy_(var)
-                    if batches is not None:
-                        m_sub.num_batches_tracked.copy_(batches)
+                for m_sub, track_stats, training in bn_states:
+                    m_sub.track_running_stats = track_stats
                     m_sub.train(training)
             
             # Flatten and decode
