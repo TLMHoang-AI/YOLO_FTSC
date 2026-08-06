@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import os
 import csv
-import json
 import urllib.request
 import subprocess
 from pathlib import Path
@@ -9,7 +8,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Step 1: Download Baseline checkpoint
+# Step 1: Download Baseline checkpoint if not exists
 baseline_dir = ROOT / "runs/yolov8n_p2_baseline_seed42/weights"
 baseline_weight = baseline_dir / "best.pt"
 
@@ -23,10 +22,8 @@ if not baseline_weight.exists():
     except Exception as e:
         print(f"Failed to download checkpoint: {e}")
         exit(1)
-else:
-    print("Baseline checkpoint already exists locally.")
 
-# Step 2: Run variance diagnostics for Baseline if per_gt.csv doesn't exist
+# Step 2: Run variance diagnostics for Baseline if not exists
 baseline_diag_dir = ROOT / "diagnostics/yolov8n_p2_baseline_seed42"
 baseline_csv = baseline_diag_dir / "per_gt.csv"
 
@@ -40,18 +37,16 @@ if not baseline_csv.exists():
         "--images", "datasets/levir_ship_yolo_seed42/images/test",
         "--output", str(baseline_diag_dir)
     ], cwd=str(ROOT), capture_output=True, text=True)
-    print("Variance exit code:", res.returncode)
     if res.returncode != 0:
-        print("Error running variance analysis:")
-        print(res.stderr)
+        print("Error running baseline variance analysis:", res.stderr)
         exit(1)
-else:
-    print("Baseline variance CSV already exists.")
 
-# Step 3: Load per_gt.csv files
+# Paths to the three CSV files
 g4_csv = ROOT / "diagnostics/p2_consensus_g4_seed42_test_variance/per_gt.csv"
-if not g4_csv.exists():
-    print(f"G4 variance CSV not found at: {g4_csv}")
+wiou_csv = ROOT / "diagnostics/p2_wiou_seed42_test_variance/per_gt.csv"
+
+if not g4_csv.exists() or not wiou_csv.exists():
+    print(f"CSVs not found: G4 exists={g4_csv.exists()}, WIoU exists={wiou_csv.exists()}")
     exit(1)
 
 def load_per_gt(csv_path):
@@ -60,13 +55,10 @@ def load_per_gt(csv_path):
         reader = csv.DictReader(f)
         for row in reader:
             key = (row["image"], int(row["gt_index"]))
-            # Extract iou, bin and variances
-            # Note baseline has variance, g4 has fixed3_variance, fixed5_variance
             iou = float(row["best_iou"])
             v3 = float(row.get("variance") or row.get("fixed3_variance") or 0.0)
             v5 = float(row.get("fixed5_variance") or 0.0)
             
-            # Map iou to bin
             if iou < 0.5:
                 bin_name = "<0.5"
             elif iou < 0.75:
@@ -84,81 +76,69 @@ def load_per_gt(csv_path):
 
 base_data = load_per_gt(baseline_csv)
 g4_data = load_per_gt(g4_csv)
+wiou_data = load_per_gt(wiou_csv)
 
-# Step 4: Perform paired merge and calculations
-keys = set(base_data.keys()) & set(g4_data.keys())
-print(f"\nPaired Ground Truth count: {len(keys)}")
+keys = set(base_data.keys()) & set(g4_data.keys()) & set(wiou_data.keys())
+print(f"\nPaired Ground Truth count (all three): {len(keys)}")
 
-# 1. Transition Matrix
+# Bins
 bins = ["<0.5", "0.5-0.75", ">=0.75"]
-matrix = {b1: {b2: 0 for b2 in bins} for b1 in bins}
 
-# 2. Delta metrics
+# Transition Matrices
+matrix_g4 = {b1: {b2: 0 for b2 in bins} for b1 in bins}
+matrix_wiou = {b1: {b2: 0 for b2 in bins} for b1 in bins}
+
 paired_by_base_bin = {b: [] for b in bins}
 
 for key in keys:
     b = base_data[key]
     g = g4_data[key]
+    w = wiou_data[key]
     
-    # Update transition matrix
-    matrix[b["bin"]][g["bin"]] += 1
-    
-    # Calculate deltas
-    delta_iou = g["iou"] - b["iou"]
-    delta_v3 = g["v3"] - b["v3"]
-    delta_v5 = g["v5"] - b["v5"]
+    matrix_g4[b["bin"]][g["bin"]] += 1
+    matrix_wiou[b["bin"]][w["bin"]] += 1
     
     paired_by_base_bin[b["bin"]].append({
-        "delta_iou": delta_iou,
-        "delta_v3": delta_v3,
-        "delta_v5": delta_v5,
         "base_iou": b["iou"],
         "g4_iou": g["iou"],
+        "wiou_iou": w["iou"],
         "base_v3": b["v3"],
-        "g4_v3": g["v3"]
+        "g4_v3": g["v3"],
+        "wiou_v3": w["v3"],
+        "base_v5": b["v5"],
+        "g4_v5": g["v5"],
+        "wiou_v5": w["v5"]
     })
 
-# Print Transition Table
-print("\n=== TRANSITION MATRIX ===")
+# Print Transition Matrices
+print("\n=== TRANSITION MATRIX: BASELINE -> G4 ===")
 print("| Baseline → G4 | <0.5 | 0.5–0.75 | ≥0.75 |")
 print("| ------------- | -----: | ---------: | ------: |")
 for b in bins:
-    row_str = f"| {b:<13} |"
-    for g in bins:
-        row_str += f" {matrix[b][g]:>5} |"
-    print(row_str)
+    print(f"| {b:<13} | {matrix_g4[b]['<0.5']:>5} | {matrix_g4[b]['0.5-0.75']:>8} | {matrix_g4[b]['>=0.75']:>5} |")
 
-# Print Paired Table
-print("\n=== PAIRED COMPARISON TABLE ===")
-print("| Baseline group | Median ΔIoU | Median Δvariance 3×3 | Median Δvariance 5×5 |")
-print("| -------------- | ----------: | -------------------: | -------------------: |")
+print("\n=== TRANSITION MATRIX: BASELINE -> WIoU ===")
+print("| Baseline → WIoU | <0.5 | 0.5–0.75 | ≥0.75 |")
+print("| --------------- | -----: | ---------: | ------: |")
+for b in bins:
+    print(f"| {b:<15} | {matrix_wiou[b]['<0.5']:>5} | {matrix_wiou[b]['0.5-0.75']:>8} | {matrix_wiou[b]['>=0.75']:>5} |")
+
+# Print Paired Comparison Table
+print("\n=== PAIRED COMPARISON: MEDIAN DELTAS ===")
+print("| Baseline Group | G4 Median ΔIoU | WIoU Median ΔIoU | G4 Median Δvar 3x3 | WIoU Median Δvar 3x3 |")
+print("| -------------- | -------------: | ---------------: | -----------------: | -------------------: |")
 for b in bins:
     items = paired_by_base_bin[b]
-    if items:
-        med_diou = np.median([x["delta_iou"] for x in items])
-        med_dv3 = np.median([x["delta_v3"] for x in items])
-        med_dv5 = np.median([x["delta_v5"] for x in items])
-        print(f"| {b:<14} | {med_diou:>10.6f} | {med_dv3:>20.8f} | {med_dv5:>20.8f} |")
-    else:
-        print(f"| {b:<14} |          - |                    - |                    - |")
+    med_diou_g4 = np.median([x["g4_iou"] - x["base_iou"] for x in items])
+    med_diou_w = np.median([x["wiou_iou"] - x["base_iou"] for x in items])
+    med_dv3_g4 = np.median([x["g4_v3"] - x["base_v3"] for x in items])
+    med_dv3_w = np.median([x["wiou_v3"] - x["base_v3"] for x in items])
+    print(f"| {b:<14} | {med_diou_g4:>14.6f} | {med_diou_w:>16.6f} | {med_dv3_g4:>18.8f} | {med_dv3_w:>20.8f} |")
 
-# Detailed breakdown of mid-tier (0.5-0.75) transition
-mid_tier_items = paired_by_base_bin["0.5-0.75"]
-transitioned = [x for x in mid_tier_items if x["g4_iou"] >= 0.75]
-not_transitioned = [x for x in mid_tier_items if x["g4_iou"] < 0.75]
-
-print("\n=== MID-TIER (0.5-0.75) BREAKDOWN ===")
-print(f"Total mid-tier GTs: {len(mid_tier_items)}")
-print(f"Transitioned to >=0.75: {len(transitioned)} ({len(transitioned)/len(mid_tier_items)*100:.1f}%)")
-if transitioned:
-    print(f"  - Median delta IoU: {np.median([x['delta_iou'] for x in transitioned]):.6f}")
-    print(f"  - Median Baseline variance 3x3: {np.median([x['base_v3'] for x in transitioned]):.8f}")
-    print(f"  - Median G4 variance 3x3: {np.median([x['g4_v3'] for x in transitioned]):.8f}")
-    print(f"  - Median delta variance 3x3: {np.median([x['delta_v3'] for x in transitioned]):.8f}")
-
-print(f"Not transitioned: {len(not_transitioned)} ({len(not_transitioned)/len(mid_tier_items)*100:.1f}%)")
-if not_transitioned:
-    print(f"  - Median delta IoU: {np.median([x['delta_iou'] for x in not_transitioned]):.6f}")
-    print(f"  - Median Baseline variance 3x3: {np.median([x['base_v3'] for x in not_transitioned]):.8f}")
-    print(f"  - Median G4 variance 3x3: {np.median([x['g4_v3'] for x in not_transitioned]):.8f}")
-    print(f"  - Median delta variance 3x3: {np.median([x['delta_v3'] for x in not_transitioned]):.8f}")
+# Detailed Breakdown of Mid-tier
+mid_tier = paired_by_base_bin["0.5-0.75"]
+print(f"\n=== MID-TIER (0.5-0.75) BREAKDOWN (Total: {len(mid_tier)}) ===")
+trans_g4 = [x for x in mid_tier if x["g4_iou"] >= 0.75]
+trans_w = [x for x in mid_tier if x["wiou_iou"] >= 0.75]
+print(f"G4 transitioned:   {len(trans_g4)} ({len(trans_g4)/len(mid_tier)*100:.1f}%) | Median ΔIoU: {np.median([x['g4_iou'] - x['base_iou'] for x in trans_g4]):.6f} | Median Δvar 3x3: {np.median([x['g4_v3'] - x['base_v3'] for x in trans_g4]):.8f}")
+print(f"WIoU transitioned: {len(trans_w)} ({len(trans_w)/len(mid_tier)*100:.1f}%) | Median ΔIoU: {np.median([x['wiou_iou'] - x['base_iou'] for x in trans_w]):.6f} | Median Δvar 3x3: {np.median([x['wiou_v3'] - x['base_v3'] for x in trans_w]):.8f}")
