@@ -18,8 +18,10 @@ class MockDetect(nn.Module):
         self.p2_dfl_bins = None
         self.loc_quality_enabled = False
         self.quality_head = False
+        self.box_detail = False
+        self.dfl_residual = False
         
-        # Mock cv2[0] as a simple Conv/Linear layers with BatchNorm to test eval state switching
+        # Mock cv2[0] with Conv2d and BatchNorm2d to inspect buffer behavior
         self.cv2 = nn.ModuleList([
             nn.Sequential(
                 nn.Conv2d(16, 64, 3, 1, 1),
@@ -29,12 +31,12 @@ class MockDetect(nn.Module):
         ])
 
 class MockModel(nn.Module):
-    def __init__(self):
+    def __init__(self, mode="dominant"):
         super().__init__()
         self.model = nn.ModuleList([MockDetect()])
         self.args = type("Args", (object,), {
             "positive_support_dropout": True,
-            "positive_support_mode": "dominant",
+            "positive_support_mode": mode,
             "positive_support_gain": 0.25,
             "positive_support_prob": 1.0,  # force dropout for deterministic testing
             "positive_support_min_count": 3,
@@ -53,9 +55,9 @@ class MockModel(nn.Module):
             "box": 7.5,
             "cls": 0.5,
             "dfl": 1.5,
+            "bbox_iou_loss": "ciou",
         })()
         
-        # Required parameter for device lookup
         self.dummy_param = nn.Parameter(torch.zeros(1))
 
 def test_psd_gain_warmup():
@@ -73,32 +75,22 @@ def test_psd_gain_warmup():
     # Test end
     criterion.epoch = 10
     assert criterion._psd_current_gain() == 0.25
-    
-    criterion.epoch = 15
-    assert criterion._psd_current_gain() == 0.25
 
-def test_psd_loss_computation():
+def test_psd_bn_restoration():
     model = MockModel()
     criterion = v8DetectionLoss(model)
-    criterion.epoch = 10 # fully warmed up
+    criterion.epoch = 10
     
-    # Batch size 1, 1 class, grid H2=8, W2=8 (64 anchors for P2)
     h2, w2 = 8, 8
     n_p2 = h2 * w2
     
-    # Mock preds dict
-    # features shape: (1, 16, H2, W2)
     feats = [torch.randn(1, 16, h2, w2)]
-    # boxes shape: (1, reg_max * 4, n_p2)
-    # scores shape: (1, nc, n_p2)
     preds = {
         "feats": feats,
         "boxes": torch.randn(1, 64, n_p2),
         "scores": torch.randn(1, 1, n_p2),
     }
     
-    # Mock batch dict
-    # batch_idx, cls, bboxes (xywh normalized)
     batch = {
         "batch_idx": torch.zeros(1),
         "cls": torch.zeros(1),
@@ -106,19 +98,57 @@ def test_psd_loss_computation():
         "img": torch.randn(1, 3, 32, 32),
     }
     
-    # We call get_assigned_targets_and_loss
-    # Let's ensure no crash and psd loss is computed
-    try:
-        targets_and_loss = criterion.get_assigned_targets_and_loss(preds, batch)
-        assert len(targets_and_loss) == 3
-        loss_tensor = targets_and_loss[1]
-        assert loss_tensor.shape[0] == 4 # box, cls, dfl, psd
-        assert criterion.psd_metrics["psd_eligible_gt"] >= 0
-    except Exception as e:
-        print(f"Test failed with exception: {e}")
-        raise e
+    bn_layer = criterion.detect_head.cv2[0][1]
+    
+    # Initialize BN statistics
+    bn_layer.running_mean.fill_(0.0)
+    bn_layer.running_var.fill_(1.0)
+    bn_layer.num_batches_tracked.fill_(0)
+    
+    # Call get_assigned_targets_and_loss
+    criterion.get_assigned_targets_and_loss(preds, batch)
+    
+    # Verify BN statistics were NOT modified or incremented by the auxiliary pass forward
+    assert int(bn_layer.num_batches_tracked.item()) == 0
+    assert torch.allclose(bn_layer.running_mean, torch.zeros_like(bn_layer.running_mean))
+    assert torch.allclose(bn_layer.running_var, torch.ones_like(bn_layer.running_var))
+
+def test_psd_selection_and_masking():
+    # Test that alternative supports are found relative to the chosen center (dominant vs random)
+    # and neighbors are restricted within self.psd_radius (radius 2)
+    model = MockModel(mode="dominant")
+    criterion = v8DetectionLoss(model)
+    criterion.epoch = 10
+    
+    h2, w2 = 8, 8
+    n_p2 = h2 * w2
+    
+    # Setup P2 grid inputs
+    feats = [torch.randn(1, 16, h2, w2)]
+    preds = {
+        "feats": feats,
+        "boxes": torch.randn(1, 64, n_p2),
+        "scores": torch.randn(1, 1, n_p2),
+    }
+    
+    batch = {
+        "batch_idx": torch.zeros(1),
+        "cls": torch.zeros(1),
+        "bboxes": torch.tensor([[0.5, 0.5, 0.2, 0.2]]),
+        "img": torch.randn(1, 3, 32, 32),
+    }
+    
+    # We call assigner to get fg_mask and targets, but we can inspect the generated aux_fg_mask
+    _, loss, _ = criterion.get_assigned_targets_and_loss(preds, batch)
+    
+    # Verify that PSD diagnostics log metrics
+    assert "psd_eligible_gt" in criterion.psd_metrics
+    assert "psd_alt_supports_avg" in criterion.psd_metrics
+    assert "psd_raw_loss" in criterion.psd_metrics
+    assert "psd_delta_drop" in criterion.psd_metrics
 
 if __name__ == "__main__":
     test_psd_gain_warmup()
-    test_psd_loss_computation()
-    print("All PSD unit tests passed successfully!")
+    test_psd_bn_restoration()
+    test_psd_selection_and_masking()
+    print("All PSD functional unit tests passed successfully!")

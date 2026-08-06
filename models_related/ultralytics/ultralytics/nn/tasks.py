@@ -644,6 +644,7 @@ class BaseModel(torch.nn.Module):
         loss, items = self.criterion(preds, batch)
         diagnostics = {}
         diagnostics.update(getattr(self.criterion, "consensus_metrics", {}))
+        diagnostics.update(getattr(self.criterion, "psd_metrics", {}))
         assignment_context = getattr(self.criterion, "dbss_assignment_context", None)
         self.criterion.dbss_assignment_context = None
         for module in self.modules():

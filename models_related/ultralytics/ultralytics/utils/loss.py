@@ -942,6 +942,11 @@ class v8DetectionLoss:
         self.psd_warmup_start = int(getattr(h, "positive_support_warmup_start", 5))
         self.psd_warmup_end = int(getattr(h, "positive_support_warmup_end", 15))
         self.psd_metrics = {}
+        if self.psd_enabled:
+            assert not getattr(m, "dfl_residual", False), "PSD is not compatible with dfl_residual"
+            assert getattr(m, "p2_dfl_bins", None) is None, "PSD is not compatible with non-uniform DFL (NUDFL)"
+            assert getattr(h, "bbox_iou_loss", "ciou") == "ciou", "PSD currently requires CIoU loss"
+            assert not getattr(m, "box_detail", False), "PSD currently requires box_detail == False"
         self.epoch = 0
         self.dfl_residual = bool(getattr(m, "dfl_residual", False))
         self.dfl_residual_scale = float(getattr(m, "dfl_residual_scale", getattr(h, "dfl_residual_scale", 0.25)))
@@ -1425,42 +1430,55 @@ class v8DetectionLoss:
                     if count < self.psd_min_count:
                         continue
                     
-                    total_eligible_gt += 1
-                    
                     # Find dominant support
                     g_scores = torch.where(p_g_mask, p2_scores[b], p2_scores.new_full(p2_scores[b].shape, -1.0))
                     i_g_star = int(g_scores.argmax().item())
-                    y_dom, x_dom = i_g_star // w2, i_g_star % w2
                     
-                    # Decide on intervention with probability self.psd_prob
-                    do_drop = float(torch.rand(1).item()) < self.psd_prob
-                    if do_drop:
-                        i_mask = None
-                        if self.psd_mode == "dominant":
-                            i_mask = i_g_star
-                        elif self.psd_mode == "random":
-                            pos_indices = p_g_mask.nonzero(as_tuple=False).squeeze(-1)
-                            if pos_indices.numel() > 0:
-                                idx_rand = int(torch.randint(0, pos_indices.numel(), (1,)).item())
-                                i_mask = int(pos_indices[idx_rand].item())
+                    # Build list of valid centers that have at least one alternative support within radius
+                    pos_indices = p_g_mask.nonzero(as_tuple=False).squeeze(-1).tolist()
+                    valid_centers = {}
+                    for i in pos_indices:
+                        y_i, x_i = i // w2, i % w2
+                        alts = []
+                        for j in pos_indices:
+                            if i == j:
+                                continue
+                            y_j, x_j = j // w2, j % w2
+                            if max(abs(y_j - y_i), abs(x_j - x_i)) <= self.psd_radius:
+                                alts.append(j)
+                        if alts:
+                            valid_centers[i] = alts
+                            
+                    if not valid_centers:
+                        continue
                         
-                        if i_mask is not None:
-                            y_mask, x_mask = i_mask // w2, i_mask % w2
+                    # Select i_center
+                    i_center = None
+                    if self.psd_mode == "dominant":
+                        if i_g_star in valid_centers:
+                            i_center = i_g_star
+                    elif self.psd_mode == "random":
+                        keys = list(valid_centers.keys())
+                        idx_rand = int(torch.randint(0, len(keys), (1,)).item())
+                        i_center = keys[idx_rand]
+                    elif self.psd_mode == "none":
+                        if i_g_star in valid_centers:
+                            i_center = i_g_star
+                            
+                    if i_center is None:
+                        continue
+                        
+                    # Decide on intervention with probability self.psd_prob (or run matches)
+                    do_drop = (float(torch.rand(1).item()) < self.psd_prob) or (self.psd_mode == "none")
+                    if do_drop:
+                        total_eligible_gt += 1
+                        
+                        if self.psd_mode != "none":
+                            y_mask, x_mask = i_center // w2, i_center % w2
                             drop_mask[b, 0, y_mask, x_mask] = 1.0
-                    
-                    # Find alternative supports within radius 2 from dominant support, excluding dominant
-                    pos_indices = p_g_mask.nonzero(as_tuple=False).squeeze(-1)
-                    alt_candidates = []
-                    for idx in pos_indices:
-                        idx_val = int(idx.item())
-                        if idx_val == i_g_star:
-                            continue
-                        y_idx, x_idx = idx_val // w2, idx_val % w2
-                        if max(abs(y_idx - y_dom), abs(x_idx - x_dom)) <= self.psd_radius:
-                            alt_candidates.append(idx_val)
-                    
-                    if alt_candidates:
-                        # Sort by score descending and keep top K_aux
+                            
+                        # Set alternative supports in aux_fg_mask
+                        alt_candidates = valid_centers[i_center]
                         cand_tensor = torch.tensor(alt_candidates, device=self.device, dtype=torch.long)
                         cand_scores = p2_scores[b, cand_tensor]
                         topk_num = min(self.psd_aux_topk, len(alt_candidates))
@@ -1768,20 +1786,40 @@ class v8DetectionLoss:
         if self.psd_enabled:
             # Create auxiliary feature view
             p2 = preds["feats"][0]
-            local_mean = F.avg_pool2d(p2.detach(), self.psd_fill_kernel, 1, self.psd_fill_kernel // 2)
+            
+            # Border-safe local ring mean (excluding center)
+            ones = torch.ones_like(p2)
+            weight = torch.ones((p2.shape[1], 1, 3, 3), device=self.device, dtype=p2.dtype)
+            sum_val = F.conv2d(p2, weight=weight, padding=1, groups=p2.shape[1])
+            count_val = F.conv2d(ones, weight=weight, padding=1, groups=p2.shape[1])
+            local_mean = (sum_val - p2) / (count_val - 1.0).clamp_min(1.0)
+            local_mean = local_mean.detach()
+            
             p2_aux = p2 * (1 - drop_mask) + local_mean * drop_mask
             
-            # Temporary BatchNorm switch wrapper
-            bn_modules = []
+            # Temporary BatchNorm buffers snapshot to prevent running stats updates
+            bn_states = []
             for m_sub in self.detect_head.cv2[0].modules():
                 if isinstance(m_sub, nn.BatchNorm2d):
-                    bn_modules.append((m_sub, m_sub.training))
-                    m_sub.eval()
+                    bn_states.append((
+                        m_sub,
+                        m_sub.running_mean.clone() if m_sub.running_mean is not None else None,
+                        m_sub.running_var.clone() if m_sub.running_var is not None else None,
+                        m_sub.num_batches_tracked.clone() if m_sub.num_batches_tracked is not None else None,
+                        m_sub.training
+                    ))
+                    m_sub.train(True)
             try:
                 aux_logits_map = self.detect_head.cv2[0](p2_aux)
             finally:
-                for m_sub, training_state in bn_modules:
-                    m_sub.train(training_state)
+                for m_sub, mean, var, batches, training in bn_states:
+                    if mean is not None:
+                        m_sub.running_mean.copy_(mean)
+                    if var is not None:
+                        m_sub.running_var.copy_(var)
+                    if batches is not None:
+                        m_sub.num_batches_tracked.copy_(batches)
+                    m_sub.train(training)
             
             # Flatten and decode
             aux_logits = aux_logits_map.permute(0, 2, 3, 1).reshape(batch_size, n_p2, -1)
