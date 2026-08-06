@@ -2204,15 +2204,8 @@ class TargetedPartialClip(BaseTransform):
         if "partial_clip" not in variant:
             return labels
             
-        epoch = getattr(self.dataset, "epoch", 0)
-        if epoch < 5:
-            p = 0.0
-        elif epoch < 10:
-            p = self.p_max * (epoch - 4) / 5.0
-        else:
-            p = self.p_max
-            
-        if p <= 0.0 or random.random() > p:
+        p = self.p_max
+        if random.random() > p:
             return labels
             
         img = labels["img"]
@@ -2223,11 +2216,17 @@ class TargetedPartialClip(BaseTransform):
         if len(cls) == 0:
             return labels
             
-        instances.convert_bbox("xywh")
+        instances.convert_bbox("xyxy")
+        if instances.normalized:
+            instances.denormalize(w_img, h_img)
+            
         bboxes = instances.bboxes
-        absolute_w = bboxes[:, 2] * w_img
-        absolute_h = bboxes[:, 3] * h_img
-        areas = absolute_w * absolute_h
+        w_box = bboxes[:, 2] - bboxes[:, 0]
+        h_box = bboxes[:, 3] - bboxes[:, 1]
+        areas = w_box * h_box
+        
+        # Populate preclip_area for downstream format/loss!
+        labels["preclip_area"] = areas.copy()
         
         small_indices = np.where(areas < 400.0)[0]
         if len(small_indices) == 0:
@@ -2237,77 +2236,64 @@ class TargetedPartialClip(BaseTransform):
             target_idx = random.choice(small_indices)
             target_bbox = bboxes[target_idx]
             
-            target_w_abs = absolute_w[target_idx]
-            target_h_abs = absolute_h[target_idx]
-            target_cx_abs = target_bbox[0] * w_img
-            target_cy_abs = target_bbox[1] * h_img
+            target_w_abs = w_box[target_idx]
+            target_h_abs = h_box[target_idx]
             
-            target_x1 = target_cx_abs - target_w_abs / 2.0
-            target_y1 = target_cy_abs - target_h_abs / 2.0
-            target_x2 = target_cx_abs + target_w_abs / 2.0
-            target_y2 = target_cy_abs + target_h_abs / 2.0
+            target_x1, target_y1, target_x2, target_y2 = target_bbox
             
-            r_visible = random.uniform(0.55, 0.85)
             touch_corner = random.random() < 0.25
-            
-            edges = ["left", "right", "top", "bottom"]
-            random.shuffle(edges)
-            selected_edges = edges[:2] if touch_corner else edges[:1]
-            
+            if touch_corner:
+                selected_edges = random.choice([
+                    ("left", "top"),
+                    ("left", "bottom"),
+                    ("right", "top"),
+                    ("right", "bottom")
+                ])
+            else:
+                selected_edges = (random.choice(["left", "right", "top", "bottom"]),)
+                
+            import math
+            r_area = random.uniform(0.55, 0.85)
+            if touch_corner:
+                r_visible_dim = math.sqrt(r_area)
+                r_x = r_visible_dim
+                r_y = r_visible_dim
+            else:
+                r_x = r_area
+                r_y = r_area
+                
             dx, dy = 0.0, 0.0
             for edge in selected_edges:
                 if edge == "left":
-                    dx = - (1.0 - r_visible) * target_w_abs - target_x1
+                    dx = - (1.0 - r_x) * target_w_abs - target_x1
                 elif edge == "right":
-                    dx = w_img + (1.0 - r_visible) * target_w_abs - target_x2
+                    dx = w_img + (1.0 - r_x) * target_w_abs - target_x2
                 elif edge == "top":
-                    dy = - (1.0 - r_visible) * target_h_abs - target_y1
+                    dy = - (1.0 - r_y) * target_h_abs - target_y1
                 elif edge == "bottom":
-                    dy = h_img + (1.0 - r_visible) * target_h_abs - target_y2
+                    dy = h_img + (1.0 - r_y) * target_h_abs - target_y2
+                    
+            dx_int = int(round(dx))
+            dy_int = int(round(dy))
             
-            M = np.float32([[1, 0, dx], [0, 1, dy]])
-            filled_bg = None
-            if len(self.negative_indices) > 0:
-                try:
-                    neg_idx = random.choice(self.negative_indices)
-                    neg_img, _, _ = self.dataset.load_image(neg_idx)
-                    if neg_img.shape[:2] != img.shape[:2]:
-                        neg_img = cv2.resize(neg_img, (w_img, h_img), interpolation=cv2.INTER_LINEAR)
-                    filled_bg = neg_img
-                except Exception:
-                    pass
+            # Check target visibility constraints after integer shifting
+            t_x1_shifted = target_x1 + dx_int
+            t_y1_shifted = target_y1 + dy_int
+            t_x2_shifted = target_x2 + dx_int
+            t_y2_shifted = target_y2 + dy_int
             
-            if filled_bg is None:
-                border_pixels = np.concatenate([img[:5, :, :], img[-5:, :, :], img[:, :5, :], img[:, -5:, :]], axis=0)
-                median_color = np.median(border_pixels, axis=(0, 1))
-                filled_bg = np.zeros_like(img) + median_color
-                noise = np.random.normal(0, 2, img.shape).astype(np.uint8)
-                filled_bg = np.clip(filled_bg.astype(np.int16) + noise.astype(np.int16), 0, 255).astype(np.uint8)
-                
-            translated_img = cv2.warpAffine(img, M, (w_img, h_img), borderMode=cv2.BORDER_TRANSPARENT)
-            mask = np.ones((h_img, w_img), dtype=np.uint8) * 255
-            mask_warped = cv2.warpAffine(mask, M, (w_img, h_img))
-            mask_inv = cv2.bitwise_not(mask_warped)
-            
-            final_img = translated_img.copy()
-            final_img[mask_inv > 0] = filled_bg[mask_inv > 0]
-            
-            instances.convert_bbox("xyxy")
-            instances.denormalize(w_img, h_img)
-            
-            shifted_bboxes = instances.bboxes.copy()
-            shifted_bboxes[:, [0, 2]] += dx
-            shifted_bboxes[:, [1, 3]] += dy
-            
-            t_box = shifted_bboxes[target_idx]
-            t_x1, t_y1, t_x2, t_y2 = t_box
-            t_w_clipped = max(0.0, min(t_x2, w_img) - max(0.0, t_x1))
-            t_h_clipped = max(0.0, min(t_y2, h_img) - max(0.0, t_y1))
+            t_w_clipped = max(0.0, min(t_x2_shifted, w_img) - max(0.0, t_x1_shifted))
+            t_h_clipped = max(0.0, min(t_y2_shifted, h_img) - max(0.0, t_y1_shifted))
             actual_visible_ratio = (t_w_clipped * t_h_clipped) / (target_w_abs * target_h_abs + 1e-6)
             
-            if actual_visible_ratio < 0.50 or t_w_clipped < 4 or t_h_clipped < 4:
+            if not (0.55 <= actual_visible_ratio <= 0.85) or t_w_clipped < 4 or t_h_clipped < 4:
                 continue
                 
+            # Check other objects' visible ratio constraints
+            shifted_bboxes = bboxes.copy()
+            shifted_bboxes[:, [0, 2]] += dx_int
+            shifted_bboxes[:, [1, 3]] += dy_int
+            
             keep_indices = []
             for idx in range(len(shifted_bboxes)):
                 if idx == target_idx:
@@ -2328,8 +2314,49 @@ class TargetedPartialClip(BaseTransform):
             if len(keep_indices) < 0.80 * len(cls):
                 continue
                 
+            # Perform sea background patching using negative training image pool
+            filled_bg = None
+            if len(self.negative_indices) > 0:
+                try:
+                    neg_idx = random.choice(self.negative_indices)
+                    neg_img, _, _ = self.dataset.load_image(neg_idx)
+                    if neg_img.shape[:2] != img.shape[:2]:
+                        neg_img = cv2.resize(neg_img, (w_img, h_img), interpolation=cv2.INTER_LINEAR)
+                    filled_bg = neg_img
+                except Exception:
+                    pass
+                    
+            if filled_bg is None:
+                border_pixels = np.concatenate([
+                    img[:5, :, :].reshape(-1, 3),
+                    img[-5:, :, :].reshape(-1, 3),
+                    img[:, :5, :].reshape(-1, 3),
+                    img[:, -5:, :].reshape(-1, 3)
+                ], axis=0)
+                median_color = np.median(border_pixels, axis=0)
+                filled_bg = np.zeros_like(img) + median_color
+                noise = np.random.normal(0, 2, img.shape)
+                filled_bg = np.clip(filled_bg.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+                
+            # Integer translation using array slicing
+            y1_in = max(0, -dy_int)
+            y2_in = min(h_img, h_img - dy_int)
+            x1_in = max(0, -dx_int)
+            x2_in = min(w_img, w_img - dx_int)
+            
+            y1_out = max(0, dy_int)
+            y2_out = min(h_img, h_img + dy_int)
+            x1_out = max(0, dx_int)
+            x2_out = min(w_img, w_img + dx_int)
+            
+            final_img = filled_bg.copy()
+            if (y2_in > y1_in) and (x2_in > x1_in) and (y2_out > y1_out) and (x2_out > x1_out):
+                final_img[y1_out:y2_out, x1_out:x2_out] = img[y1_in:y2_in, x1_in:x2_in]
+                
+            # Update labels
             labels["img"] = final_img
             labels["cls"] = cls[keep_indices]
+            labels["preclip_area"] = labels["preclip_area"][keep_indices]
             
             clipped_bboxes = shifted_bboxes[keep_indices]
             clipped_bboxes[:, [0, 2]] = np.clip(clipped_bboxes[:, [0, 2]], 0, w_img)
@@ -2337,13 +2364,13 @@ class TargetedPartialClip(BaseTransform):
             
             instances_new = instances[keep_indices]
             if instances_new.segments is not None and len(instances_new.segments):
-                instances_new.segments[..., 0] += dx
-                instances_new.segments[..., 1] += dy
+                instances_new.segments[..., 0] += dx_int
+                instances_new.segments[..., 1] += dy_int
                 instances_new.segments[..., 0] = np.clip(instances_new.segments[..., 0], 0, w_img)
                 instances_new.segments[..., 1] = np.clip(instances_new.segments[..., 1], 0, h_img)
             if instances_new.keypoints is not None:
-                instances_new.keypoints[..., 0] += dx
-                instances_new.keypoints[..., 1] += dy
+                instances_new.keypoints[..., 0] += dx_int
+                instances_new.keypoints[..., 1] += dy_int
                 oob = (
                     (instances_new.keypoints[..., 0] < 0)
                     | (instances_new.keypoints[..., 0] > w_img)
@@ -2354,13 +2381,15 @@ class TargetedPartialClip(BaseTransform):
                 instances_new.keypoints[..., 0] = np.clip(instances_new.keypoints[..., 0], 0, w_img)
                 instances_new.keypoints[..., 1] = np.clip(instances_new.keypoints[..., 1], 0, h_img)
                 
-            if hasattr(instances_new, "ori_bboxes") and instances_new.ori_bboxes is not None:
-                instances_new.ori_bboxes[:, [0, 2]] += dx
-                instances_new.ori_bboxes[:, [1, 3]] += dy
-                
             instances_new.update(bboxes=clipped_bboxes, segments=instances_new.segments, keypoints=instances_new.keypoints)
             instances_new.normalize(w_img, h_img)
             labels["instances"] = instances_new
+            
+            if hasattr(self.dataset, "partial_clip_applied"):
+                self.dataset.partial_clip_applied += 1
+            if hasattr(self.dataset, "visible_ratios_logged"):
+                self.dataset.visible_ratios_logged.append(float(actual_visible_ratio))
+                
             return labels
             
         return labels
@@ -2515,10 +2544,19 @@ class Format(BaseTransform):
             labels["sem_masks"] = sem_masks.float()
         labels["cls"] = torch.from_numpy(cls) if nl else torch.zeros(nl, 1)
         labels["bboxes"] = torch.from_numpy(instances.bboxes) if nl else torch.zeros((nl, 4))
-        if hasattr(instances, "ori_bboxes") and instances.ori_bboxes is not None:
-            labels["ori_bboxes"] = torch.from_numpy(instances.ori_bboxes) if nl else torch.zeros((nl, 4))
+        if "preclip_area" in labels:
+            labels["preclip_area"] = torch.as_tensor(labels["preclip_area"], dtype=torch.float32) if nl else torch.zeros(nl)
         else:
-            labels["ori_bboxes"] = torch.from_numpy(instances.bboxes) if nl else torch.zeros((nl, 4))
+            if nl:
+                if self.bbox_format == "xyxy":
+                    w_b = (instances.bboxes[:, 2] - instances.bboxes[:, 0]).clip(min=0.0)
+                    h_b = (instances.bboxes[:, 3] - instances.bboxes[:, 1]).clip(min=0.0)
+                else:
+                    w_b = instances.bboxes[:, 2].clip(min=0.0)
+                    h_b = instances.bboxes[:, 3].clip(min=0.0)
+                labels["preclip_area"] = torch.from_numpy(w_b * h_b).float()
+            else:
+                labels["preclip_area"] = torch.zeros(nl)
         if self.return_keypoint:
             labels["keypoints"] = (
                 torch.empty(0, 3) if instances.keypoints is None else torch.from_numpy(instances.keypoints)
@@ -2534,8 +2572,7 @@ class Format(BaseTransform):
         if self.normalize:
             labels["bboxes"][:, [0, 2]] /= w
             labels["bboxes"][:, [1, 3]] /= h
-            labels["ori_bboxes"][:, [0, 2]] /= w
-            labels["ori_bboxes"][:, [1, 3]] /= h
+            labels["preclip_area"] = labels["preclip_area"]  # preclip_area is already in absolute pixel area units
         # Then we can use collate_fn
         if self.batch_idx:
             labels["batch_idx"] = torch.zeros(nl)

@@ -112,10 +112,12 @@ class VarifocalLoss(nn.Module):
         self.alpha = alpha
         self.pos_q_weight = pos_q_weight
 
-    def forward(self, pred_score: torch.Tensor, gt_score: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
+    def forward(self, pred_score: torch.Tensor, gt_score: torch.Tensor, label: torch.Tensor, cls_weights: torch.Tensor = None) -> torch.Tensor:
         """Compute varifocal loss between predictions and ground truth."""
         pos_weight = gt_score if self.pos_q_weight else label
         weight = self.alpha * pred_score.sigmoid().pow(self.gamma) * (1 - label) + pos_weight * label
+        if cls_weights is not None:
+            weight = weight * cls_weights
         with autocast(enabled=False):
             loss = (
                 (F.binary_cross_entropy_with_logits(pred_score.float(), gt_score.float(), reduction="none") * weight)
@@ -1518,39 +1520,38 @@ class v8DetectionLoss:
                 xywh=False,
                 CIoU=False,
             ).squeeze(-1).clamp(0)
-            if self.vfl is not None and bool(getattr(self.hyp, "vfl_iou_detach", True)):
-                assigned_iou = assigned_iou.detach()
         # Compute size-aware classification weights
         cls_weights = torch.ones_like(cls_target_scores)
-        if fg_mask.sum():
-            if "ori_bboxes" in batch:
-                ori_targets = torch.cat((batch["batch_idx"].view(-1, 1), batch["cls"].view(-1, 1), batch["ori_bboxes"]), 1)
-            else:
-                ori_targets = torch.cat((batch["batch_idx"].view(-1, 1), batch["cls"].view(-1, 1), batch["bboxes"]), 1)
-            ori_targets = self.preprocess(ori_targets.to(self.device), batch_size, scale_tensor=imgsz[[1, 0, 1, 0]])
-            _, gt_ori_bboxes = ori_targets.split((1, 4), 2)
-            
-            for b in range(batch_size):
-                fg_b = fg_mask[b]
-                if fg_b.any():
-                    gt_idx = target_gt_idx[b, fg_b]
-                    ori_boxes = gt_ori_bboxes[b, gt_idx]
-                    w_box = (ori_boxes[:, 2] - ori_boxes[:, 0]).clamp(0)
-                    h_box = (ori_boxes[:, 3] - ori_boxes[:, 1]).clamp(0)
-                    A_g = w_box * h_box
-                    
-                    w_g = torch.ones_like(A_g)
-                    import os
-                    variant = os.environ.get("YOLO_VARIANT", "")
-                    if "small_weight" in variant:
+        import os
+        variant = os.environ.get("YOLO_VARIANT", "")
+        if "small_weight" in variant and fg_mask.sum():
+            if "preclip_area" in batch:
+                ori_targets = torch.cat((
+                    batch["batch_idx"].view(-1, 1), 
+                    batch["cls"].view(-1, 1), 
+                    batch["bboxes"],
+                    batch["preclip_area"].view(-1, 1)
+                ), 1)
+                ori_targets = self.preprocess(ori_targets.to(self.device), batch_size, scale_tensor=imgsz[[1, 0, 1, 0]])
+                gt_preclip_area = ori_targets[..., 5]
+                
+                for b in range(batch_size):
+                    fg_b = fg_mask[b]
+                    if fg_b.any():
+                        gt_idx = target_gt_idx[b, fg_b]
+                        A_g = gt_preclip_area[b, gt_idx]
+                        
+                        w_g = torch.ones_like(A_g)
                         w_g = torch.where(A_g < 100.0, torch.full_like(w_g, 1.75), w_g)
                         w_g = torch.where((A_g >= 100.0) & (A_g < 400.0), torch.full_like(w_g, 1.50), w_g)
                         w_g = torch.where((A_g >= 400.0) & (A_g < 1000.0), torch.full_like(w_g, 1.15), w_g)
                         
                         alpha_t = min(max(float(getattr(self, "epoch", 0.0)), 0.0) / 5.0, 1.0)
                         w_g = 1.0 + alpha_t * (w_g - 1.0)
-                    
-                    cls_weights[b, fg_b] = w_g.unsqueeze(-1)
+                        
+                        fg_indices = torch.nonzero(fg_b).squeeze(-1)
+                        classes_b = target_scores[b, fg_b].argmax(-1).long()
+                        cls_weights[b, fg_indices, classes_b] = w_g
 
         if self.vfl is not None:
             if assigned_iou is not None:
@@ -1562,7 +1563,7 @@ class v8DetectionLoss:
                 )
             cls_target_scores_sum = max(cls_target_scores.sum(), 1)
             cls_labels = (cls_target_scores > 0).to(dtype)
-            loss[1] = self.vfl(pred_scores, cls_target_scores.to(dtype), cls_labels) / cls_target_scores_sum
+            loss[1] = self.vfl(pred_scores, cls_target_scores.to(dtype), cls_labels, cls_weights) / cls_target_scores_sum
         elif getattr(self.hyp, "cls_iou_target", False) and assigned_iou is not None:
             with torch.no_grad():
                 cls_target_scores = target_scores.clone()

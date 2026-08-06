@@ -395,6 +395,9 @@ class BaseTrainer:
             self.epoch = epoch
             if hasattr(self, "train_loader") and hasattr(self.train_loader, "dataset"):
                 self.train_loader.dataset.epoch = epoch
+            model_unwrapped = unwrap_model(self.model)
+            if hasattr(model_unwrapped, "criterion") and hasattr(model_unwrapped.criterion, "epoch"):
+                model_unwrapped.criterion.epoch = epoch
             self.run_callbacks("on_train_epoch_start")
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")  # suppress 'Detected lr_scheduler.step() before optimizer.step()'
