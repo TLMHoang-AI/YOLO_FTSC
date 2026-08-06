@@ -925,11 +925,23 @@ class v8DetectionLoss:
         self.loc_assign_max_stride = float(getattr(h, "loc_assign_max_stride", 8.0))
         self.loc_assign_center_radius = float(getattr(h, "loc_assign_center_radius", 2.5))
         self.loc_assign_weight = float(getattr(h, "loc_assign_weight", 0.5))
+        self.detect_head = m
         self.box_consensus_gain = float(getattr(h, "box_consensus_gain", 0.0))
         self.box_consensus_warmup_start = int(getattr(h, "box_consensus_warmup_start", 5))
         self.box_consensus_warmup_end = int(getattr(h, "box_consensus_warmup_end", 15))
         self.box_consensus_log_grad_ratio = bool(getattr(h, "box_consensus_log_grad_ratio", False))
         self.consensus_metrics = {}
+        self.psd_enabled = bool(getattr(h, "positive_support_dropout", False))
+        self.psd_mode = str(getattr(h, "positive_support_mode", "dominant")).lower()
+        self.psd_gain = float(getattr(h, "positive_support_gain", 0.0))
+        self.psd_prob = float(getattr(h, "positive_support_prob", 0.5))
+        self.psd_min_count = int(getattr(h, "positive_support_min_count", 3))
+        self.psd_aux_topk = int(getattr(h, "positive_support_aux_topk", 3))
+        self.psd_radius = int(getattr(h, "positive_support_radius", 2))
+        self.psd_fill_kernel = int(getattr(h, "positive_support_fill_kernel", 3))
+        self.psd_warmup_start = int(getattr(h, "positive_support_warmup_start", 5))
+        self.psd_warmup_end = int(getattr(h, "positive_support_warmup_end", 15))
+        self.psd_metrics = {}
         self.epoch = 0
         self.dfl_residual = bool(getattr(m, "dfl_residual", False))
         self.dfl_residual_scale = float(getattr(m, "dfl_residual_scale", getattr(h, "dfl_residual_scale", 0.25)))
@@ -1107,6 +1119,19 @@ class v8DetectionLoss:
             1.0,
         )
         return self.box_consensus_gain * progress
+
+    def _psd_current_gain(self) -> float:
+        """Linearly ramp PSD after an initial zero-gain warmup."""
+        if self.epoch <= self.psd_warmup_start:
+            return 0.0
+        if self.psd_warmup_end <= self.psd_warmup_start:
+            return self.psd_gain
+        progress = min(
+            (self.epoch - self.psd_warmup_start)
+            / (self.psd_warmup_end - self.psd_warmup_start),
+            1.0,
+        )
+        return self.psd_gain * progress
 
     def box_consensus_loss(
         self,
@@ -1333,10 +1358,11 @@ class v8DetectionLoss:
             + int(self.quality_head)
             + int(self.rank_gain > 0)
             + int(self.box_consensus_gain > 0)
+            + int(self.psd_enabled)
             + int(self.dgfe_rec_gain > 0)
             + int(self.dgfe_spatial_gain > 0),
             device=self.device,
-        )  # box, cls, dfl[, boundary][, loc_quality][, quality][, rank][, dgfe_rec][, dgfe_spatial]
+        )  # box, cls, dfl[, boundary][, loc_quality][, quality][, rank][, psd][, dgfe_rec][, dgfe_spatial]
         pred_distri, pred_scores = (
             preds["boxes"].permute(0, 2, 1).contiguous(),
             preds["scores"].permute(0, 2, 1).contiguous(),
@@ -1376,6 +1402,72 @@ class v8DetectionLoss:
             ),
             "total_positive_count": fg_mask.sum().detach(),
         }
+
+        # Positive-Support Dropout (Dominant-Support Suppression) Mask building
+        h2, w2 = preds["feats"][0].shape[-2:]
+        drop_mask = torch.zeros((batch_size, 1, h2, w2), device=self.device, dtype=dtype)
+        aux_fg_mask = torch.zeros((batch_size, n_p2), device=self.device, dtype=torch.bool)
+        
+        # Diagnostic metrics variables
+        total_eligible_gt = 0
+        total_alt_supports_found = 0
+        
+        if self.psd_enabled and fg_mask[:, :n_p2].any():
+            p2_fg = fg_mask[:, :n_p2]
+            p2_gt_idx = target_gt_idx[:, :n_p2]
+            p2_scores = target_scores[:, :n_p2].sum(-1)  # alignment quality sum (classes)
+            
+            for b in range(batch_size):
+                valid_gt_num = int(mask_gt[b].sum().item())
+                for g in range(valid_gt_num):
+                    p_g_mask = p2_fg[b] & (p2_gt_idx[b] == g)
+                    count = int(p_g_mask.sum().item())
+                    if count < self.psd_min_count:
+                        continue
+                    
+                    total_eligible_gt += 1
+                    
+                    # Find dominant support
+                    g_scores = torch.where(p_g_mask, p2_scores[b], p2_scores.new_full(p2_scores[b].shape, -1.0))
+                    i_g_star = int(g_scores.argmax().item())
+                    y_dom, x_dom = i_g_star // w2, i_g_star % w2
+                    
+                    # Decide on intervention with probability self.psd_prob
+                    do_drop = float(torch.rand(1).item()) < self.psd_prob
+                    if do_drop:
+                        i_mask = None
+                        if self.psd_mode == "dominant":
+                            i_mask = i_g_star
+                        elif self.psd_mode == "random":
+                            pos_indices = p_g_mask.nonzero(as_tuple=False).squeeze(-1)
+                            if pos_indices.numel() > 0:
+                                idx_rand = int(torch.randint(0, pos_indices.numel(), (1,)).item())
+                                i_mask = int(pos_indices[idx_rand].item())
+                        
+                        if i_mask is not None:
+                            y_mask, x_mask = i_mask // w2, i_mask % w2
+                            drop_mask[b, 0, y_mask, x_mask] = 1.0
+                    
+                    # Find alternative supports within radius 2 from dominant support, excluding dominant
+                    pos_indices = p_g_mask.nonzero(as_tuple=False).squeeze(-1)
+                    alt_candidates = []
+                    for idx in pos_indices:
+                        idx_val = int(idx.item())
+                        if idx_val == i_g_star:
+                            continue
+                        y_idx, x_idx = idx_val // w2, idx_val % w2
+                        if max(abs(y_idx - y_dom), abs(x_idx - x_dom)) <= self.psd_radius:
+                            alt_candidates.append(idx_val)
+                    
+                    if alt_candidates:
+                        # Sort by score descending and keep top K_aux
+                        cand_tensor = torch.tensor(alt_candidates, device=self.device, dtype=torch.long)
+                        cand_scores = p2_scores[b, cand_tensor]
+                        topk_num = min(self.psd_aux_topk, len(alt_candidates))
+                        topk_indices = cand_tensor[cand_scores.topk(topk_num).indices]
+                        
+                        aux_fg_mask[b, topk_indices] = True
+                        total_alt_supports_found += topk_num
 
         target_scores_sum = max(target_scores.sum(), 1)
         cls_target_scores = target_scores
@@ -1666,6 +1758,110 @@ class v8DetectionLoss:
                     cons_grad.detach().norm().div(box_grad.detach().norm().clamp_min(1e-12)).item()
                 )
             self.consensus_metrics["consensus_to_box_grad_ratio"] = grad_ratio
+        # Auxiliary pass for Positive-Support Dropout (Dominant-Support Suppression)
+        psd_loss = torch.zeros(1, device=self.device, dtype=dtype)
+        num_gt_losses = 0
+        total_iou_main = 0.0
+        total_iou_aux = 0.0
+        total_iou_count = 0
+        
+        if self.psd_enabled:
+            # Create auxiliary feature view
+            p2 = preds["feats"][0]
+            local_mean = F.avg_pool2d(p2.detach(), self.psd_fill_kernel, 1, self.psd_fill_kernel // 2)
+            p2_aux = p2 * (1 - drop_mask) + local_mean * drop_mask
+            
+            # Temporary BatchNorm switch wrapper
+            bn_modules = []
+            for m_sub in self.detect_head.cv2[0].modules():
+                if isinstance(m_sub, nn.BatchNorm2d):
+                    bn_modules.append((m_sub, m_sub.training))
+                    m_sub.eval()
+            try:
+                aux_logits_map = self.detect_head.cv2[0](p2_aux)
+            finally:
+                for m_sub, training_state in bn_modules:
+                    m_sub.train(training_state)
+            
+            # Flatten and decode
+            aux_logits = aux_logits_map.permute(0, 2, 3, 1).reshape(batch_size, n_p2, -1)
+            aux_bboxes = self.bbox_decode(
+                anchor_points[:n_p2], 
+                aux_logits, 
+                pred_residual[:, :n_p2] if pred_residual is not None else None, 
+                stride_tensor[:n_p2] if stride_tensor is not None else None
+            )
+            
+            # Calculate loss per GT on alternative supports
+            if aux_fg_mask.any():
+                p2_fg = fg_mask[:, :n_p2]
+                p2_gt_idx = target_gt_idx[:, :n_p2]
+                for b in range(batch_size):
+                    valid_gt_num = int(mask_gt[b].sum().item())
+                    for g in range(valid_gt_num):
+                        p_g_alt = aux_fg_mask[b] & p2_fg[b] & (p2_gt_idx[b] == g)
+                        if not p_g_alt.any():
+                            continue
+                        
+                        pred_box_alt = aux_bboxes[b, p_g_alt]
+                        target_box_alt = target_bboxes_scaled[b, p_g_alt]
+                        
+                        # CIoU
+                        iou_aux = bbox_iou(pred_box_alt, target_box_alt, xywh=False, CIoU=True)
+                        loss_iou = 1.0 - iou_aux.squeeze(-1)
+                        
+                        # DFL loss
+                        target_ltrb_alt = bbox2dist(anchor_points[:n_p2][p_g_alt], target_box_alt, self.bbox_loss.dfl_loss.reg_max - 1)
+                        pred_dist_alt = aux_logits[b, p_g_alt].view(-1, 4, self.bbox_loss.dfl_loss.reg_max)
+                        loss_dfl = self.bbox_loss.dfl_loss(pred_dist_alt.flatten(0, 1), target_ltrb_alt)
+                        loss_dfl = loss_dfl.squeeze(-1)
+                        
+                        gt_support_losses = loss_iou + loss_dfl
+                        gt_loss = gt_support_losses.mean()
+                        psd_loss = psd_loss + gt_loss
+                        num_gt_losses += 1
+                        
+                        with torch.no_grad():
+                            main_box_alt = pred_bboxes[b, p_g_alt]
+                            iou_main = bbox_iou(main_box_alt, target_box_alt, xywh=False, CIoU=True)
+                            total_iou_main += float(iou_main.sum().item())
+                            total_iou_aux += float(iou_aux.sum().item())
+                            total_iou_count += int(iou_aux.numel())
+                            
+                if num_gt_losses > 0:
+                    psd_loss = psd_loss / num_gt_losses
+                else:
+                    psd_loss = psd_loss * 0.0
+            
+            delta_drop = (total_iou_main - total_iou_aux) / max(total_iou_count, 1)
+            self.psd_metrics = {
+                "psd_eligible_gt": total_eligible_gt,
+                "psd_alt_supports_avg": total_alt_supports_found / max(total_eligible_gt, 1),
+                "psd_raw_loss": float(psd_loss.detach().item()),
+                "psd_delta_drop": delta_drop,
+            }
+        else:
+            self.psd_metrics = {
+                "psd_eligible_gt": 0,
+                "psd_alt_supports_avg": 0.0,
+                "psd_raw_loss": 0.0,
+                "psd_delta_drop": 0.0,
+            }
+
+        psd_idx = (
+            3
+            + int(self.boundary_loss is not None)
+            + int(self.loc_quality_loss is not None)
+            + int(self.quality_head)
+            + int(self.rank_gain > 0)
+            + int(self.box_consensus_gain > 0)
+        )
+        if self.psd_enabled:
+            current_psd_gain = self._psd_current_gain()
+            loss[psd_idx] = psd_loss * current_psd_gain
+            self.psd_metrics["psd_applied_loss"] = float(loss[psd_idx].detach().item())
+            self.psd_metrics["psd_gain"] = current_psd_gain
+
         dgfe_idx = (
             3
             + int(self.boundary_loss is not None)
@@ -1673,6 +1869,7 @@ class v8DetectionLoss:
             + int(self.quality_head)
             + int(self.rank_gain > 0)
             + int(self.box_consensus_gain > 0)
+            + int(self.psd_enabled)
         )
         if self.dgfe_rec_gain > 0:
             loss[dgfe_idx] = self._dgfe_reconstruction_loss(preds, batch) * self.dgfe_rec_gain

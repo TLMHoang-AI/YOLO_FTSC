@@ -195,6 +195,8 @@ CFG_FLOAT_KEYS = frozenset(
         "loc_assign_center_radius",
         "loc_assign_weight",
         "box_consensus_gain",
+        "positive_support_gain",
+        "positive_support_prob",
         "dfl_residual_scale",
         "dfl",
         "degrees",
@@ -243,6 +245,7 @@ CFG_CHOICE_KEYS = {
     "quality_neg_mode": {"hard", "all"},
     "quality_score_mode": {"cls_mul_q", "sqrt_cls_mul_q", "cls_mul_q2"},
     "dgfe_spatial_target_mode": {"iou", "edge_error"},
+    "positive_support_mode": {"dominant", "random", "none"},
 }
 CFG_INT_KEYS = frozenset(
     {  # integer-only arguments
@@ -270,6 +273,12 @@ CFG_INT_KEYS = frozenset(
         "loc_assign_topk",
         "box_consensus_warmup_start",
         "box_consensus_warmup_end",
+        "positive_support_min_count",
+        "positive_support_aux_topk",
+        "positive_support_radius",
+        "positive_support_fill_kernel",
+        "positive_support_warmup_start",
+        "positive_support_warmup_end",
     }
 )
 CFG_BOOL_KEYS = frozenset(
@@ -296,6 +305,7 @@ CFG_BOOL_KEYS = frozenset(
         "quality_probe_export",
         "loc_assign",
         "box_consensus_log_grad_ratio",
+        "positive_support_dropout",
         "box_voting",
         "wiou_monotonous",
         "single_cls",

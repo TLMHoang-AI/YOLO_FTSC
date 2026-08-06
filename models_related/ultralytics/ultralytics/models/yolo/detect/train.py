@@ -80,6 +80,8 @@ class DetectionTrainer(BaseTrainer):
             names += ("rank_loss",)
         if float(getattr(self.args, "box_consensus_gain", 0.0)) > 0:
             names += ("box_consensus_loss",)
+        if bool(getattr(self.args, "positive_support_dropout", False)):
+            names += ("psd_loss",)
         # EXPERIMENTAL: SR-DGFE losses are logged only when their gains are enabled.
         if float(getattr(self.args, "dgfe_rec_gain", 0.0)) > 0:
             names += ("dgfe_rec_loss",)

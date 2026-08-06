@@ -175,6 +175,16 @@ box_consensus_gain: 0.0 # (float) EXPERIMENTAL P2 TAL-positive decoded-box conse
 box_consensus_warmup_start: 5 # (int) EXPERIMENTAL epochs held at zero consensus gain
 box_consensus_warmup_end: 15 # (int) EXPERIMENTAL epoch where full consensus gain is reached
 box_consensus_log_grad_ratio: false # (bool) EXPERIMENTAL log decoded-box consensus/box gradient norm ratio
+positive_support_dropout: false # (bool) EXPERIMENTAL Positive-Support Dropout (Dominant-Support Suppression)
+positive_support_mode: dominant # (str) EXPERIMENTAL PSD mode: dominant, random, or none
+positive_support_gain: 0.0 # (float) EXPERIMENTAL positive support dropout loss gain (default to 0.0 to remain fully disabled)
+positive_support_prob: 0.5 # (float) EXPERIMENTAL probability of dropping dominant positive support
+positive_support_min_count: 3 # (int) EXPERIMENTAL minimum positive support count to drop
+positive_support_aux_topk: 3 # (int) EXPERIMENTAL maximum alternative support locations to compute loss
+positive_support_radius: 2 # (int) EXPERIMENTAL P2 radius around dominant support to look for alternative supports
+positive_support_fill_kernel: 3 # (int) EXPERIMENTAL average pool kernel size for local mean fill value
+positive_support_warmup_start: 5 # (int) EXPERIMENTAL epochs held at zero positive support dropout gain
+positive_support_warmup_end: 15 # (int) EXPERIMENTAL epoch where full positive support dropout gain is reached
 cls_geometry_fuse: false # (bool) EXPERIMENTAL fuse DFL expected box distances into Detect cls head
 cls_geometry_mode: add # (str) EXPERIMENTAL cls geometry fusion mode: add or concat
 cls_geometry_detach: true # (bool) EXPERIMENTAL detach geometry cue before cls fusion
