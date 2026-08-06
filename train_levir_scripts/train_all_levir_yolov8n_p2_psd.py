@@ -68,7 +68,6 @@ def train_kwargs(args: argparse.Namespace, data_yaml: Path, seed: int, amp: bool
         positive_support_fill_kernel=3,
         positive_support_warmup_start=5,
         positive_support_warmup_end=15,
-        p2_offset_regression=False,
         dfl_residual=False,
         box_consensus_gain=0.0,
         pc_dfl_gain=0.0,
