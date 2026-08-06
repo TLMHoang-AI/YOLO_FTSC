@@ -359,31 +359,31 @@ def main():
             decomp_stats[key] = {"mean": 0, "std": 0, "mae": 0}
             
     # Formulate Report markdown
-    report_content = f"""# LEVIR-Ship Bounding Box Bottleneck Diagnostics Report
+    report_content = """# LEVIR-Ship Bounding Box Bottleneck Diagnostics Report
 
-Bản báo cáo này tổng hợp kết quả của 4 probe chẩn đoán (diagnostics) chạy trực tiếp trên checkpoint mô hình tốt nhất của baseline (`best.pt` - seed 42) chạy validation trên tập kiểm thử (test split) của LEVIR-Ship.
+Bản báo cáo này tổng hợp kết quả của 4 probe chẩn đoán (diagnostics) chạy trực tiếp trên checkpoint mô hình tốt nhất của baseline (best.pt - seed 42) chạy validation trên tập kiểm thử (test split) của LEVIR-Ship.
 
 ---
 
 ## 1. Probe 1: One-Pixel Translation Equivariance Test
 Mục tiêu là kiểm chứng mô hình có đạt tính bất biến tịnh tiến sub-pixel hay không khi dịch chuyển ảnh đúng 1 pixel theo các hướng.
 
-- **Độ lệch tâm trung bình ($\Delta c$):** `{mean_dc:.4f}` pixel
-- **Độ lệch chiều rộng trung bình ($\Delta w$):** `{mean_dw:.4f}` pixel
-- **Độ lệch chiều cao trung bình ($\Delta h$):** `{mean_dh:.4f}` pixel
-- **Độ tương quan IoU giữa nguyên bản và dịch chuyển ($\\text{{IoU}}_{{eq}}$):** `{mean_iou_eq * 100:.2f}%`
+- **Độ lệch tâm trung bình (\Delta c):** __MEAN_DC__ pixel
+- **Độ lệch chiều rộng trung bình (\Delta w):** __MEAN_DW__ pixel
+- **Độ lệch chiều cao trung bình (\Delta h):** __MEAN_DH__ pixel
+- **Độ tương quan IoU giữa nguyên bản và dịch chuyển (\text{IoU}_{eq}):** __MEAN_IOU_EQ__%
 
-*Nhận xét:* Nếu $\\text{{IoU}}_{{eq}}$ thấp và độ lệch tọa độ vượt quá 1-2 pixel, điều này chứng tỏ bộ lọc downsampling/pooling hiện tại đang làm mất phase-information nghiêm trọng ở các vật thể siêu nhỏ.
+*Nhận xét:* Nếu \text{IoU}_{eq} thấp và độ lệch tọa độ vượt quá 1-2 pixel, điều này chứng tỏ bộ lọc downsampling/pooling hiện tại đang làm mất phase-information nghiêm trọng ở các vật thể siêu nhỏ.
 
 ---
 
 ## 2. Probe 2: Raw-Candidate Oracle Gap
 Mục tiêu là kiểm tra xem classifier chọn score đúng hay sai candidate có bounding box tốt nhất quanh GT.
 
-- **Oracle Gap trung bình ($\\Delta_{\\text{{oracle}}}$):** `{mean_gap:.4f}` (Chênh lệch IoU tối đa của candidate tốt nhất so với candidate có score cao nhất)
-- **Oracle Gap lớn nhất:** `{max_gap:.4f}`
+- **Oracle Gap trung bình (\Delta_{\text{oracle}}):** __MEAN_GAP__ (Chênh lệch IoU tối đa của candidate tốt nhất so với candidate có score cao nhất)
+- **Oracle Gap lớn nhất:** __MAX_GAP__
 
-*Nhận xét:* Nếu Oracle Gap lớn (ví dụ $> 0.15$), điều này khẳng định regression head đã tạo được bounding box tốt nhưng classification score đang ranking sai candidate.
+*Nhận xét:* Nếu Oracle Gap lớn (ví dụ > 0.15), điều này khẳng định regression head đã tạo được bounding box tốt nhưng classification score đang ranking sai candidate.
 
 ---
 
@@ -394,12 +394,12 @@ Hệ số tương quan Spearman giữa Độ bất định và Sai số định 
 
 | Cạnh | Tương quan với Entropy | Tương quan với Variance |
 | :--- | :---: | :---: |
-| **Trái (l)** | `{correlations["l"]["entropy"]:.4f}` | `{correlations["l"]["variance"]:.4f}` |
-| **Trên (t)** | `{correlations["t"]["entropy"]:.4f}` | `{correlations["t"]["variance"]:.4f}` |
-| **Phải (r)** | `{correlations["r"]["entropy"]:.4f}` | `{correlations["r"]["variance"]:.4f}` |
-| **Dưới (b)** | `{correlations["b"]["entropy"]:.4f}` | `{correlations["b"]["variance"]:.4f}` |
+| **Trái (l)** | __CORR_L_ENT__ | __CORR_L_VAR__ |
+| **Trên (t)** | __CORR_T_ENT__ | __CORR_T_VAR__ |
+| **Phải (r)** | __CORR_R_ENT__ | __CORR_R_VAR__ |
+| **Dưới (b)** | __CORR_B_ENT__ | __CORR_B_VAR__ |
 
-*Nhận xét:* Hệ số tương quan cao ($> 0.3$) chứng tỏ độ bất định của phân phối DFL có thể làm chỉ báo trực tiếp cho chất lượng box, mở ra hướng ứng dụng uncertainty-guided refinement.
+*Nhận xét:* Hệ số tương quan cao (> 0.3) chứng tỏ độ bất định của phân phối DFL có thể làm chỉ báo trực tiếp cho chất lượng box, mở ra hướng ứng dụng uncertainty-guided refinement.
 
 ---
 
@@ -408,15 +408,42 @@ Phân tích sai số định vị thành phần để xác định mô hình b�
 
 | Thành phần sai số | Giá trị trung bình (Signed Mean) | Sai lệch chuẩn (Std) | Sai số tuyệt đối trung bình (MAE) |
 | :--- | :---: | :---: | :---: |
-| **Lệch tâm X ($\\epsilon_{{cx}}$)** | `{decomp_stats["cx"]["mean"]:.4f}` px | `{decomp_stats["cx"]["std"]:.4f}` px | `{decomp_stats["cx"]["mae"]:.4f}` px |
-| **Lệch tâm Y ($\\epsilon_{{cy}}$)** | `{decomp_stats["cy"]["mean"]:.4f}` px | `{decomp_stats["cy"]["std"]:.4f}` px | `{decomp_stats["cy"]["mae"]:.4f}` px |
-| **Lệch Chiều rộng ($\\epsilon_w$)** | `{decomp_stats["w"]["mean"]:.4f}` px | `{decomp_stats["w"]["std"]:.4f}` px | `{decomp_stats["w"]["mae"]:.4f}` px |
-| **Lệch Chiều cao ($\\epsilon_h$)** | `{decomp_stats["h"]["mean"]:.4f}` px | `{decomp_stats["h"]["std"]:.4f}` px | `{decomp_stats["h"]["mae"]:.4f}` px |
+| **Lệch tâm X (\epsilon_{cx})** | __CX_MEAN__ px | __CX_STD__ px | __CX_MAE__ px |
+| **Lệch tâm Y (\epsilon_{cy})** | __CY_MEAN__ px | __CY_STD__ px | __CY_MAE__ px |
+| **Lệch Chiều rộng (\epsilon_w)** | __W_MEAN__ px | __W_STD__ px | __W_MAE__ px |
+| **Lệch Chiều cao (\epsilon_h)** | __H_MEAN__ px | __H_STD__ px | __H_MAE__ px |
 
 *Nhận xét:* 
 - Nếu MAE lệch tâm X/Y lớn hơn MAE chiều rộng/cao, lỗi định vị chủ yếu do mô hình bị dịch chuyển box (translation).
 - Nếu Signed Mean lệch chiều rộng/cao lệch xa khỏi 0, mô hình đang có xu hướng dự đoán box luôn to hơn hoặc nhỏ hơn GT một cách hệ thống.
 """
+
+    report_content = report_content.replace("__MEAN_DC__", f"{mean_dc:.4f}")
+    report_content = report_content.replace("__MEAN_DW__", f"{mean_dw:.4f}")
+    report_content = report_content.replace("__MEAN_DH__", f"{mean_dh:.4f}")
+    report_content = report_content.replace("__MEAN_IOU_EQ__", f"{mean_iou_eq * 100:.2f}")
+    report_content = report_content.replace("__MEAN_GAP__", f"{mean_gap:.4f}")
+    report_content = report_content.replace("__MAX_GAP__", f"{max_gap:.4f}")
+    report_content = report_content.replace("__CORR_L_ENT__", f"{correlations['l']['entropy']:.4f}")
+    report_content = report_content.replace("__CORR_L_VAR__", f"{correlations['l']['variance']:.4f}")
+    report_content = report_content.replace("__CORR_T_ENT__", f"{correlations['t']['entropy']:.4f}")
+    report_content = report_content.replace("__CORR_T_VAR__", f"{correlations['t']['variance']:.4f}")
+    report_content = report_content.replace("__CORR_R_ENT__", f"{correlations['r']['entropy']:.4f}")
+    report_content = report_content.replace("__CORR_R_VAR__", f"{correlations['r']['variance']:.4f}")
+    report_content = report_content.replace("__CORR_B_ENT__", f"{correlations['b']['entropy']:.4f}")
+    report_content = report_content.replace("__CORR_B_VAR__", f"{correlations['b']['variance']:.4f}")
+    report_content = report_content.replace("__CX_MEAN__", f"{decomp_stats['cx']['mean']:.4f}")
+    report_content = report_content.replace("__CX_STD__", f"{decomp_stats['cx']['std']:.4f}")
+    report_content = report_content.replace("__CX_MAE__", f"{decomp_stats['cx']['mae']:.4f}")
+    report_content = report_content.replace("__CY_MEAN__", f"{decomp_stats['cy']['mean']:.4f}")
+    report_content = report_content.replace("__CY_STD__", f"{decomp_stats['cy']['std']:.4f}")
+    report_content = report_content.replace("__CY_MAE__", f"{decomp_stats['cy']['mae']:.4f}")
+    report_content = report_content.replace("__W_MEAN__", f"{decomp_stats['w']['mean']:.4f}")
+    report_content = report_content.replace("__W_STD__", f"{decomp_stats['w']['std']:.4f}")
+    report_content = report_content.replace("__W_MAE__", f"{decomp_stats['w']['mae']:.4f}")
+    report_content = report_content.replace("__H_MEAN__", f"{decomp_stats['h']['mean']:.4f}")
+    report_content = report_content.replace("__H_STD__", f"{decomp_stats['h']['std']:.4f}")
+    report_content = report_content.replace("__H_MAE__", f"{decomp_stats['h']['mae']:.4f}")
     
     output_path = ROOT.parent / "docs/reports/report_bottleneck_diagnostics.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
