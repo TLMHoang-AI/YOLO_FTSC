@@ -75,3 +75,25 @@ Phân tích sai số định vị thành phần để xác định mô hình b�
 *Nhận xét*: 
 - Vùng chứa tàu (GT) có các thành phần tần số cao vượt trội hoàn toàn (gấp hơn 4 lần so với nước biển xung quanh).
 - Điều này khẳng định tàu là các "điểm dị biệt tần số cao" trên nền đại dương tần số thấp. Khi mô hình downsampling qua các lớp tích chập, các chi tiết tần số cao này bị răng cưa/mất pha trầm trọng, trực tiếp gây ra sự thiếu bất biến tịnh tiến kích thước ở Probe 1.
+
+---
+
+## 6. Đặc trưng tần số không gian tại P2 Feature Map
+Để trả lời câu hỏi liệu các thành phần tần số cao của tàu (GT) có còn tồn tại ở shallowest feature map hay không trước khi đi vào Detect Head, chúng tôi hook vào **Layer 18 (C2f - P2 branch, stride 4)** của mô hình YOLOv8n-P2 baseline và phân tích đặc trưng tần số của feature activations trên 694 vật thể thuộc tập kiểm thử (Test split).
+
+### Kết quả so sánh định lượng tại P2 Feature Map activations:
+
+| Vùng Ảnh tại P2 | Laplacian Variance trung bình | Gradient Magnitude trung bình |
+| :--- | :---: | :---: |
+| **Ground Truth (Tàu) in P2** | **0.8204** | **0.4630** |
+| **Adjacent BG in P2** | **0.2421** (~3.39x lower) | **0.1407** (~3.29x lower) |
+
+### 📈 Phân phối tần số không gian tại P2 Feature Map:
+![Phân phối tần số tại P2](/home/duylearch/.gemini/antigravity-ide/brain/6c51aafe-02a0-491a-b18e-1ec9a07d1bec/p2_feature_frequency.png)
+
+### 🌊 Trực quan hóa FFT và Cường độ kích hoạt (Activation):
+![Trực quan hóa FFT và Activation tại P2](/home/duylearch/.gemini/antigravity-ide/brain/6c51aafe-02a0-491a-b18e-1ec9a07d1bec/p2_example_fft.png)
+
+### *Nhận xét*:
+1. **Sự bảo toàn tần số cao**: Mặc dù đã qua 18 lớp convolution/pooling và bị downsample đi 4 lần, **đặc trưng tần số cao của tàu vẫn được bảo toàn rõ rệt ở P2 feature map** (với Laplacian Variance gấp **3.39 lần** và Gradient Magnitude gấp **3.29 lần** so với nền xung quanh).
+2. **Hình ảnh phổ FFT**: Phổ tần số 2D FFT của P2 Feature Map (phải dưới) vẫn giữ được các vệt sáng năng lượng lan tỏa đặc trưng cho các góc cạnh/biên của tàu (giống như ở input space bên trái), chứng tỏ các cấu trúc tần số cao của đối tượng chưa hề bị làm mịn (blur) hoàn toàn bởi backbone mà vẫn đi tới đầu Detect head. Điều này giải thích tại sao sự dịch chuyển pha cực nhỏ ở đầu vào vẫn gây bất ổn định đầu ra của head định vị.
