@@ -16,6 +16,7 @@ Dưới đây là bảng đối chiếu chi tiết hiệu năng giữa Baseline 
 
 | Cấu hình | Val mAP50 | Val mAP50-95 | Val Precision | Val Recall |
 | :--- | :---: | :---: | :---: | :---: |
+| **YOLOv8n-P2 Standard Baseline (CIoU)** | 0.7654 | 0.3165 | 0.8165 | 0.6731 |
 | **YOLOv8n-P2 + WIoU Baseline** | 0.7946 | 0.3277 | 0.8396 | 0.7201 |
 | **`small_weight`** | 0.7507 | 0.2923 | 0.7616 | 0.6960 |
 | **`partial_clip`** | **0.8205** | **0.3317** | **0.8447** | **0.7670** |
@@ -25,6 +26,7 @@ Dưới đây là bảng đối chiếu chi tiết hiệu năng giữa Baseline 
 
 | Cấu hình | Test mAP50 | Test mAP50-95 | Test Precision | Test Recall |
 | :--- | :---: | :---: | :---: | :---: |
+| **YOLOv8n-P2 Standard Baseline (CIoU)** | 0.7453 | 0.2924 | 0.7824 | 0.6681 |
 | **YOLOv8n-P2 + WIoU Baseline** | **0.7797** | **0.2966** | **0.8099** | 0.7112 |
 | **`small_weight`** | 0.7264 | 0.2697 | 0.7017 | 0.6796 |
 | **`partial_clip`** | 0.7714 | 0.2959 | 0.7890 | **0.7284** |
