@@ -1,6 +1,6 @@
 # LEVIR-Ship validation and test report
 
-Tất cả kết quả YOLO được lấy từ 10 Hugging Face Dataset repo của `duyle2408`; validation và test được đặt cạnh nhau trong cùng một bảng. Các cấu hình nhiều seed được báo cáo dưới dạng mean ± sample standard deviation.
+Tất cả kết quả YOLO được lấy từ 11 Hugging Face Dataset repo của `duyle2408`; validation và test được đặt cạnh nhau trong cùng một bảng. Các cấu hình nhiều seed được báo cáo dưới dạng mean ± sample standard deviation.
 
 | Family | Model/config | Resolution | Seeds (n) | Val P | Val R | Val mAP50 | Val mAP75 | Val mAP50-95 | Test P | Test R | Test mAP50 | Test mAP75 | Test mAP50-95 | Source repo |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
@@ -10,7 +10,9 @@ Tất cả kết quả YOLO được lấy từ 10 Hugging Face Dataset repo c�
 | YOLO DBSS/HIT | yolov5n + hit | 512 | 42,43,44 (3) | 0.7101 ± 0.0617 | 0.6245 ± 0.0116 | 0.6890 ± 0.0567 | 0.1726 ± 0.0216 | 0.2932 ± 0.0283 | 0.6656 ± 0.0522 | 0.5812 ± 0.0320 | 0.6125 ± 0.0679 | 0.1203 ± 0.0136 | 0.2442 ± 0.0306 | [levir-yolo-dbss-hit-3seed](https://huggingface.co/datasets/duyle2408/levir-yolo-dbss-hit-3seed) |
 | YOLO DBSS/HIT | yolov8n + dbss | 512 | 42,43,44 (3) | 0.8284 ± 0.0198 | 0.7145 ± 0.0358 | 0.7998 ± 0.0168 | 0.1841 ± 0.0100 | 0.3360 ± 0.0084 | 0.7939 ± 0.0329 | 0.7025 ± 0.0255 | 0.7631 ± 0.0252 | 0.1418 ± 0.0066 | 0.3032 ± 0.0110 | [levir-yolo-dbss-hit-3seed](https://huggingface.co/datasets/duyle2408/levir-yolo-dbss-hit-3seed) |
 | YOLO DBSS/HIT | yolov8n + hit | 512 | 42,43,44 (3) | 0.7863 ± 0.0367 | 0.6740 ± 0.0227 | 0.7534 ± 0.0131 | 0.1458 ± 0.0082 | 0.3119 ± 0.0030 | 0.7506 ± 0.0345 | 0.6606 ± 0.0161 | 0.7312 ± 0.0102 | 0.1319 ± 0.0080 | 0.2903 ± 0.0048 | [levir-yolo-dbss-hit-3seed](https://huggingface.co/datasets/duyle2408/levir-yolo-dbss-hit-3seed) |
-| YOLO P2 | yolov8n baseline | 512 | 42 (1) | 0.8211 | 0.6734 | 0.7701 | — | 0.3166 | 0.7824 | 0.6681 | 0.7453 | 0.1360 | 0.2924 | [levir-ship-yolo-p2](https://huggingface.co/datasets/duyle2408/levir-ship-yolo-p2) |
+| YOLOv8n DBSS P2 | dbss_p2_aware | 512 | 42,43,44 (3) | 0.8228 ± 0.0440 | 0.7151 ± 0.0333 | 0.7925 ± 0.0384 | 0.1788 ± 0.0073 | 0.3312 ± 0.0203 | 0.7804 ± 0.0370 | 0.6944 ± 0.0331 | 0.7521 ± 0.0353 | 0.1417 ± 0.0209 | 0.2946 ± 0.0253 | [levir_dbss_p2_aware](https://huggingface.co/datasets/duyle2408/levir_dbss_p2_aware) |
+| YOLOv8n DBSS P2 | dbss_p2_routed | 512 | 42,43,44 (3) | 0.7554 ± 0.0713 | 0.6670 ± 0.0562 | 0.7424 ± 0.0673 | 0.1592 ± 0.0281 | 0.3079 ± 0.0362 | 0.7309 ± 0.0480 | 0.6420 ± 0.0608 | 0.7002 ± 0.0624 | 0.1217 ± 0.0213 | 0.2740 ± 0.0331 | [levir_dbss_p2_aware](https://huggingface.co/datasets/duyle2408/levir_dbss_p2_aware) |
+| YOLO P2 | yolov8n baseline | 512 | 42,43,44 (3) | 0.8260 ± 0.0192 | 0.7019 ± 0.0281 | 0.7865 ± 0.0193 | 0.1695 ± 0.0084 | 0.3285 ± 0.0113 | 0.7900 ± 0.0151 | 0.6849 ± 0.0159 | 0.7513 ± 0.0071 | 0.1349 ± 0.0081 | 0.2950 ± 0.0063 | [levir-ship-yolo-p2](https://huggingface.co/datasets/duyle2408/levir-ship-yolo-p2) |
 | YOLO P2 | yolov8n offset | 512 | 42 (1) | 0.8262 | 0.6906 | 0.7814 | — | 0.3209 | 0.7550 | 0.6968 | 0.7407 | 0.1260 | 0.2894 | [levir-ship-yolo-p2](https://huggingface.co/datasets/duyle2408/levir-ship-yolo-p2) |
 | YOLOv8n P2 routing | dbss_pre_p2 | 512 | 42,43 (2) | 0.7680 ± 0.0382 | 0.6702 ± 0.0321 | 0.7553 ± 0.0312 | 0.1599 ± 0.0190 | 0.3156 ± 0.0046 | 0.7546 ± 0.0571 | 0.6746 ± 0.0010 | 0.7299 ± 0.0233 | 0.1320 ± 0.0276 | 0.2901 ± 0.0009 | [levir-yolov8n-p2-routing-3seed](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-routing-3seed) |
 | YOLOv8n P2 routing | gcts_backbone_p2_p3 | 512 | 42,43 (2) | 0.7619 ± 0.0026 | 0.6368 ± 0.0261 | 0.7082 ± 0.0340 | 0.1457 ± 0.0291 | 0.2947 ± 0.0219 | 0.7268 ± 0.0305 | 0.6042 ± 0.0457 | 0.6769 ± 0.0386 | 0.1345 ± 0.0073 | 0.2731 ± 0.0142 | [levir-yolov8n-p2-routing-3seed](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-routing-3seed) |
@@ -31,10 +33,19 @@ Tất cả kết quả YOLO được lấy từ 10 Hugging Face Dataset repo c�
 | YOLOv8n P3 NUDFL | yolov8n_baseline | 512 | 42 (1) | 0.7943 | 0.6566 | 0.7323 | 0.1259 | 0.2815 | 0.7500 | 0.6165 | 0.6992 | 0.0907 | 0.2556 | [levir-yolov8n-p3-nudfl-ablation](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p3-nudfl-ablation) |
 | YOLOv8n P3 NUDFL | yolov8n_p3_nudfl | 512 | 42 (1) | 0.7480 | 0.6460 | 0.7141 | 0.1223 | 0.2783 | 0.7146 | 0.6135 | 0.6787 | 0.1042 | 0.2521 | [levir-yolov8n-p3-nudfl-ablation](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p3-nudfl-ablation) |
 
+## Nhật ký YOLOv8n P2 NUDFL-PC-CFR
+
+- Method dùng codebook P2 cố định `[0, 0.35, 0.70, 1.05, 1.40, 1.80, 2.30, 2.90, 3.60, 4.50, 5.60, 6.90, 8.40, 10.20, 12.40, 15]`; P3-P5 giữ DFL đều. Pair-competitive loss dùng `gain=1.0`, `margin=1.5`. CFR dùng `gain=2.0`, detail/cos gain `1.0`, conflict weight `3.0`; decoder chỉ tạo auxiliary reconstruction loss khi training và forward vẫn trả nguyên P2.
+- Run đầu tiên seeds 42/43/44, AMP off và batch 16 đã hoàn tất, nhưng bị nhiễm `P2OffsetRegression` do parser/head từng mặc định `p2_offset_regression=True`. Ba kết quả này không đại diện cho NUDFL-PC-CFR thuần và không được đưa vào bảng chính.
+- Commit `93f7293` đổi mọi default P2 offset custom thành `false`, thêm `p2_offset_regression: false` rõ ràng vào YAML và regression tests; kiểm tra trực tiếp head cho kết quả `cv2[0]=Sequential`, không còn `P2OffsetRegression`.
+- Seed 42 được train lại từ đầu trên fixed split với offset off, AMP off, batch 16, 100 epochs. Kết quả: val `P/R/mAP50/mAP75/mAP50-95 = 0.7177/0.6576/0.7128/0.1284/0.2806`; test `0.6986/0.6264/0.6646/0.0941/0.2477`. Run này nằm tại `runs/levir_yolov8n_p2_nudfl_pc_cfr_no_offset` trên marimo và chưa upload Hugging Face.
+- `p2_positive_count` và `p2_positive_fraction` của run cũ luôn bằng 0 là lỗi instrumentation: CFR không trả hai counter mà `BaseModel.loss()` dùng để aggregate. `loss_pc_dfl` và `p2_dfl_conflict_mean` khác 0 xác nhận P2 vẫn có TAL positives; không dùng hai cột counter cũ để kết luận assignment.
+
 ## Ghi chú
 
+- Audit generalization paired seed cho P2 baseline vs DBSS P2-aware cho thấy seed 42/44 tăng trên cả val và test, seed 43 giảm trên cả hai; không có pattern val-only improvement. DBSS diagnostics val/test gần nhau, `fP2` của aware giảm thay vì tăng, và scene overlap rất lớn (85/114 scene xuất hiện trong cả ba split). Xem [report chi tiết](report_levir_dbss_generalization.md).
 - YOLO validation lấy tại epoch có validation mAP50-95 cao nhất; test dùng `best.pt` trên split test tương ứng.
-- 17 YOLO baseline/P2 checkpoint được đánh giá lại trong notebook marimo để bổ sung test mAP75; mỗi split có 788 ảnh.
+- Các checkpoint baseline/P2 được đánh giá lại trong notebook marimo để bổ sung mAP75; mỗi split có 788 ảnh. YOLOv8n P2 baseline dùng fixed dataset split seed 42 và training seed 42/43/44.
 - Dấu `—` nghĩa là repo không cung cấp metric đó; không có giá trị nào được suy diễn.
 - Các CSV training baseline/P2 và GCTS v1 seed 42 không lưu validation mAP75; GCTS v1 seed 42 cũng không lưu test mAP75, nên các ô aggregate liên quan để `—`.
 - Hai dòng `YOLOv8n P2 routing` là kết quả tạm thời của các seed 42 và 43 đã hoàn tất evaluation; seed 44 chưa được đưa vào aggregate này.
@@ -42,7 +53,7 @@ Tất cả kết quả YOLO được lấy từ 10 Hugging Face Dataset repo c�
 
 ## Kiểm tra bao phủ
 
-- Số run thô đã ghép: **55**; số dòng cấu hình sau aggregate/khử trùng lặp: **26**.
-- Repo kết quả đã bao phủ: **10/10**.
+- Số run thô đã ghép: **63**; số dòng cấu hình sau aggregate/khử trùng lặp: **28**.
+- Repo kết quả đã bao phủ: **11/11**.
 - Sample standard deviation chỉ được tính khi `n > 1`; dòng một run hiển thị giá trị đơn.
 - Source repo được giữ trên từng dòng để truy vết artifact gốc.

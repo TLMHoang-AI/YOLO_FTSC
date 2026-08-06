@@ -925,6 +925,11 @@ class v8DetectionLoss:
         self.loc_assign_max_stride = float(getattr(h, "loc_assign_max_stride", 8.0))
         self.loc_assign_center_radius = float(getattr(h, "loc_assign_center_radius", 2.5))
         self.loc_assign_weight = float(getattr(h, "loc_assign_weight", 0.5))
+        self.box_consensus_gain = float(getattr(h, "box_consensus_gain", 0.0))
+        self.box_consensus_warmup_start = int(getattr(h, "box_consensus_warmup_start", 5))
+        self.box_consensus_warmup_end = int(getattr(h, "box_consensus_warmup_end", 15))
+        self.box_consensus_log_grad_ratio = bool(getattr(h, "box_consensus_log_grad_ratio", False))
+        self.consensus_metrics = {}
         self.epoch = 0
         self.dfl_residual = bool(getattr(m, "dfl_residual", False))
         self.dfl_residual_scale = float(getattr(m, "dfl_residual_scale", getattr(h, "dfl_residual_scale", 0.25)))
@@ -1089,6 +1094,58 @@ class v8DetectionLoss:
                     loc_scores.new_full((chosen.numel(),), self.loc_assign_weight),
                 )
         return loc_bboxes, loc_scores, loc_mask
+
+    def _box_consensus_current_gain(self) -> float:
+        """Linearly ramp consensus after an initial zero-gain warmup."""
+        if self.epoch <= self.box_consensus_warmup_start:
+            return 0.0
+        if self.box_consensus_warmup_end <= self.box_consensus_warmup_start:
+            return self.box_consensus_gain
+        progress = min(
+            (self.epoch - self.box_consensus_warmup_start)
+            / (self.box_consensus_warmup_end - self.box_consensus_warmup_start),
+            1.0,
+        )
+        return self.box_consensus_gain * progress
+
+    def box_consensus_loss(
+        self,
+        pred_bboxes: torch.Tensor,
+        target_bboxes: torch.Tensor,
+        target_gt_idx: torch.Tensor,
+        fg_mask: torch.Tensor,
+        n_p2: int,
+        mask_gt: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        """Penalize edge-error dispersion among original TAL-positive P2 anchors per GT."""
+        group_losses, counts = [], []
+        eligible = 0
+        for batch_idx in range(fg_mask.shape[0]):
+            valid_gt = int(mask_gt[batch_idx].sum().item())
+            p2_fg = fg_mask[batch_idx, :n_p2]
+            assigned = target_gt_idx[batch_idx, :n_p2]
+            for gt_idx in range(valid_gt):
+                group = p2_fg & (assigned == gt_idx)
+                count = int(group.sum().item())
+                counts.append(count)
+                if count < 2:
+                    continue
+                eligible += 1
+                pred = pred_bboxes[batch_idx, :n_p2][group]
+                target = target_bboxes[batch_idx, :n_p2][group]
+                wh = (target[0, 2:] - target[0, :2]).clamp_min(1e-6)
+                scale = torch.cat((wh, wh))
+                error = (pred - target) / scale
+                centered = error - error.mean(0, keepdim=True)
+                group_losses.append(F.smooth_l1_loss(centered, torch.zeros_like(centered), reduction="mean"))
+        raw = torch.stack(group_losses).mean() if group_losses else pred_bboxes.sum() * 0.0
+        counts_tensor = torch.tensor(counts, device=pred_bboxes.device, dtype=pred_bboxes.dtype)
+        metrics = {
+            "consensus_gt_coverage": eligible / max(len(counts), 1),
+            "consensus_p2_pos_median": float(counts_tensor.median().item()) if counts else 0.0,
+            "consensus_raw_loss": float(raw.detach().item()),
+        }
+        return raw, metrics
 
     @staticmethod
     def _slice_from_box(start: float, end: float, limit: int) -> tuple[int, int]:
@@ -1275,6 +1332,7 @@ class v8DetectionLoss:
             + int(self.loc_quality_loss is not None)
             + int(self.quality_head)
             + int(self.rank_gain > 0)
+            + int(self.box_consensus_gain > 0)
             + int(self.dgfe_rec_gain > 0)
             + int(self.dgfe_spatial_gain > 0),
             device=self.device,
@@ -1579,12 +1637,42 @@ class v8DetectionLoss:
                 )
                 * self.rank_gain
             )
+        consensus_idx = (
+            3
+            + int(self.boundary_loss is not None)
+            + int(self.loc_quality_loss is not None)
+            + int(self.quality_head)
+            + int(self.rank_gain > 0)
+        )
+        self.consensus_metrics = {}
+        if self.box_consensus_gain > 0:
+            raw_consensus, self.consensus_metrics = self.box_consensus_loss(
+                pred_bboxes, target_bboxes_scaled, target_gt_idx, fg_mask, n_p2, mask_gt
+            )
+            current_gain = self._box_consensus_current_gain()
+            loss[consensus_idx] = raw_consensus * current_gain
+            self.consensus_metrics.update(
+                consensus_gain=current_gain,
+                consensus_applied_loss=float(loss[consensus_idx].detach().item()),
+                consensus_to_box_loss_ratio=float(
+                    loss[consensus_idx].detach().div(loss[0].detach().clamp_min(1e-12)).item()
+                ),
+            )
+            grad_ratio = 0.0
+            if self.box_consensus_log_grad_ratio and current_gain > 0 and raw_consensus.requires_grad:
+                cons_grad = torch.autograd.grad(loss[consensus_idx], pred_bboxes, retain_graph=True)[0]
+                box_grad = torch.autograd.grad(loss[0], pred_bboxes, retain_graph=True)[0]
+                grad_ratio = float(
+                    cons_grad.detach().norm().div(box_grad.detach().norm().clamp_min(1e-12)).item()
+                )
+            self.consensus_metrics["consensus_to_box_grad_ratio"] = grad_ratio
         dgfe_idx = (
             3
             + int(self.boundary_loss is not None)
             + int(self.loc_quality_loss is not None)
             + int(self.quality_head)
             + int(self.rank_gain > 0)
+            + int(self.box_consensus_gain > 0)
         )
         if self.dgfe_rec_gain > 0:
             loss[dgfe_idx] = self._dgfe_reconstruction_loss(preds, batch) * self.dgfe_rec_gain

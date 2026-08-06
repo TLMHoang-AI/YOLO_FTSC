@@ -171,6 +171,10 @@ loc_assign_topk: 3 # (int) EXPERIMENTAL extra local anchors per GT for box/DFL l
 loc_assign_max_stride: 8.0 # (float) EXPERIMENTAL only mine anchors up to this stride, e.g. P2/P3
 loc_assign_center_radius: 2.5 # (float) EXPERIMENTAL GT-center radius in stride units for loc-positive mining
 loc_assign_weight: 0.5 # (float) EXPERIMENTAL box/DFL target weight for mined loc positives
+box_consensus_gain: 0.0 # (float) EXPERIMENTAL P2 TAL-positive decoded-box consensus gain
+box_consensus_warmup_start: 5 # (int) EXPERIMENTAL epochs held at zero consensus gain
+box_consensus_warmup_end: 15 # (int) EXPERIMENTAL epoch where full consensus gain is reached
+box_consensus_log_grad_ratio: false # (bool) EXPERIMENTAL log decoded-box consensus/box gradient norm ratio
 cls_geometry_fuse: false # (bool) EXPERIMENTAL fuse DFL expected box distances into Detect cls head
 cls_geometry_mode: add # (str) EXPERIMENTAL cls geometry fusion mode: add or concat
 cls_geometry_detach: true # (bool) EXPERIMENTAL detach geometry cue before cls fusion

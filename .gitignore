@@ -226,3 +226,6 @@ SR-TOD/
 LevirShip*/
 data*/
 misc_varroa/
+.claude/
+.codex/
+diagnostics/

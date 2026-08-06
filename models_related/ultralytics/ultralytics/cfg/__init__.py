@@ -194,6 +194,7 @@ CFG_FLOAT_KEYS = frozenset(
         "loc_assign_max_stride",
         "loc_assign_center_radius",
         "loc_assign_weight",
+        "box_consensus_gain",
         "dfl_residual_scale",
         "dfl",
         "degrees",
@@ -267,6 +268,8 @@ CFG_INT_KEYS = frozenset(
         "quality_probe_max_preds",
         "rank_topk",
         "loc_assign_topk",
+        "box_consensus_warmup_start",
+        "box_consensus_warmup_end",
     }
 )
 CFG_BOOL_KEYS = frozenset(
@@ -292,6 +295,7 @@ CFG_BOOL_KEYS = frozenset(
         "quality_debug_export",
         "quality_probe_export",
         "loc_assign",
+        "box_consensus_log_grad_ratio",
         "box_voting",
         "wiou_monotonous",
         "single_cls",

@@ -643,6 +643,7 @@ class BaseModel(torch.nn.Module):
                 clear_boundary_context()
         loss, items = self.criterion(preds, batch)
         diagnostics = {}
+        diagnostics.update(getattr(self.criterion, "consensus_metrics", {}))
         assignment_context = getattr(self.criterion, "dbss_assignment_context", None)
         self.criterion.dbss_assignment_context = None
         for module in self.modules():
