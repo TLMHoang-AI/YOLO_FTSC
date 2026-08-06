@@ -234,8 +234,8 @@ def main():
                 in_mask = (
                     (p2_anchors[:, 0] * p2_strides[:, 0] >= gt[0] - pad) &
                     (p2_anchors[:, 0] * p2_strides[:, 0] <= gt[2] + pad) &
-                    (p2_anchors[:, 1] * p2_strides[:, 1] >= gt[1] - pad) &
-                    (p2_anchors[:, 1] * p2_strides[:, 1] <= gt[3] + pad)
+                    (p2_anchors[:, 1] * p2_strides[:, 0] >= gt[1] - pad) &
+                    (p2_anchors[:, 1] * p2_strides[:, 0] <= gt[3] + pad)
                 )
                 
                 indices = in_mask.nonzero(as_tuple=False).squeeze(-1)
