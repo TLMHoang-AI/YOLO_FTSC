@@ -210,10 +210,14 @@ def main():
         p2_distri_raw = pred_distri[:, :n_p2] # (B, n_p2, 64)
         p2_scores_raw = pred_scores[:, :n_p2] # (B, n_p2, 1)
         
+        # Decode raw 64 channels to 4 distances using DFL softmax projection
+        probs = p2_distri_raw.view(B, n_p2, 4, 16).softmax(-1)
+        p2_distances = (probs * proj_weight).sum(-1) # shape (B, n_p2, 4)
+        
         # Decode xyxy candidates
         p2_boxes_xyxy = []
         for b in range(B):
-            bboxes_decoded = dist2bbox(p2_distri_raw[b], p2_anchors, xywh=False) * p2_strides
+            bboxes_decoded = dist2bbox(p2_distances[b], p2_anchors, xywh=False) * p2_strides
             p2_boxes_xyxy.append(bboxes_decoded) # shape (n_p2, 4)
             
         for b in range(B):
