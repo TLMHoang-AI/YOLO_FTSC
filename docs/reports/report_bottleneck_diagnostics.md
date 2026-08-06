@@ -70,7 +70,7 @@ Phân tích sai số định vị thành phần để xác định mô hình b�
 | **Adjacent Background** (Nền sát cạnh) | **5.9865** (~4.29x lower) | **4.8861** (~3.14x lower) |
 
 ### Biểu đồ phân phối tần số (GT vs. Adjacent BG):
-![Phân phối tần số không gian](/home/duylearch/.gemini/antigravity-ide/brain/6c51aafe-02a0-491a-b18e-1ec9a07d1bec/gt_vs_adjacent_bg_frequency.png)
+![Phân phối tần số không gian](./gt_vs_adjacent_bg_frequency.png)
 
 *Nhận xét*: 
 - Vùng chứa tàu (GT) có các thành phần tần số cao vượt trội hoàn toàn (gấp hơn 4 lần so với nước biển xung quanh).
@@ -89,10 +89,10 @@ Phân tích sai số định vị thành phần để xác định mô hình b�
 | **Adjacent BG in P2** | **0.2421** (~3.39x lower) | **0.1407** (~3.29x lower) |
 
 ### 📈 Phân phối tần số không gian tại P2 Feature Map:
-![Phân phối tần số tại P2](/home/duylearch/.gemini/antigravity-ide/brain/6c51aafe-02a0-491a-b18e-1ec9a07d1bec/p2_feature_frequency.png)
+![Phân phối tần số tại P2](./p2_feature_frequency.png)
 
 ### 🌊 Trực quan hóa FFT và Cường độ kích hoạt (Activation):
-![Trực quan hóa FFT và Activation tại P2](/home/duylearch/.gemini/antigravity-ide/brain/6c51aafe-02a0-491a-b18e-1ec9a07d1bec/p2_example_fft.png)
+![Trực quan hóa FFT và Activation tại P2](./p2_example_fft.png)
 
 ### *Nhận xét*:
 1. **Sự bảo toàn tần số cao**: Mặc dù đã qua 18 lớp convolution/pooling và bị downsample đi 4 lần, **đặc trưng tần số cao của tàu vẫn được bảo toàn rõ rệt ở P2 feature map** (với Laplacian Variance gấp **3.39 lần** và Gradient Magnitude gấp **3.29 lần** so với nền xung quanh).
