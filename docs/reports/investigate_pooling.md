@@ -176,7 +176,16 @@ Dựa trên các phân tích trên, chúng tôi thiết kế và tích hợp mod
 
 ## Kết quả Huấn luyện trên server Marimo (100 Epochs, CIoU Loss)
 
-Dưới đây là kết quả đánh giá trên tập **Test Split** (trung bình qua 3 seeds):
+### Kết quả trên tập Validation (Val Split):
+
+| Cấu hình | Seed 42 | Seed 43 | Seed 44 | Trung bình (mAP50) | Recall (Mean) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **A0: YOLOv8n-P2 Baseline** | 0.7654 | 0.8033 | 0.7907 | **0.7865** | **0.7019** |
+| **A1: P1 Unconditional Fusion** | 0.7266 | 0.7790 | 0.7963 | 0.7673 | 0.6942 |
+| **A2: Gated Rescue (P1-GER)** | 0.8022 | 0.7060 | 0.7847 | 0.7643 | 0.6912 |
+| **A3: Gated + Sparse Gate (1e-3)** | 0.7880 | 0.7155 | *N/A* | 0.7518 | 0.6883 |
+
+### Kết quả trên tập Kiểm thử (Test Split):
 
 | Cấu hình | Seed 42 | Seed 43 | Seed 44 | Trung bình (mAP50) | Recall (Mean) |
 | :--- | :---: | :---: | :---: | :---: | :---: |

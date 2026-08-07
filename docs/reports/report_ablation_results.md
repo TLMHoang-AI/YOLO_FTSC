@@ -54,9 +54,18 @@ Dưới đây là bảng đối chiếu chi tiết hiệu năng giữa Baseline 
 
 Chúng tôi thực hiện đánh giá độc lập các biến thể tích hợp đặc trưng từ **P1** vào **P2** (huấn luyện 100 epochs trên 3 seeds với loss CIoU mặc định làm cơ sở so sánh):
 
-### A. Kết quả tổng hợp (Test Split):
+### A. Kết quả trên tập Validation (Val Split):
 
-| Cấu hình | Seed 42 | Seed 43 | Seed 44 | Trung bình (Mean) | Recall (Mean) |
+| Cấu hình | Seed 42 | Seed 43 | Seed 44 | Trung bình (mAP50) | Recall (Mean) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **A0: YOLOv8n-P2 Baseline** | 0.7654 | 0.8033 | 0.7907 | **0.7865** | **0.7019** |
+| **A1: P1 Unconditional Fusion** | 0.7266 | 0.7790 | 0.7963 | 0.7673 | 0.6942 |
+| **A2: Gated Rescue (P1-GER)** | 0.8022 | 0.7060 | 0.7847 | 0.7643 | 0.6912 |
+| **A3: Gated + Sparse Gate (1e-3)** | 0.7880 | 0.7155 | *N/A* | 0.7518 | 0.6883 |
+
+### B. Kết quả trên tập Kiểm thử (Test Split):
+
+| Cấu hình | Seed 42 | Seed 43 | Seed 44 | Trung bình (mAP50) | Recall (Mean) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **A0: YOLOv8n-P2 Baseline** | 0.7453 | 0.7591 | 0.7495 | **0.7513** | **0.6849** |
 | **A1: P1 Unconditional Fusion** | 0.6988 | 0.7489 | 0.7776 | 0.7418 | 0.6745 |
