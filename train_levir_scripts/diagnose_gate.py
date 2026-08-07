@@ -125,8 +125,8 @@ def run_diagnostics():
         
         # Evaluate baseline predictions to find dormant ships (False Negatives)
         # Bounding boxes predicted by baseline model
-        pred_results = validator.postprocess(preds, batch['img'], batch['img'])
-        pred_boxes = pred_results[0].boxes.xyxy.cpu().numpy() if len(pred_results) > 0 else np.zeros((0, 4))
+        preds_nms = ops.non_max_suppression(preds, conf_thres=0.25, iou_thres=0.45)
+        pred_boxes = preds_nms[0][:, :4].cpu().numpy() if len(preds_nms) > 0 and len(preds_nms[0]) > 0 else np.zeros((0, 4))
         
         for gt_box in bboxes:
             # Map box to 512x512 coordinates
