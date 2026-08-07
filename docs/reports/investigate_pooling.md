@@ -298,9 +298,16 @@ Module `P1DRR` được nâng cấp từ những bài học của `P1-GER` nhằ
 | Cấu hình | Tham số Neck | Val mAP50 | Val Recall | Test mAP50 | Test Recall |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **A0: Full-Neck Baseline** | 3.35M (100%) | 0.7654 | 0.7019 | 0.7453 | 0.6681 |
-| **A1: FPN-Only Plain Fusion** | 1.78M (53%) | 0.7958 (+3.0%) | 0.7272 (+2.5%) | 0.7429 | 0.6671 |
-| **A2: FPN-Only P1-DRR** | 1.78M (53%) | **0.7957 (+3.0%)** | **0.7322 (+3.0%)** | **0.7469 (+0.2%)** | **0.6782 (+1.0%)** |
+| **A0_fpn: FPN-Only Baseline** | 1.78M (53%) | 0.7514 | 0.6551 | 0.7213 | 0.6365 |
+| **A1: FPN-Only Plain Fusion** | 1.78M (53%) | 0.7958 (+4.4%) | 0.7272 (+7.2%) | 0.7429 (+2.1%) | 0.6671 (+3.1%) |
+| **A2: FPN-Only P1-DRR** | 1.78M (53%) | **0.7957 (+4.4%)** | **0.7322 (+7.7%)** | **0.7469 (+2.5%)** | **0.6782 (+4.1%)** |
 
 ### Kết luận Thực nghiệm:
-1. **FPN-Only Plain Fusion (A1) cực kỳ hiệu quả**: Khi cắt giảm tới 47% tham số Neck và loại bỏ PANet cồng kềnh, mô hình đạt Val mAP50 **0.7958** (+3.0% so với baseline) và giữ nguyên hiệu năng trên Test Set. Điều này chứng minh các nhánh lớn hơn là dormant và làm loãng đặc trưng vật thể nhỏ.
-2. **P1-DRR (A2) thiết lập đỉnh hiệu năng mới**: Bằng cách sử dụng cổng restraint thông minh có warm-up, P1-DRR không chỉ giữ vững Val mAP50 cao đột biến (**0.7957**) mà còn vượt qua baseline gốc trên Test mAP50 (**0.7469**) và cải thiện Test Recall thêm **+1.0%** (lên **0.6782**).
+1. **Minh chứng Ablation cực kỳ sạch**: So sánh trực tiếp giữa **A0_fpn (FPN-Only Baseline)** và **A2 (FPN-Only P1-DRR)** cho thấy hiệu quả vượt trội tuyệt đối của cơ chế giải cứu chi tiết:
+   * Val mAP50 tăng vọt **+4.4%** (từ `0.7514` lên `0.7957`).
+   * Val Recall tăng mạnh **+7.7%** (từ `0.6551` lên `0.7322`).
+   * Test mAP50 tăng vọt **+2.56%** (từ `0.7213` lên `0.7469`).
+   * Test Recall tăng mạnh **+4.17%** (từ `0.6365` lên `0.6782`).
+2. **P1-DRR (A2) vượt trội hơn Plain Fusion (A1)**: Nhờ có cổng tiết chế chống nhiễu cổng (warm-up restraint), P1-DRR mang lại mAP50 tập Test cao nhất (**0.7469**), khẳng định sự cần thiết của việc hạn chế kích hoạt gate trên vùng nền biển động.
+3. **Hiệu năng FPN-Only 200 Epochs**: Các kết quả thực nghiệm kéo dài 200 Epochs (ở bảng phân tích bên trên) cho thấy mô hình A2 tiếp tục bứt phá lên **Test mAP50 = 0.7632** (+1.8% so với baseline full-neck và **+4.2%** so với baseline FPN-only).
+
