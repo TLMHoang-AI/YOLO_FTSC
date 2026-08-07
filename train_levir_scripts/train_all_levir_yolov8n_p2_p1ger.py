@@ -12,10 +12,9 @@ EXPERIMENT_SLUG = "levir_yolov8n_p2_p1ger"
 workflow.EXPERIMENT = EXPERIMENT_SLUG
 workflow.HF_REPO = "duyle2408/levir-yolov8n-p2-p1ger-3seed"
 
-# Set variant configuration mapping for A2 and A3
+# Set variant configuration mapping for A2
 workflow.VARIANTS = {
-    "p1ger": ROOT.parent / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_p1ger.yaml",
-    "p1ger_sparse": ROOT.parent / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_p1ger_sparse.yaml"
+    "p1ger": ROOT.parent / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_p1ger.yaml"
 }
 
 _baseline_train_kwargs = workflow.train_kwargs

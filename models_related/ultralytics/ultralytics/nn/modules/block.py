@@ -4273,17 +4273,39 @@ class P1FusionLocalDetail(nn.Module):
         return x_p2 + self.beta * p1_enhanced
 
 
-class P1GER(nn.Module):
+class P1PlainFusion(nn.Module):
     """
-    P1-Guided Dormant Evidence Rescue (P1-GER) Module.
-    Selectively rescues dormant features in P2 using high-resolution clues in P1.
+    Pure P1 MaxPool + Projection + Learnable addition.
+    No local subtraction or gating.
     """
-    def __init__(self, c_in: list[int], kernel_size: int = 3, lambda_g: float = 1e-3) -> None:
+    def __init__(self, c_in: list[int], kernel_size: int = 3, beta: float = 0.5) -> None:
         super().__init__()
         c_p2, c_p1 = c_in[0], c_in[1]
-        self.downsample = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.downsample = nn.MaxPool2d(kernel_size=kernel_size, stride=2, padding=kernel_size//2)
         
-        # Rescue Feature Projection
+        if c_p2 != c_p1:
+            self.proj = nn.Conv2d(c_p1, c_p2, kernel_size=1, bias=False)
+        else:
+            self.proj = nn.Identity()
+            
+        self.beta = nn.Parameter(torch.tensor(beta))
+        
+    def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
+        x_p2, x_p1 = x[0], x[1]
+        p1_down = self.downsample(x_p1)
+        return x_p2 + self.beta * self.proj(p1_down)
+
+
+class P1GER(nn.Module):
+    """
+    P1-Guided Dormant Evidence Rescue (P1-GER) v2.
+    Selectively rescues dormant features in P2 using raw spatial evidence in P1.
+    """
+    def __init__(self, c_in: list[int], kernel_size: int = 3) -> None:
+        super().__init__()
+        c_p2, c_p1 = c_in[0], c_in[1]
+        self.downsample = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        
         if c_p2 != c_p1:
             self.proj = nn.Conv2d(c_p1, c_p2, kernel_size=1, bias=False)
         else:
@@ -4292,45 +4314,46 @@ class P1GER(nn.Module):
         self.local_pool = nn.AvgPool2d(kernel_size=kernel_size, stride=1, padding=kernel_size//2)
         self.gate_conv = nn.Conv2d(3, 1, kernel_size=3, padding=1)
         
-        # Zero-initialized final projection for rescue branch
+        # Initialize gate closed-ish (bias=-2.0 -> sigmoid(-2.0) = ~0.12)
+        nn.init.zeros_(self.gate_conv.weight)
+        nn.init.constant_(self.gate_conv.bias, -2.0)
+        
+        # Zero-initialized final projection
         self.zero_conv = nn.Conv2d(c_p2, c_p2, kernel_size=1, bias=False)
         nn.init.zeros_(self.zero_conv.weight)
-        
-        self.lambda_g = lambda_g
-        self.gate_loss = torch.tensor(0.0)
         
     def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
         x_p2, x_p1 = x[0], x[1]
         
-        # 1. Prepare rescue feature R
+        # 1. Downsample P1
         p1_down = self.downsample(x_p1)
-        R = self.proj(p1_down)
         
-        # 2. Compute local structure evidence
-        avg_R = self.local_pool(R)
-        E1 = torch.mean(torch.abs(R - avg_R), dim=1, keepdim=True)
+        # 2. Extract evidence directly from P1 (no projection bias)
+        avg_p1 = self.local_pool(p1_down)
+        E1 = torch.mean(torch.abs(p1_down - avg_p1), dim=1, keepdim=True)
         
+        # Extract evidence from P2
         avg_P2 = self.local_pool(x_p2)
         E2 = torch.mean(torch.abs(x_p2 - avg_P2), dim=1, keepdim=True)
         
-        # 3. Normalize evidence maps
-        E1_min, E1_max = E1.min(), E1.max()
-        E1_norm = (E1 - E1_min) / (E1_max - E1_min + 1e-8)
+        # 3. Per-sample relative normalization
+        s1 = E1.mean((2, 3), keepdim=True).detach().clamp_min(1e-6)
+        s2 = E2.mean((2, 3), keepdim=True).detach().clamp_min(1e-6)
         
-        E2_min, E2_max = E2.min(), E2.max()
-        E2_norm = (E2 - E2_min) / (E2_max - E2_min + 1e-8)
+        E1n = (E1 / s1).clamp(max=5.0)
+        E2n = (E2 / s2).clamp(max=5.0)
         
-        # 4. Compute discrepancy D and gate G
-        D = torch.clamp(E1_norm - E2_norm, min=0.0)
-        gate_input = torch.cat([E1_norm, E2_norm, D], dim=1) # (B, 3, H, W)
-        G = torch.sigmoid(self.gate_conv(gate_input))        # (B, 1, H, W)
+        # 4. Discrepancy map D
+        D = torch.clamp(E1n - E2n, min=0.0)
         
-        # 5. Save sparse gate regularization loss
-        if self.training:
-            self.gate_loss = self.lambda_g * torch.mean(G)
-            
-        # 6. Apply gate and rescue
+        # 5. Gating
+        gate_input = torch.cat([E1n, E2n, D], dim=1)
+        G = torch.sigmoid(self.gate_conv(gate_input))
+        
+        # 6. Rescue feature projection and injection
+        R = self.proj(p1_down)
         R_out = self.zero_conv(R)
         return x_p2 + G * R_out
+
 
 

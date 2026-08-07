@@ -809,7 +809,6 @@ class v8DetectionLoss:
         """Initialize v8DetectionLoss with model parameters and task-aligned assignment settings."""
         device = next(model.parameters()).device  # get model device
         h = model.args  # hyperparameters
-        self.model = model
 
         m = model.model[-1]  # Detect() module
         self.bce = nn.BCEWithLogitsLoss(reduction="none")
@@ -1975,17 +1974,6 @@ class v8DetectionLoss:
         """Calculate detection loss using assigned targets."""
         batch_size = preds["boxes"].shape[0]
         loss, loss_detach = self.get_assigned_targets_and_loss(preds, batch)[1:]
-        
-        # Accumulate gate sparsity loss from P1GER modules
-        gate_regularization = torch.tensor(0.0, device=self.device)
-        for m in self.model.modules():
-            if m.__class__.__name__ == "P1GER":
-                gate_regularization = gate_regularization + m.gate_loss
-                
-        if gate_regularization > 0:
-            loss[1] = loss[1] + gate_regularization
-            loss_detach = loss_detach + gate_regularization
-            
         return loss * batch_size, loss_detach
 
 
