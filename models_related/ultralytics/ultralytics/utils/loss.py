@@ -1980,7 +1980,9 @@ class v8DetectionLoss:
         restraint_loss = torch.tensor(0.0, device=self.device)
         drr_modules = [m for m in self.model.modules() if m.__class__.__name__ == "P1DRR"]
         
-        if len(drr_modules) > 0 and "bboxes" in batch and len(batch["bboxes"]) > 0:
+        if len(drr_modules) > 0 and "bboxes" in batch:
+            H_img, W_img = batch["img"].shape[2:]
+            
             for m in drr_modules:
                 if m.gate_tensor is not None:
                     G = m.gate_tensor  # (B, 1, H, W)
@@ -1989,43 +1991,57 @@ class v8DetectionLoss:
                     # Create binary target mask for tiny objects (area < 400 px^2)
                     M_gt = torch.zeros((B, 1, H, W), device=self.device, dtype=torch.float32)
                     
-                    for b in range(B):
-                        img_boxes = batch["bboxes"][batch["batch_idx"] == b]
-                        for box in img_boxes:
-                            xc, yc, w, h = box
-                            w_px = w * 512.0
-                            h_px = h * 512.0
-                            area = w_px * h_px
-                            
-                            if 0.0 < area < 400.0:
-                                # Convert xywh to xyxy
-                                x1 = xc - w / 2.0
-                                y1 = yc - h / 2.0
-                                x2 = xc + w / 2.0
-                                y2 = yc + h / 2.0
+                    if len(batch["bboxes"]) > 0:
+                        for b in range(B):
+                            img_boxes = batch["bboxes"][batch["batch_idx"] == b]
+                            for box in img_boxes:
+                                xc, yc, w, h = box
+                                w_px = w * W_img
+                                h_px = h * H_img
+                                area = w_px * h_px
                                 
-                                # Map to grid coordinates
-                                gx1 = int(torch.clamp(x1 * W, min=0.0, max=W - 1).item())
-                                gy1 = int(torch.clamp(y1 * H, min=0.0, max=H - 1).item())
-                                gx2 = int(torch.clamp(x2 * W, min=0.0, max=W - 1).item())
-                                gy2 = int(torch.clamp(y2 * H, min=0.0, max=H - 1).item())
-                                
-                                # Dilate by 1 cell
-                                gx1_ex = max(0, gx1 - 1)
-                                gy1_ex = max(0, gy1 - 1)
-                                gx2_ex = min(W - 1, gx2 + 1)
-                                gy2_ex = min(H - 1, gy2 + 1)
-                                
-                                M_gt[b, 0, gy1_ex:gy2_ex+1, gx1_ex:gx2_ex+1] = 1.0
-                                
+                                if 0.0 < area < 400.0:
+                                    # Convert xywh to xyxy
+                                    x1 = xc - w / 2.0
+                                    y1 = yc - h / 2.0
+                                    x2 = xc + w / 2.0
+                                    y2 = yc + h / 2.0
+                                    
+                                    # Map to grid coordinates
+                                    gx1 = int(torch.clamp(x1 * W, min=0.0, max=W - 1).item())
+                                    gy1 = int(torch.clamp(y1 * H, min=0.0, max=H - 1).item())
+                                    gx2 = int(torch.clamp(x2 * W, min=0.0, max=W - 1).item())
+                                    gy2 = int(torch.clamp(y2 * H, min=0.0, max=H - 1).item())
+                                    
+                                    # Dilate by 1 cell
+                                    gx1_ex = max(0, gx1 - 1)
+                                    gy1_ex = max(0, gy1 - 1)
+                                    gx2_ex = min(W - 1, gx2 + 1)
+                                    gy2_ex = min(H - 1, gy2 + 1)
+                                    
+                                    M_gt[b, 0, gy1_ex:gy2_ex+1, gx1_ex:gx2_ex+1] = 1.0
+                                    
                     outside_mask = 1.0 - M_gt
                     loss_val = torch.sum(outside_mask * G) / (torch.sum(outside_mask) + 1e-6)
                     restraint_loss = restraint_loss + loss_val
             
-            if restraint_loss > 0:
+            # Determine current training epoch for restraint warm-up
+            epoch = 0
+            if hasattr(self.model, "trainer") and self.model.trainer is not None:
+                epoch = getattr(self.model.trainer, "epoch", 0)
+            
+            # lambda_r warmup: 0 for epoch < 3, then ramp up to 0.01 at epoch 6
+            if epoch < 3:
+                lambda_r = 0.0
+            elif epoch < 6:
+                lambda_r = 0.01 * (epoch - 3) / 3.0
+            else:
                 lambda_r = 0.01
+                
+            if restraint_loss > 0 and lambda_r > 0:
                 loss[1] = loss[1] + lambda_r * restraint_loss
-                loss_detach = loss_detach + lambda_r * restraint_loss
+                loss_detach = loss_detach.clone()
+                loss_detach[1] = loss_detach[1] + lambda_r * restraint_loss.item()
                 
         return loss * batch_size, loss_detach
 
