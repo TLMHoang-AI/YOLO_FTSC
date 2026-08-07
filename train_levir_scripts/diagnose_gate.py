@@ -74,6 +74,8 @@ def run_diagnostics():
     args['data'] = dataset_yaml
     args['device'] = device
     validator = DetectionValidator(args=args)
+    validator.data = dataset
+    validator.stride = 32
     dataloader = validator.get_dataloader(dataset["test"], batch_size=1)
     
     # Setup downsampler for P1
