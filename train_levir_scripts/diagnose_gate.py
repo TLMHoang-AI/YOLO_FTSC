@@ -63,7 +63,7 @@ def run_diagnostics():
     # Standard baseline model layers:
     # model_base.model.model[2] is Conv stride-2 (P1)
     # model_base.model.model[18] is C2f (P2 neck)
-    h1 = model_base.model.model[2].register_forward_hook(hook_p1)
+    h1 = model_base.model.model[0].register_forward_hook(hook_p1)
     h2 = model_base.model.model[18].register_forward_hook(hook_p2)
     
     # Load validation images and run prediction
