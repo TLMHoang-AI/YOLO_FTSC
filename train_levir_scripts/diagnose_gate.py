@@ -125,7 +125,7 @@ def run_diagnostics():
         
         # Evaluate baseline predictions to find dormant ships (False Negatives)
         # Bounding boxes predicted by baseline model
-        from ultralytics.utils.ops import non_max_suppression
+        from ultralytics.utils.nms import non_max_suppression
         preds_nms = non_max_suppression(preds, conf_thres=0.25, iou_thres=0.45)
         pred_boxes = preds_nms[0][:, :4].cpu().numpy() if len(preds_nms) > 0 and len(preds_nms[0]) > 0 else np.zeros((0, 4))
         
