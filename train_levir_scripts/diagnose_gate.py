@@ -121,7 +121,11 @@ def run_diagnostics():
         # Ground truths in this image
         img_idx = batch['batch_idx'] == 0
         cls = batch['cls'][img_idx].cpu().numpy()
-        bboxes = batch['bboxes'][img_idx].cpu().numpy() # normalized xyxy
+        
+        # Convert target boxes from xywh to xyxy
+        from ultralytics.utils.ops import xywh2xyxy
+        bboxes_xyxy = xywh2xyxy(batch['bboxes'][img_idx])
+        bboxes = bboxes_xyxy.cpu().numpy() # normalized xyxy
         
         # Evaluate baseline predictions to find dormant ships (False Negatives)
         # Bounding boxes predicted by baseline model
@@ -276,7 +280,9 @@ def run_diagnostics():
                 
                 h_grid, w_grid = gate_np.shape
                 img_idx = batch['batch_idx'] == 0
-                bboxes = batch['bboxes'][img_idx].cpu().numpy()
+                from ultralytics.utils.ops import xywh2xyxy
+                bboxes_xyxy = xywh2xyxy(batch['bboxes'][img_idx])
+                bboxes = bboxes_xyxy.cpu().numpy()
                 
                 for gt_box in bboxes:
                     gx1 = int(np.clip(gt_box[0] * w_grid, 0, w_grid - 1))
