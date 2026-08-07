@@ -4314,13 +4314,12 @@ class P1GER(nn.Module):
         self.local_pool = nn.AvgPool2d(kernel_size=kernel_size, stride=1, padding=kernel_size//2)
         self.gate_conv = nn.Conv2d(3, 1, kernel_size=3, padding=1)
         
-        # Initialize gate closed-ish (bias=-2.0 -> sigmoid(-2.0) = ~0.12)
+        # Initialize gate closed-ish (bias=-4.0 -> sigmoid(-4.0) = ~0.018)
         nn.init.zeros_(self.gate_conv.weight)
-        nn.init.constant_(self.gate_conv.bias, -2.0)
+        nn.init.constant_(self.gate_conv.bias, -4.0)
         
-        # Zero-initialized final projection
+        # Standard initialized final projection to ensure non-zero gradients for the gate
         self.zero_conv = nn.Conv2d(c_p2, c_p2, kernel_size=1, bias=False)
-        nn.init.zeros_(self.zero_conv.weight)
         
     def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
         x_p2, x_p1 = x[0], x[1]
