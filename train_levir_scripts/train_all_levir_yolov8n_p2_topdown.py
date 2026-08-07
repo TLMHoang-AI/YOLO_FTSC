@@ -16,7 +16,8 @@ workflow.HF_REPO = "duyle2408/levir-yolov8n-p2-topdown-3seed"
 workflow.VARIANTS = {
     "topdown_baseline": ROOT.parent / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_topdown_baseline.yaml",
     "topdown_p1fusion": ROOT.parent / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_topdown_p1fusion.yaml",
-    "topdown_p1ger": ROOT.parent / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_topdown_p1ger.yaml"
+    "topdown_p1ger": ROOT.parent / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_topdown_p1ger.yaml",
+    "topdown_p1reg_only": ROOT.parent / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_topdown_p1reg_only.yaml"
 }
 
 _baseline_train_kwargs = workflow.train_kwargs

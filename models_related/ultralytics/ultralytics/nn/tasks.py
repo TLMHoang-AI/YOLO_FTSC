@@ -2143,6 +2143,7 @@ def parse_model(d, ch, verbose=True):
     box_detail_kernel = d.get("box_detail_kernel", 3)
     box_detail_gate = d.get("box_detail_gate", True)
     p2_offset_regression = d.get("p2_offset_regression", False)
+    p1_reg_injection = d.get("p1_reg_injection", False)
     depth, width, kpt_shape = (d.get(x, 1.0) for x in ("depth_multiple", "width_multiple", "kpt_shape"))
     scale = d.get("scale")
     if scales:
@@ -2370,6 +2371,7 @@ def parse_model(d, ch, verbose=True):
                         box_detail_kernel,
                         box_detail_gate,
                         p2_offset_regression,
+                        p1_reg_injection,
                     ]
                 )
             if m is Segment or m is YOLOESegment or m is Segment26 or m is YOLOESegment26:

@@ -178,33 +178,26 @@ class Detect(nn.Module):
         box_detail_kernel: int = 3,
         box_detail_gate: bool = True,
         p2_offset_regression: bool = False,
+        p1_reg_injection: bool = False,
     ):
-        """Initialize the YOLO detection layer with specified number of classes and channels.
-
-        Args:
-            nc (int): Number of classes.
-            reg_max (int): Maximum number of DFL channels.
-            end2end (bool): Whether to use end-to-end NMS-free detection.
-            ch (tuple): Tuple of channel sizes from backbone feature maps.
-            cls_geometry_fuse (bool): Fuse DFL expected distances into classification features.
-            cls_geometry_mode (str): Geometry fusion mode, "add" or "concat".
-            cls_geometry_detach (bool): Detach geometry cue before feeding classification branch.
-            cls_deform_geometry (bool): Reserved flag for future VFNet-like deformable classification.
-            quality_head (bool): Add an IoU-quality prediction branch for score calibration.
-            quality_score_mode (str): How to combine class confidence and predicted quality at inference.
-            quality_box_features (bool): Feed DFL/box summary channels into the quality head.
-            quality_box_detach (bool): Detach DFL/box summary before the quality head.
-            dfl_residual (bool): Add a 4-channel residual branch to refine DFL expected distances.
-            dfl_residual_scale (float): Maximum residual offset in DFL-bin units before box decoding.
-            box_detail_head (bool): Add a local-detail adapter before box regression only.
-            box_detail_levels (list[int] | tuple[int, ...] | None): Detect level indices that use box detail.
-            box_detail_scale (float): Residual scale for local-detail features.
-            box_detail_kernel (int): Average-pool kernel used for high-pass detail.
-            box_detail_gate (bool): Use a sigmoid channel gate for local-detail features.
-        """
+        """Initialize the YOLO detection layer with specified number of classes and channels."""
         super().__init__()
         self.nc = nc  # number of classes
-        self.nl = len(ch)  # number of detection layers
+        self.p1_reg_injection = bool(p1_reg_injection)
+        if self.p1_reg_injection:
+            self.nl = len(ch) - 1
+            ch_detect = ch[:-1]
+            c_p2, c_p1 = ch[0], ch[-1]
+            self.p1_downsample = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+            self.p1_local_pool = nn.AvgPool2d(kernel_size=3, stride=1, padding=1, count_include_pad=False)
+            self.p1_proj = nn.Conv2d(c_p1, c_p2, kernel_size=1, bias=False)
+            self.p1_zero_conv = nn.Conv2d(c_p2, c_p2, kernel_size=1, bias=False)
+            nn.init.zeros_(self.p1_zero_conv.weight)
+            self.p1_alpha = nn.Parameter(torch.tensor(0.1, dtype=torch.float32))
+        else:
+            self.nl = len(ch)
+            ch_detect = ch
+            
         self.reg_max = reg_max  # DFL channels
         self.no = nc + self.reg_max * 4  # number of outputs per anchor
         self.stride = torch.zeros(self.nl)  # strides computed during build
@@ -226,19 +219,19 @@ class Detect(nn.Module):
         self.dfl_residual_scale = float(dfl_residual_scale)
         self.box_detail_head = bool(box_detail_head)
         self.box_detail_levels = set(range(self.nl) if box_detail_levels is None else box_detail_levels) if self.box_detail_head else set()
-        c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(self.nc, 100))  # channels
+        c2, c3 = max((16, ch_detect[0] // 4, self.reg_max * 4)), max(ch_detect[0], min(self.nc, 100))  # channels
         self.cv2 = nn.ModuleList(
-            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch
+            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch_detect
         )
         self.box_detail = nn.ModuleList(
             BoxLocalDetail(x, box_detail_scale, box_detail_kernel, box_detail_gate)
             if i in self.box_detail_levels
             else nn.Identity()
-            for i, x in enumerate(ch)
+            for i, x in enumerate(ch_detect)
         )
-        self.cv2_residual = self.init_dfl_residual_heads(ch) if self.dfl_residual else nn.ModuleList()
+        self.cv2_residual = self.init_dfl_residual_heads(ch_detect) if self.dfl_residual else nn.ModuleList()
         self.cv3 = (
-            nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.nc, 1)) for x in ch)
+            nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.nc, 1)) for x in ch_detect)
             if self.legacy
             else nn.ModuleList(
                 nn.Sequential(
@@ -246,7 +239,7 @@ class Detect(nn.Module):
                     nn.Sequential(DWConv(c3, c3, 3), Conv(c3, c3, 1)),
                     nn.Conv2d(c3, self.nc, 1),
                 )
-                for x in ch
+                for x in ch_detect
             )
         )
         if self.cls_geometry_fuse:
@@ -429,11 +422,32 @@ class Detect(nn.Module):
         self, x: list[torch.Tensor]
     ) -> dict[str, torch.Tensor] | torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Concatenates and returns predicted bounding boxes and class probabilities."""
-        preds = self.forward_head(x, **self.one2many)
-        if self.end2end:
-            x_detach = [xi.detach() for xi in x]
-            one2one = self.forward_head(x_detach, **self.one2one)
-            preds = {"one2many": preds, "one2one": one2one}
+        if getattr(self, "p1_reg_injection", False):
+            x_p1 = x[-1]
+            x_detect = x[:-1]
+            
+            # Local subtraction detail extraction on P1
+            p1_down = self.p1_downsample(x_p1)
+            local_avg = self.p1_local_pool(p1_down)
+            L = torch.clamp(p1_down - local_avg, min=0.0)
+            
+            # Inject only into regression branch of level 0 (P2)
+            p2_reg = x_detect[0] + self.p1_alpha * self.p1_zero_conv(self.p1_proj(L))
+            box_x = [p2_reg] + [x_detect[i] for i in range(1, self.nl)]
+            cls_x = x_detect
+            
+            preds = self.forward_head(box_x, cls_x=cls_x, **self.one2many)
+            if self.end2end:
+                box_x_detach = [xi.detach() for xi in box_x]
+                cls_x_detach = [xi.detach() for xi in cls_x]
+                one2one = self.forward_head(box_x_detach, cls_x=cls_x_detach, **self.one2one)
+                preds = {"one2many": preds, "one2one": one2one}
+        else:
+            preds = self.forward_head(x, **self.one2many)
+            if self.end2end:
+                x_detach = [xi.detach() for xi in x]
+                one2one = self.forward_head(x_detach, **self.one2one)
+                preds = {"one2many": preds, "one2one": one2one}
         if self.training:
             return preds
         y = self._inference(preds["one2one"] if self.end2end else preds)
