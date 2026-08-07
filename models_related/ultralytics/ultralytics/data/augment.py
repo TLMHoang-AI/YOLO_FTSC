@@ -2998,6 +2998,49 @@ def v8_transforms(dataset, imgsz: int, hyp: IterableSimpleNamespace, stretch: bo
     )  # transforms
 
 
+class AlternatePartialClipPipeline:
+    """
+    Wrapper transform that selectively routes samples to either the standard YOLOv8 augmentation pipeline
+    or a clean alternate pipeline containing single-image resize, flip, HSV, and TargetedPartialClip.
+    """
+    def __init__(self, dataset, imgsz: int, hyp):
+        self.dataset = dataset
+        self.imgsz = imgsz
+        self.hyp = hyp
+        
+        # Standard YOLOv8 pipeline
+        self.normal_pipeline = v8_transforms(dataset, imgsz, hyp)
+        
+        # Clean alternate pipeline
+        self.letterbox = LetterBox(new_shape=(imgsz, imgsz), scaleup=True)
+        self.hsv = RandomHSV(hgain=hyp.hsv_h, sgain=hyp.hsv_s, vgain=hyp.hsv_v)
+        flip_idx = dataset.data.get("flip_idx", [])
+        self.flip_lr = RandomFlip(direction="horizontal", p=hyp.fliplr, flip_idx=flip_idx)
+        self.flip_ud = RandomFlip(direction="vertical", p=hyp.flipud, flip_idx=flip_idx)
+        self.partial_clip = TargetedPartialClip(dataset)
+        self.partial_clip.p_max = 1.0  # Apply 100% since routing probability is handled here
+        
+    def __call__(self, labels: dict) -> dict:
+        import os
+        import random
+        
+        variant = os.environ.get("YOLO_VARIANT", "")
+        if "partial_clip" not in variant:
+            return self.normal_pipeline(labels)
+            
+        # Select alternate pipeline with p = 0.1, only if sample contains targets
+        if len(labels.get("cls", [])) > 0 and random.random() < 0.1:
+            labels = self.letterbox(labels)
+            labels = self.hsv(labels)
+            labels = self.flip_lr(labels)
+            labels = self.flip_ud(labels)
+            labels = self.partial_clip(labels)
+            return labels
+        else:
+            return self.normal_pipeline(labels)
+
+
+
 # Classification augmentations -----------------------------------------------------------------------------------------
 def classify_transforms(
     size: tuple[int, int] | int = 224,
