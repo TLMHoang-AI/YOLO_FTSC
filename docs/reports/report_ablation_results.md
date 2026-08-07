@@ -78,3 +78,21 @@ Chúng tôi thực hiện đánh giá độc lập các biến thể tích hợp
 3. **Hiệu ứng phạt thưa thớt (A3)**: Thêm $L_{\text{sparse}}$ giúp giảm độ lớn trung bình của trọng số cổng tích chập (`gate_conv`) từ **0.1776 xuống 0.1427** (giảm 20%), chứng minh hàm phạt đã kiểm soát cổng kích hoạt thưa thớt hơn theo đúng thiết kế toán học.
 4. **Đề xuất thực tế**: `A1 (Unconditional Fusion)` là phương pháp trực tiếp, nhẹ nhàng nhất (chỉ tốn thêm **~1.05 MFLOPs**, rẻ hơn DBSS 150 lần) để phục hồi đặc trưng cho các vật thể nhỏ mà không làm tăng số lượng tham số hay độ trễ tính toán đáng kể.
 
+---
+
+### Phân tích Sâu: Tại sao tăng Activation của P1 nhưng mAP trung bình lại bị kéo xuống? (Chẩn đoán TP/FP trên tập Val - Seed 42)
+
+Chúng tôi thực hiện chẩn đoán số lượng **True Positives (TP)**, **False Positives (FP)**, **False Negatives (FN)** trên 788 ảnh validation để làm rõ:
+
+| Mô hình | Ground Truth | True Positives (TP) | False Positives (FP) | False Negatives (FN) | Diện tích FP trung vị (Median) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **A0: Baseline** | 661 | 508 | 88 | 153 | 369.7 px² |
+| **A1: Unconditional Fusion** | 661 | 492 | **112 (+27.2%)** | 169 | **238.0 px²** |
+| **A2: Gated Rescue (P1-GER)** | 661 | **521 (+2.5%)** | **85 (-3.4%)** | 140 | 355.7 px² |
+
+> [!IMPORTANT]
+> **Kết luận**: 
+> * **A1 (Unconditional)** làm **tăng 27.2% số lượng False Positives** do khuếch đại các tín hiệu biển tần số cao (sóng biển, bọt nước) có kích thước rất nhỏ (kích thước FP trung vị giảm xuống chỉ còn `238.0 px²`), làm giảm nghiêm trọng Precision tổng thể.
+> * **A2 (Gated Rescue - P1-GER)** giải quyết triệt để vấn đề này bằng cách chỉ kích hoạt cổng giải cứu tại những tọa độ có sự chênh lệch thông tin (discrepancy). Nhờ đó, nó vừa **cứu được thêm 13 vật thể** (TP tăng lên 521), vừa **giảm lượng FP xuống thấp hơn cả baseline** (chỉ còn 85 FP).
+
+
