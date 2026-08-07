@@ -24,7 +24,7 @@ def run_diagnostics():
     print("Using device:", device)
     
     # 1. Paths
-    dataset_yaml = "/marimo/datasets/levir_ship_yolo_seed42/dataset.yaml"
+    dataset_yaml = "/marimo/datasets/levir_ship_yolo_seed42/levir_ship.yaml"
     baseline_path = "/marimo/yolo_code/diagnostics/hf_yolov8n_p2/train/yolov8n_p2_baseline_seed42/weights/best.pt"
     a2_path = "/marimo/runs/levir_yolov8n_p2_v2_seed42/p1ger/p1ger/seed_42/weights/best.pt"
     
