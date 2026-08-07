@@ -218,6 +218,41 @@ Chúng tôi đếm thủ công số lượng **True Positives (TP)**, **False Po
 >    * Tăng số lượng True Positives lên **521** (+13 tàu được giải cứu thành công so với baseline).
 >    * Đồng thời triệt tiêu hoàn toàn nhiễu nền, giữ số lượng False Positives ở mức **85** (thậm chí sạch hơn cả baseline).
 
+---
+
+## Thiết kế nâng cấp: P1-GER v2 & P1PlainFusion (Giải quyết các hạn chế của v1)
+
+Qua phân tích và phản hồi thiết kế, phiên bản v1 tồn tại 4 vấn đề kỹ thuật chồng chéo gây mất ổn định huấn luyện (như chệch hướng ở Seed 43). Chúng tôi triển khai phiên bản nâng cấp v2 với các cải tiến sau:
+
+### 1. Khắc phục chuẩn hóa độc lập & Batch Coupling
+* **Vấn đề v1**: Chuẩn hóa min-max thực hiện trên toàn bộ chiều Batch $B \times 1 \times H \times W$ làm cho phân bố ảnh này phụ thuộc ảnh khác. Hơn nữa, việc min-max độc lập ép cả $E_1, E_2$ về $[0, 1]$ đã triệt tiêu hoàn toàn sự chênh lệch biên độ (cross-level discrepancy) thực tế giữa P1 và P2.
+* **Giải pháp v2**: Sử dụng chuẩn hóa tương đối theo từng ảnh (per-sample relative normalization) bằng cách chia cho giá trị trung bình không gian (spatial mean) đã detach:
+  $$\hat{E}_1 = \frac{E_1}{\operatorname{mean}_{HW}(E_1) + \epsilon},\quad \hat{E}_2 = \frac{E_2}{\operatorname{mean}_{HW}(E_2) + \epsilon}$$
+  Các giá trị này sau đó được clamp ở mức tối đa là $5.0$. Lúc này, $D = \operatorname{ReLU}(\hat{E}_1 - \hat{E}_2)$ mang ý nghĩa toán học chính xác: biểu thị vị trí có đặc trưng P1 mạnh gấp nhiều lần trung bình ảnh trong khi P2 lại yếu.
+
+### 2. Trả lại Evidence thô trong Evidence Extraction
+* **Vấn đề v1**: Trong chẩn đoán ban đầu, ta kết luận P1 MaxPool thô giữ evidence rất tốt. Nhưng trong v1, ta lại thực hiện phép chiếu kênh ngẫu nhiên $R = \text{Conv}_{1\times1}(p1\_down)$ trước rồi mới tính $E_1$ trên $R$. Việc này làm nhiễu thông tin cục bộ ngay từ đầu training khi Conv1x1 chưa học xong.
+* **Giải pháp v2**: Tính trực tiếp evidence $E_1$ trên đặc trưng MaxPool thô $p1\_down$:
+  $$E_1 = \operatorname{mean}_C |p1\_down - \operatorname{AvgPool}_{3\times3}(p1\_down)|$$
+  Phép chiếu kênh qua `proj` Conv1x1 chỉ chịu trách nhiệm chuyển đổi kênh để cộng vào P2, hoàn toàn tách biệt khỏi nhánh tính cổng $G$.
+
+### 3. Sửa đổi Topology rò rỉ đặc trưng (Topology Leakage)
+* **Vấn đề v1**: Cấu hình YAML v1 đặt P1-GER tại Layer 19 và đầu ra của nó đi trực tiếp vào Layer 20 (stride-2 Conv chuyển tiếp xuống P3/P4/P5). Điều này làm rò rỉ nhiễu hoặc đặc trưng giải cứu cục bộ xuống toàn bộ kim tự tháp FPN phía sau.
+* **Giải pháp v2**: Thiết lập nhánh giải cứu song song (isolated P2 Detect-only topology). Đặc trưng giải cứu chỉ đi duy nhất vào Detection Head mức P2, còn luồng downsampling bottom-up tiếp theo vẫn sử dụng đặc trưng P2 gốc:
+  ```text
+  raw P2 (Layer 18) ───────────────→ Conv stride-2 (Layer 20) ──→ P3/P4/P5
+      │
+      └──→ P1GER (Layer 19) ───────→ Detect Head (Layer 29)
+  ```
+
+### 4. Cải tiến Spatial Alignment & Trạng thái đóng cổng ban đầu
+* **Căn chỉnh không gian**: Thay thế MaxPool 2x2 bằng MaxPool 3x3 (stride=2, padding=1) để grid center được căn chỉnh tốt hơn với luồng Conv stride-2 của backbone, giảm lệch pha ở mức sub-pixel (hỗ trợ AP75).
+* **Đóng cổng ban đầu (Closed-ish Gate)**: Khởi tạo trọng số `gate_conv` bằng 0 và bias bằng `-2.0`, giúp giá trị cổng ban đầu $G \approx 0.12$ (tránh hiện tượng cổng mở ngẫu nhiên ~50% gây nhiễu loạn phân phối neck ở các epoch đầu tiên).
+
+### 5. Khôi phục Pure Control cho A1 (P1PlainFusion)
+Chúng tôi thiết lập lại lớp `P1PlainFusion` cho nhánh A1 để đo đạc chính xác hiệu quả của phép cộng thô P1 MaxPool, loại bỏ hoàn toàn các toán tử subtraction nhiễu loạn trong lớp `P1FusionLocalDetail` cũ.
+
+
 
 
 
