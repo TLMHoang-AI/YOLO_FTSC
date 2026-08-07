@@ -809,6 +809,7 @@ class v8DetectionLoss:
         """Initialize v8DetectionLoss with model parameters and task-aligned assignment settings."""
         device = next(model.parameters()).device  # get model device
         h = model.args  # hyperparameters
+        self.model = model
 
         m = model.model[-1]  # Detect() module
         self.bce = nn.BCEWithLogitsLoss(reduction="none")
@@ -1974,6 +1975,58 @@ class v8DetectionLoss:
         """Calculate detection loss using assigned targets."""
         batch_size = preds["boxes"].shape[0]
         loss, loss_detach = self.get_assigned_targets_and_loss(preds, batch)[1:]
+        
+        # Calculate tiny-GT restraint loss for P1DRR modules
+        restraint_loss = torch.tensor(0.0, device=self.device)
+        drr_modules = [m for m in self.model.modules() if m.__class__.__name__ == "P1DRR"]
+        
+        if len(drr_modules) > 0 and "bboxes" in batch and len(batch["bboxes"]) > 0:
+            for m in drr_modules:
+                if m.gate_tensor is not None:
+                    G = m.gate_tensor  # (B, 1, H, W)
+                    B, _, H, W = G.shape
+                    
+                    # Create binary target mask for tiny objects (area < 400 px^2)
+                    M_gt = torch.zeros((B, 1, H, W), device=self.device, dtype=torch.float32)
+                    
+                    for b in range(B):
+                        img_boxes = batch["bboxes"][batch["batch_idx"] == b]
+                        for box in img_boxes:
+                            xc, yc, w, h = box
+                            w_px = w * 512.0
+                            h_px = h * 512.0
+                            area = w_px * h_px
+                            
+                            if 0.0 < area < 400.0:
+                                # Convert xywh to xyxy
+                                x1 = xc - w / 2.0
+                                y1 = yc - h / 2.0
+                                x2 = xc + w / 2.0
+                                y2 = yc + h / 2.0
+                                
+                                # Map to grid coordinates
+                                gx1 = int(torch.clamp(x1 * W, min=0.0, max=W - 1).item())
+                                gy1 = int(torch.clamp(y1 * H, min=0.0, max=H - 1).item())
+                                gx2 = int(torch.clamp(x2 * W, min=0.0, max=W - 1).item())
+                                gy2 = int(torch.clamp(y2 * H, min=0.0, max=H - 1).item())
+                                
+                                # Dilate by 1 cell
+                                gx1_ex = max(0, gx1 - 1)
+                                gy1_ex = max(0, gy1 - 1)
+                                gx2_ex = min(W - 1, gx2 + 1)
+                                gy2_ex = min(H - 1, gy2 + 1)
+                                
+                                M_gt[b, 0, gy1_ex:gy2_ex+1, gx1_ex:gx2_ex+1] = 1.0
+                                
+                    outside_mask = 1.0 - M_gt
+                    loss_val = torch.sum(outside_mask * G) / (torch.sum(outside_mask) + 1e-6)
+                    restraint_loss = restraint_loss + loss_val
+            
+            if restraint_loss > 0:
+                lambda_r = 0.01
+                loss[1] = loss[1] + lambda_r * restraint_loss
+                loss_detach = loss_detach + lambda_r * restraint_loss
+                
         return loss * batch_size, loss_detach
 
 

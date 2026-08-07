@@ -4355,4 +4355,62 @@ class P1GER(nn.Module):
         return x_p2 + G * R_out
 
 
+class P1DRR(nn.Module):
+    """
+    P1-Detail Restrained Rescue (P1-DRR) Module.
+    Extracts positive details before channel mixing, predicts gate using compressed semantics
+    and detail strength, and keeps track of gate activations during training.
+    """
+    def __init__(self, c_in: list[int], kernel_size: int = 3) -> None:
+        super().__init__()
+        c_p2, c_p1 = c_in[0], c_in[1]
+        self.downsample = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.local_pool = nn.AvgPool2d(kernel_size=kernel_size, stride=1, padding=kernel_size//2, count_include_pad=False)
+        
+        # 1. Detail Projection (from c_p1 to c_p2)
+        if c_p2 != c_p1:
+            self.proj = nn.Conv2d(c_p1, c_p2, kernel_size=1, bias=False)
+        else:
+            self.proj = nn.Identity()
+            
+        # Zero-initialized final projection to ensure exact baseline identity at start
+        self.zero_conv = nn.Conv2d(c_p2, c_p2, kernel_size=1, bias=False)
+        nn.init.zeros_(self.zero_conv.weight)
+        
+        # 2. Gate Predictor (phi)
+        self.phi = nn.Conv2d(c_p2, 8, kernel_size=1, bias=False) # Compress P2 semantics to 8 channels
+        self.gate_conv = nn.Conv2d(8 + 1, 1, kernel_size=3, padding=1) # 8 channels (S) + 1 channel (e_L)
+        
+        # Initialize gate bias to -2.0 (G ≈ 0.12 initially)
+        nn.init.zeros_(self.gate_conv.weight)
+        nn.init.constant_(self.gate_conv.bias, -2.0)
+        
+        # Track gate tensor for loss calculation
+        self.gate_tensor = None
+        
+    def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
+        x_p2, x_p1 = x[0], x[1]
+        
+        # 1. Extract raw details before channel mixing
+        p1_down = self.downsample(x_p1)
+        local_avg = self.local_pool(p1_down)
+        L = torch.clamp(p1_down - local_avg, min=0.0) # (B, c_p1, H, W)
+        
+        # 2. Project details
+        R = self.zero_conv(self.proj(L)) # (B, c_p2, H, W)
+        
+        # 3. Predict gate combining P2 semantics (S) and detail strength (e_L)
+        S = self.phi(x_p2)
+        e_L = torch.mean(L, dim=1, keepdim=True)
+        
+        gate_input = torch.cat([S, e_L], dim=1)
+        G = torch.sigmoid(self.gate_conv(gate_input))
+        
+        if self.training:
+            self.gate_tensor = G
+            
+        return x_p2 + G * R
+
+
+
 
