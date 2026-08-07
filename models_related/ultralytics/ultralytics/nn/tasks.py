@@ -77,6 +77,7 @@ from ultralytics.nn.modules import (
     LRPCHead,
     LocalDetailRepC2f,
     P1FusionLocalDetail,
+    P1GER,
     M3NATFuse,
     NATBlock,
     Pose,
@@ -2301,6 +2302,9 @@ def parse_model(d, ch, verbose=True):
             c2 = ch[f[0]]
             args = [[ch[x] for x in f], *args]
         elif m is P1FusionLocalDetail:
+            c2 = ch[f[0]]
+            args = [[ch[x] for x in f], *args]
+        elif m is P1GER:
             c2 = ch[f[0]]
             args = [[ch[x] for x in f], *args]
         elif m is EnSimAM:
