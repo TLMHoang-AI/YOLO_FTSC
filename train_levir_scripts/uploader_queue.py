@@ -13,7 +13,13 @@ import train_all_levir_yolov8n_p2_routing as workflow
 # Token verification
 token = os.environ.get("HF_TOKEN")
 if not token:
-    print("HF_TOKEN not found in environment!")
+    token_file = "/marimo/runs/levir_yolov8n_p2_topdown_seed42/.hf_token"
+    if os.path.exists(token_file):
+        with open(token_file, "r") as f:
+            token = f.read().strip()
+
+if not token:
+    print("HF_TOKEN not found in environment or fallback file!")
     sys.exit(1)
 
 from huggingface_hub import HfApi
