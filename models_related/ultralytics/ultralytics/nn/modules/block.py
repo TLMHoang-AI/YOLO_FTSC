@@ -4243,3 +4243,32 @@ class RealNVP(nn.Module):
             self.float()
         z, log_det = self.backward_p(x)
         return self.prior.log_prob(z) + log_det
+
+
+class P1FusionLocalDetail(nn.Module):
+    """
+    Downsamples P1 features (Layer 0) and fuses them with P2 features (Layer 18)
+    using MaxPool2d and Local Subtraction (high-pass filtering).
+    """
+    def __init__(self, c_in: list[int], kernel_size: int = 3, beta: float = 0.5) -> None:
+        super().__init__()
+        c_p2, c_p1 = c_in[0], c_in[1]
+        self.downsample = nn.MaxPool2d(kernel_size=2, stride=2)
+        
+        # 1x1 projection Conv if channels mismatch
+        if c_p2 != c_p1:
+            self.proj = nn.Conv2d(c_p1, c_p2, kernel_size=1, bias=False)
+        else:
+            self.proj = nn.Identity()
+            
+        self.local_pool = nn.AvgPool2d(kernel_size=kernel_size, stride=1, padding=kernel_size//2)
+        self.beta = nn.Parameter(torch.tensor(beta)) # Learnable scale factor
+        
+    def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
+        x_p2, x_p1 = x[0], x[1]
+        p1_down = self.downsample(x_p1)
+        p1_proj = self.proj(p1_down)
+        p1_local_avg = self.local_pool(p1_proj)
+        p1_enhanced = torch.clamp(p1_proj - p1_local_avg, min=0.0)
+        return x_p2 + self.beta * p1_enhanced
+

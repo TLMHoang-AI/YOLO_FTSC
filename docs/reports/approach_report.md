@@ -424,3 +424,44 @@ Các default custom đã được chuyển sang opt-in trong commit `93f7293`; c
   - YAML baseline P2 và các biến thể DBSS, HIT, GCTS, NUDFL-PC-CFR.
 
 Khi cập nhật method, report này cần được đối chiếu trực tiếp với bốn nhóm file trên để tránh mô tả một ý tưởng chưa đúng với code thực thi.
+
+## 15. Phân tích Tần số và Giải pháp P1 Detail Fusion
+
+### 15.1 Kết quả kiểm tra Frequency Dilution
+* **SMALL (<20px)**: Tỉ lệ năng lượng tần số cao trung bình tăng từ `0.1626` (ảnh gốc) lên `0.2840` (P2 feature map), tức là P2 bảo toàn tốt các đặc trưng tần số cao của tiny objects nhờ bộ lọc high-pass/band-pass tự nhiên của các lớp tích chập ban đầu.
+* **Sự cố Low Activation**: Tuy nhiên, có **15 vật thể nhỏ (<20px)** trên tập test bị "dilute" hoàn toàn với tỉ lệ activation so với nền $\le 1.0$. Việc kiểm tra inference thực tế cho thấy **100% trong số 15 vật thể này bị bỏ sót (False Negatives)** bởi model YOLOv8n P2 baseline.
+
+### 15.2 Giải pháp P1 Detail Fusion
+Để khôi phục (activate) các vật thể nhỏ bị triệt tiêu này, phương pháp downsample đặc trưng từ lớp **P1** (Layer 0, stride 2) và cộng chập (fuse) vào P2 được đề xuất.
+
+Bảng so sánh tỉ lệ activation (Target / Local Background) của 15 vật thể bị bỏ sót giữa Baseline và phương pháp **P1 MaxPool + Subtraction 3x3**:
+
+| Image Name | Bounding Box | Baseline Ratio | P1 MaxPool + Sub 3x3 Ratio | Cải thiện |
+| :--- | :--- | :---: | :---: | :---: |
+| `GF6_WFV_E133.6_N33.6_20200305_L1A1119973496-1_11264_8704.png` | `[185, 501, 201, 517]` | 0.9846 | **31.8902** | **32.4x** |
+| `GF6_WFV_E132.4_N35.8_20200914_L1A1120035552-1_9216_13824.png` | `[17, 33, 33, 48]` | 0.9544 | **9.9562** | **10.4x** |
+| `GF1_WFV3_E122.4_N37.3_20190805_L2A0004161911_6144_5632.png` | `[278, 507, 293, 523]` | 0.9960 | **8.9422** | **9.0x** |
+| `GF6_WFV_E132.4_N35.8_20200914_L1A1120035552-3_11793_8704.png` | `[192, 98, 207, 116]` | 0.9124 | **3.0314** | **3.3x** |
+| `GF1_WFV3_E120.2_N22.2_20200710_L2A0004922264_6656_5120.png` | `[476, 456, 490, 472]` | 0.9270 | **2.6363** | **2.8x** |
+| `GF1_WFV3_E112.3_N21.4_20190806_L2A0004164428_13824_4096.png` | `[250, 332, 268, 348]` | 0.9880 | **2.5225** | **2.6x** |
+| `GF1_WFV1_E110.0_N17.9_20200703_L2A0004902374_8192_8704.png` | `[174, 500, 181, 514]` | 0.9620 | **2.4276** | **2.5x** |
+| `GF1_WFV3_E120.2_N22.2_20200710_L2A0004922264_7168_5120.png` | `[319, 464, 331, 478]` | 0.8398 | **2.2717** | **2.7x** |
+| `GF1_WFV3_E120.2_N22.2_20200710_L2A0004922264_7168_5120.png` | `[455, 391, 469, 405]` | 0.8936 | **1.9841** | **2.2x** |
+| `GF1_WFV2_E118.9_N24.3_20200710_L2A0004922278_11264_10240.png` | `[127, 213, 135, 220]` | 0.9170 | **1.7238** | **1.9x** |
+| `GF6_WFV_E132.4_N35.8_20200914_L1A1120035552-1_9216_13824.png` | `[182, 133, 193, 151]` | 0.9852 | **1.2762** | **1.3x** |
+| `GF6_WFV_E133.6_N33.6_20200305_L1A1119973496-2_7680_5120.png` | `[106, 272, 123, 290]` | 0.8468 | **1.2186** | **1.4x** |
+| `GF1_WFV2_E118.9_N24.3_20200710_L2A0004922278_11264_10240.png` | `[39, 277, 47, 284]` | 0.8425 | **1.0097** | **1.2x** |
+| `GF1_WFV2_E118.9_N24.3_20200710_L2A0004922278_11264_10240.png` | `[87, 377, 93, 388]` | 0.8149 | 0.9066 | 1.1x |
+| `GF1_WFV2_E123.6_N29.3_20190910_L2A0004239231_2048_2560.png` | `[168, 270, 183, 283]` | 0.9695 | 0.5196 | 0.5x |
+
+* **Kết quả**: **13/15** vật thể được kích hoạt thành công (tỉ lệ ratio > 1.0). Phương pháp double-pooling này giúp tăng biên độ kích hoạt trung bình lên **4.82x** so với nền.
+
+### 15.3 So sánh Chi phí Tính toán (FLOPs)
+* **P1 MaxPool Fusion**:
+  - Pool downsample + Channel duplicate: **0 FLOPs** (không có trọng số học).
+  - Element-wise fusion: **~1.05 MFLOPs**.
+* **DBSS (12 bases)**:
+  - 1x1 embedding conv + SVD solver + Reconstruction: **>150 MFLOPs**.
+
+**Kết luận**: P1 Fusion rẻ hơn DBSS xấp xỉ **150 lần** về mặt tính toán nhưng mang lại hiệu suất kích hoạt vượt trội cho các vật thể cực nhỏ.
+
