@@ -181,8 +181,10 @@ Dựa trên các phân tích trên, chúng tôi thiết kế và tích hợp mod
 | Cấu hình | Seed 42 | Seed 43 | Seed 44 | Trung bình (mAP50) | Recall (Mean) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **A0: YOLOv8n-P2 Baseline** | 0.7654 | 0.8033 | 0.7907 | **0.7865** | **0.7019** |
-| **A1: P1 Unconditional Fusion** | 0.7266 | 0.7790 | 0.7963 | 0.7673 | 0.6942 |
-| **A2: Gated Rescue (P1-GER)** | 0.8022 | 0.7060 | 0.7847 | 0.7643 | 0.6912 |
+| **A1: P1 Unconditional Fusion (v1)** | 0.7266 | 0.7790 | 0.7963 | 0.7673 | 0.6942 |
+| **A1_v2: P1 Plain Fusion (isolated)** | 0.7782 | *N/A* | *N/A* | 0.7782 | 0.7322 |
+| **A2: Gated Rescue (P1-GER v1)** | 0.8022 | 0.7060 | 0.7847 | 0.7643 | 0.6912 |
+| **A2_v2: Gated Rescue (P1-GER v2)** | 0.6988 | *N/A* | *N/A* | 0.6988 | 0.6430 |
 | **A3: Gated + Sparse Gate (1e-3)** | 0.7880 | 0.7155 | *N/A* | 0.7518 | 0.6883 |
 
 ### Kết quả trên tập Kiểm thử (Test Split):
@@ -190,8 +192,10 @@ Dựa trên các phân tích trên, chúng tôi thiết kế và tích hợp mod
 | Cấu hình | Seed 42 | Seed 43 | Seed 44 | Trung bình (mAP50) | Recall (Mean) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **A0: YOLOv8n-P2 Baseline** | 0.7453 | 0.7591 | 0.7495 | **0.7513** | **0.6849** |
-| **A1: P1 Unconditional Fusion** | 0.6988 | 0.7489 | 0.7776 | 0.7418 | 0.6745 |
-| **A2: Gated Rescue (P1-GER)** | 0.7496 | 0.6479 | 0.7463 | 0.7146 | 0.6769 |
+| **A1: P1 Unconditional Fusion (v1)** | 0.6988 | 0.7489 | 0.7776 | 0.7418 | 0.6745 |
+| **A1_v2: P1 Plain Fusion (isolated)** | 0.7263 | *N/A* | *N/A* | 0.7263 | 0.7055 |
+| **A2: Gated Rescue (P1-GER v1)** | 0.7496 | 0.6479 | 0.7463 | 0.7146 | 0.6769 |
+| **A2_v2: Gated Rescue (P1-GER v2)** | 0.6805 | *N/A* | *N/A* | 0.6805 | 0.6192 |
 | **A3: Gated + Sparse Gate (1e-3)** | 0.7371 | 0.6757 | *N/A* | 0.7064 | 0.6550 |
 
 ### Kết luận Khoa học:
