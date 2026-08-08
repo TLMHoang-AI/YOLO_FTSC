@@ -329,6 +329,16 @@ Module `P1DRR` được nâng cấp từ những bài học của `P1-GER` nhằ
 
 ### Kết quả Thực nghiệm FPN-Only & P1-DRR tại NMS IoU = 0.50 (Seed 42):
 
+| Cấu hình | Epochs | Tham số (Params) | GFLOPs (512x512) | Val mAP50 | Val Recall | Test mAP50 | Test mAP75 | Test Recall |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **A0_fpn: FPN-Only Baseline** | 100 | 1.78M | 6.34 | 0.7867 | 0.7238 | 0.7553 | 0.0923 | 0.6940 |
+| **A1_200: FPN-Only Plain Fusion** | 200 | 1.78M | 6.36 | 0.8129 | 0.7610 | 0.7480 | 0.0846 | 0.7486 |
+| **A2_200: FPN-Only P1-GER** | 200 | 1.78M | 6.40 | 0.8252 | 0.7806 | 0.7875 | 0.0916 | 0.7476 |
+| **A3: Regression-Only Detail Injection** | 100 | 1.89M | 14.73 | 0.8314 | 0.7686 | 0.7751 | 0.1078 | 0.7213 |
+| **A4: P1-DRR + Alternate Partial Clip** | 100 | 1.78M | 6.40 | 0.8240 | 0.7670 | 0.7616 | 0.1145 | 0.7356 |
+| **A5: P1-DRR + Old Partial Clip (post-Mosaic)** | 100 | 1.78M | 6.40 | 0.7870 | 0.7216 | 0.7122 | 0.0955 | 0.6471 |
+| **A2_500: FPN-Only P1-GER** | 381 | 1.78M | 6.40 | 0.7996 | 0.7536 | 0.7094 | 0.0868 | 0.7313 |
+
 | Cấu hình | Epochs | Tham số (Params) | GFLOPs (512x512) | Val mAP50 | Val Recall | Test mAP50 | Test Recall |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **A0_fpn: FPN-Only Baseline** | 100 | 1.78M | 6.34 | 0.7867 | 0.7238 | 0.7553 | 0.6940 |
