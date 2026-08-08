@@ -304,6 +304,7 @@ Module `P1DRR` được nâng cấp từ những bài học của `P1-GER` nhằ
 | **A2: FPN-Only P1-DRR** | 100 | 1.78M (53%) | 6.40 | **0.7957 (+4.4%)** | **0.7322 (+7.7%)** | **0.7469 (+2.5%)** | **0.6782 (+4.1%)** |
 | **A3: Regression-Only Detail Injection** | 100 | 1.89M (56%) | 14.73 | 0.7908 (+3.9%) | 0.6929 (+3.8%) | 0.7437 (+2.2%) | 0.6638 (+2.7%) |
 | **A4: P1-DRR + Alternate Partial Clip** | 100 | 1.78M (53%) | 6.40 | 0.7793 (+2.8%) | 0.7156 (+6.0%) | 0.7195 (-0.2%) | 0.6707 (+3.4%) |
+| **A5: P1-DRR + Old Partial Clip (post-Mosaic)** | 100 | 1.78M (53%) | 6.40 | 0.7467 (-0.5%) | 0.6652 (+1.0%) | 0.6745 (-4.7%) | 0.5948 (-4.2%) |
 | **A2_200: FPN-Only P1-GER** | **200** | 1.78M (53%) | 6.40 | **0.8046 (+5.3%)** | **0.7326 (+7.7%)** | **0.7632 (+4.2%)** | **0.6882 (+5.1%)** |
 | | **500** | 1.78M (53%) | 6.40 | 0.7911 (+4.0%) | 0.7262 (+7.1%) | 0.7096 (-1.2%) | 0.6796 (+4.3%) |
 
@@ -315,9 +316,9 @@ Module `P1DRR` được nâng cấp từ những bài học của `P1-GER` nhằ
 2. **Hiệu quả của Regression-Only Detail Injection (A3)**:
    * Bằng cách chỉ đưa chi tiết P1 vào nhánh regression (xác định bounding box) và giữ nguyên đặc trưng semantic P2 sạch cho classification, mô hình đạt Test mAP50 rất cao (**0.7437**, tăng **+2.24%** so với baseline FPN-only).
    * Đặc biệt, Precision trên Test set đạt **0.7698** (cao nhất trong các cấu hình fusion), xác nhận giả thuyết rằng việc cô lập nhiễu tần số cao của P1 khỏi nhánh classification giúp triệt tiêu triệt để các False Positives do sóng biển/bọt nước gây ra.
-3. **Ảnh hưởng của Alternate Partial Clip Pipeline (A4)**:
-   * Việc tách Targeted Partial Clip ra khỏi pipeline Mosaic (để chạy độc lập trên ảnh đơn) giúp mô hình cải thiện đáng kể Recall (đạt **0.7156** ở Val và **0.6707** ở Test).
-   * Tuy nhiên, sự gia tăng của các mẫu biên cắt một phần hoạt động như một bộ điều hòa (regularizer) mạnh, khiến Test mAP50 giảm nhẹ về **0.7195** trên seed này.
+3. **Ảnh hưởng và Tác hại của Cấu hình Partial Clip**:
+   * **Old Partial Clip (A5 - chạy đè lên Mosaic)**: Đưa kết quả tệ nhất toàn bộ thí nghiệm (Test mAP50 giảm mạnh còn **0.6745** và Recall giảm còn **0.5948**). Điều này chứng minh việc thực hiện xén ngẫu nhiên (TargetedPartialClip) trực tiếp lên ảnh ghép Mosaic đã làm biến dạng nặng nề hình học vật thể và bối cảnh (context), phá vỡ đặc trưng của các neo tàu nhỏ.
+   * **Alternate Partial Clip (A4 - nhánh huấn luyện đơn độc lập)**: Bằng cách tách Targeted Partial Clip ra khỏi pipeline Mosaic (chỉ chạy trên ảnh đơn của nhánh augmentation độc lập), mô hình được bảo vệ hình học rất tốt, giúp cải thiện đáng kể Recall (đạt **0.7156** ở Val và **0.6707** ở Test). Tuy nhiên, các ảnh xén hoạt động như một bộ điều hòa mạnh, làm giảm nhẹ Test mAP50 trên seed này về **0.7195**.
 4. **Hiệu năng và Giới hạn khi kéo dài Epochs (200 & 500 Epochs)**:
    * Bản chạy **200 Epochs (A2_200)** mang lại hiệu năng cao nhất toàn bộ thí nghiệm (**Test mAP50 = 0.7632**, **Test Recall = 0.6882**), cho thấy mô hình hội tụ sâu hơn và trơn tru.
    * Khi kéo dài tiếp lên **500 Epochs (A2_500)** bằng cách resume với batch size lớn (batch=32) và reset LR/scheduler, mô hình đã bị dừng sớm bởi cơ chế EarlyStopping ở epoch 181 của lượt resume (tổng 381 epochs thực tế) do không cải thiện thêm độ chính xác trên Val set. Đồng thời, do thay đổi hyperparameter đột ngột (từ batch 8 lên 32) và kéo dài quá mức, mô hình có xu hướng bị quá khớp (overfitting) khiến Test mAP50 giảm về **0.7096**. Điều này khẳng định 200 epochs là điểm hội tụ tối ưu nhất cho cấu hình mạng FPN-Only gọn nhẹ này.
