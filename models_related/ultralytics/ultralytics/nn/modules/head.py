@@ -2389,10 +2389,15 @@ class SemanticSegment(nn.Module):
 class DetectClsAttention(Detect):
     """Detect head with class-specific attention at P2 (level 0)."""
 
-    def __init__(self, nc=80, reg_max=16, end2end=False, ch=(), attn_type="cbam", **kwargs) -> None:
-        super().__init__(nc=nc, reg_max=reg_max, end2end=end2end, ch=ch, **kwargs)
-        self.attn_type = str(attn_type).lower()
-        c_p2 = ch[0]
+    def __init__(self, *args, **kwargs) -> None:
+        attn_type = kwargs.pop("attn_type", None)
+        if attn_type is None and len(args) > 21:
+            attn_type = args[-1]
+            args = args[:-1]
+            
+        super().__init__(*args, **kwargs)
+        self.attn_type = str(attn_type or "cbam").lower()
+        c_p2 = self.cv2[0][0].conv.in_channels
         if self.attn_type == "cbam":
             from .block import CBAM
             self.attn = CBAM(c_p2)
