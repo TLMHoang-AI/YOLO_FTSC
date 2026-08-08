@@ -24,6 +24,7 @@ __all__ = (
     "OBB",
     "Classify",
     "Detect",
+    "DetectClsAttention",
     "P3NUDFLDetect",
     "P2NUDFLDetect",
     "Pose",
@@ -2383,3 +2384,33 @@ class SemanticSegment(nn.Module):
         if self.export:
             return F.interpolate(logits, scale_factor=8, mode="bilinear", align_corners=False)
         return logits
+
+
+class DetectClsAttention(Detect):
+    """Detect head with class-specific attention at P2 (level 0)."""
+
+    def __init__(self, nc=80, reg_max=16, end2end=False, ch=(), attn_type="cbam", **kwargs) -> None:
+        super().__init__(nc=nc, reg_max=reg_max, end2end=end2end, ch=ch, **kwargs)
+        self.attn_type = str(attn_type).lower()
+        c_p2 = ch[0]
+        if self.attn_type == "cbam":
+            from .block import CBAM
+            self.attn = CBAM(c_p2)
+        elif self.attn_type == "kvca":
+            from .block import KVCompressedTransformerEncoder
+            self.attn = KVCompressedTransformerEncoder(c_p2, c_p2, num_heads=4, sr_ratio=8, mode="dwconv")
+        else:
+            raise ValueError(f"Unsupported attn_type: {self.attn_type}")
+
+    def forward(self, x):
+        """Forward pass applying attention only to classification branch of level 0 (P2)."""
+        cls_x = [self.attn(x[0])] + [x[i] for i in range(1, self.nl)]
+        
+        preds = self.forward_head(x, cls_x=cls_x, **self.one2many)
+        if self.end2end:
+            x_detach = [xi.detach() for xi in x]
+            cls_x_detach = [self.attn(x_detach[0])] + [x_detach[i] for i in range(1, self.nl)]
+            one2one = self.forward_head(x_detach, cls_x=cls_x_detach, **self.one2one)
+            preds = {"one2many": preds, "one2one": one2one}
+        return preds
+

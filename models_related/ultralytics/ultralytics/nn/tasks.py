@@ -60,6 +60,7 @@ from ultralytics.nn.modules import (
     Conv2,
     ConvTranspose,
     Detect,
+    DetectClsAttention,
     P2NUDFLDetect,
     P3NUDFLDetect,
     DWConv,
@@ -2337,6 +2338,7 @@ def parse_model(d, ch, verbose=True):
         elif m in frozenset(
             {
                 Detect,
+                DetectClsAttention,
                 P2NUDFLDetect,
                 P3NUDFLDetect,
                 WorldDetect,
@@ -2351,8 +2353,10 @@ def parse_model(d, ch, verbose=True):
                 OBB26,
             }
         ):
-            args.extend([reg_max, end2end, [ch[x] for x in f]])
-            if m in {Detect, P2NUDFLDetect, P3NUDFLDetect}:
+            if m is DetectClsAttention:
+                attn_type = args[1] if len(args) > 1 else "cbam"
+                args = [args[0]]
+                args.extend([reg_max, end2end, [ch[x] for x in f]])
                 args.extend(
                     [
                         cls_geometry_fuse,
@@ -2374,10 +2378,36 @@ def parse_model(d, ch, verbose=True):
                         p1_reg_injection,
                     ]
                 )
+                args.append(attn_type)
+            else:
+                args.extend([reg_max, end2end, [ch[x] for x in f]])
+                if m in {Detect, P2NUDFLDetect, P3NUDFLDetect}:
+                    args.extend(
+                        [
+                            cls_geometry_fuse,
+                            cls_geometry_mode,
+                            cls_geometry_detach,
+                            cls_deform_geometry,
+                            quality_head,
+                            quality_score_mode,
+                            quality_box_features,
+                            quality_box_detach,
+                            dfl_residual,
+                            dfl_residual_scale,
+                            box_detail_head,
+                            box_detail_levels,
+                            box_detail_scale,
+                            box_detail_kernel,
+                            box_detail_gate,
+                            p2_offset_regression,
+                            p1_reg_injection,
+                        ]
+                    )
             if m is Segment or m is YOLOESegment or m is Segment26 or m is YOLOESegment26:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
             if m in {
                 Detect,
+                DetectClsAttention,
                 P2NUDFLDetect,
                 P3NUDFLDetect,
                 YOLOEDetect,

@@ -116,6 +116,7 @@ from .head import (
     OBB26,
     Classify,
     Detect,
+    DetectClsAttention,
     P2NUDFLDetect,
     P3NUDFLDetect,
     LRPCHead,
