@@ -17,10 +17,10 @@ sys.path.insert(0, str(ROOT / "train_levir_scripts"))
 import train_all_levir_yolov8n_p2_routing as workflow
 
 def ensure_dataset_split(seed):
-    data_yaml = ROOT / f"datasets/levir_ship_yolo_seed{seed}/levir_ship.yaml"
+    data_yaml = Path(f"/marimo/datasets/levir_ship_yolo_seed{seed}/levir_ship.yaml")
     if not data_yaml.exists():
         print(f"Generating split for seed {seed}...")
-        workflow.create_fixed_split(ROOT / "LevirShipData", data_yaml.parent, seed)
+        workflow.create_fixed_split(Path("/marimo/yolo_code/LevirShipData"), data_yaml.parent, seed)
     return data_yaml
 
 # Map configuration records
