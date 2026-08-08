@@ -293,16 +293,19 @@ Module `P1DRR` được nâng cấp từ những bài học của `P1-GER` nhằ
 
 ---
 
-### Kết quả Thực nghiệm FPN-Only & P1-DRR (100 Epochs, Seed 42):
+### Kết quả Thực nghiệm FPN-Only & P1-DRR (Seed 42):
 
-| Cấu hình | Tham số Neck | Val mAP50 | Val Recall | Test mAP50 | Test Recall |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **A0: Full-Neck Baseline** | 3.35M (100%) | 0.7654 | 0.7019 | 0.7453 | 0.6681 |
-| **A0_fpn: FPN-Only Baseline** | 1.78M (53%) | 0.7514 | 0.6551 | 0.7213 | 0.6365 |
-| **A1: FPN-Only Plain Fusion** | 1.78M (53%) | 0.7958 (+4.4%) | 0.7272 (+7.2%) | 0.7429 (+2.1%) | 0.6671 (+3.1%) |
-| **A2: FPN-Only P1-DRR** | 1.78M (53%) | **0.7957 (+4.4%)** | **0.7322 (+7.7%)** | **0.7469 (+2.5%)** | **0.6782 (+4.1%)** |
-| **A3: Regression-Only Detail Injection** | 1.78M (53%) | 0.7908 (+3.9%) | 0.6929 (+3.8%) | 0.7437 (+2.2%) | 0.6638 (+2.7%) |
-| **A4: P1-DRR + Alternate Partial Clip** | 1.78M (53%) | 0.7793 (+2.8%) | 0.7156 (+6.0%) | 0.7195 (-0.2%) | 0.6707 (+3.4%) |
+| Cấu hình | Epochs | Tham số Neck | Val mAP50 | Val Recall | Test mAP50 | Test Recall |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **A0: Full-Neck Baseline** | 100 | 3.35M (100%) | 0.7654 | 0.7019 | 0.7453 | 0.6681 |
+| **A0_fpn: FPN-Only Baseline** | 100 | 1.78M (53%) | 0.7514 | 0.6551 | 0.7213 | 0.6365 |
+| **A1: FPN-Only Plain Fusion** | 100 | 1.78M (53%) | 0.7958 (+4.4%) | 0.7272 (+7.2%) | 0.7429 (+2.1%) | 0.6671 (+3.1%) |
+| | **200** | 1.78M (53%) | 0.7910 | 0.7095 | 0.7419 | **0.7032 (+6.6%)** |
+| **A2: FPN-Only P1-DRR** | 100 | 1.78M (53%) | **0.7957 (+4.4%)** | **0.7322 (+7.7%)** | **0.7469 (+2.5%)** | **0.6782 (+4.1%)** |
+| **A3: Regression-Only Detail Injection** | 100 | 1.78M (53%) | 0.7908 (+3.9%) | 0.6929 (+3.8%) | 0.7437 (+2.2%) | 0.6638 (+2.7%) |
+| **A4: P1-DRR + Alternate Partial Clip** | 100 | 1.78M (53%) | 0.7793 (+2.8%) | 0.7156 (+6.0%) | 0.7195 (-0.2%) | 0.6707 (+3.4%) |
+| **A2_200: FPN-Only P1-GER** | **200** | 1.78M (53%) | **0.8046 (+5.3%)** | **0.7326 (+7.7%)** | **0.7632 (+4.2%)** | **0.6882 (+5.1%)** |
+
 
 ### Kết luận Thực nghiệm:
 1. **Minh chứng Ablation cực kỳ sạch**: So sánh trực tiếp giữa **A0_fpn (FPN-Only Baseline)** và các cấu hình giải cứu chi tiết cho thấy hiệu quả vượt trội tuyệt đối:
