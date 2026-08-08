@@ -150,8 +150,18 @@ for idx, (family, config, repo, file_path, seed, target) in enumerate(models_to_
     # 3. Load and evaluate
     try:
         model = YOLO(local_model_path)
-        print("Running validation at NMS IoU = 0.50...")
+        print("Running validation split...")
         val_res = model.val(
+            data=str(data_yaml),
+            split="val",
+            iou=0.50,
+            imgsz=512,
+            batch=8,
+            device="cuda",
+            verbose=False
+        )
+        print("Running test split...")
+        test_res = model.val(
             data=str(data_yaml),
             split="test",
             iou=0.50,
@@ -167,14 +177,19 @@ for idx, (family, config, repo, file_path, seed, target) in enumerate(models_to_
             "config": config,
             "seed": seed,
             "target": target,
-            "test/precision(B)": val_res.results_dict.get("metrics/precision(B)", 0),
-            "test/recall(B)": val_res.results_dict.get("metrics/recall(B)", 0),
-            "test/metrics/mAP50(B)": val_res.results_dict.get("metrics/mAP50(B)", 0),
-            "test/metrics/mAP75(B)": float(val_res.box.map75),
-            "test/metrics/mAP50-95(B)": val_res.results_dict.get("metrics/mAP50-95(B)", 0),
+            "val/precision(B)": val_res.results_dict.get("metrics/precision(B)", 0),
+            "val/recall(B)": val_res.results_dict.get("metrics/recall(B)", 0),
+            "val/metrics/mAP50(B)": val_res.results_dict.get("metrics/mAP50(B)", 0),
+            "val/metrics/mAP75(B)": float(val_res.box.map75),
+            "val/metrics/mAP50-95(B)": val_res.results_dict.get("metrics/mAP50-95(B)", 0),
+            "test/precision(B)": test_res.results_dict.get("metrics/precision(B)", 0),
+            "test/recall(B)": test_res.results_dict.get("metrics/recall(B)", 0),
+            "test/metrics/mAP50(B)": test_res.results_dict.get("metrics/mAP50(B)", 0),
+            "test/metrics/mAP75(B)": float(test_res.box.map75),
+            "test/metrics/mAP50-95(B)": test_res.results_dict.get("metrics/mAP50-95(B)", 0),
         }
         results_data.append(metrics)
-        print(f"Success! mAP50: {metrics['test/metrics/mAP50(B)']:.4f} | R: {metrics['test/recall(B)']:.4f} | P: {metrics['test/precision(B)']:.4f}")
+        print(f"Success! Val mAP50: {metrics['val/metrics/mAP50(B)']:.4f} | Test mAP50: {metrics['test/metrics/mAP50(B)']:.4f}")
         
     except Exception as e:
         print(f"Evaluation failed: {e}")
