@@ -170,7 +170,7 @@ for idx, (family, config, repo, file_path, seed, target) in enumerate(models_to_
             "test/precision(B)": val_res.results_dict.get("metrics/precision(B)", 0),
             "test/recall(B)": val_res.results_dict.get("metrics/recall(B)", 0),
             "test/metrics/mAP50(B)": val_res.results_dict.get("metrics/mAP50(B)", 0),
-            "test/metrics/mAP75(B)": val_res.results_dict.get("metrics/mAP75(B)", 0),
+            "test/metrics/mAP75(B)": float(val_res.box.map75),
             "test/metrics/mAP50-95(B)": val_res.results_dict.get("metrics/mAP50-95(B)", 0),
         }
         results_data.append(metrics)
