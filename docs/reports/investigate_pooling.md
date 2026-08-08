@@ -325,6 +325,20 @@ Module `P1DRR` được nâng cấp từ những bài học của `P1-GER` nhằ
 
 ---
 
+
+
+### Kết quả Thực nghiệm FPN-Only & P1-DRR tại NMS IoU = 0.50 (Seed 42):
+
+| Cấu hình | Epochs | Tham số (Params) | GFLOPs (512x512) | Test P | Test R | Test mAP50 | Test mAP50-95 |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **A0_fpn: FPN-Only Baseline** | 100 | 1.78M | 6.34 | 0.7768 | 0.6940 | 0.7553 | 0.2784 |
+| **A1_200: FPN-Only Plain Fusion** | 200 | 1.78M | 6.36 | 0.7807 | 0.7486 | 0.7480 | 0.2657 |
+| **A2_200: FPN-Only P1-GER** | 200 | 1.78M | 6.40 | 0.7952 | 0.7476 | 0.7875 | 0.2827 |
+| **A3: Regression-Only Detail Injection** | 100 | 1.89M | 14.73 | 0.8164 | 0.7213 | 0.7751 | 0.2795 |
+| **A4: P1-DRR + Alternate Partial Clip** | 100 | 1.78M | 6.40 | 0.7648 | 0.7356 | 0.7616 | 0.2859 |
+| **A5: P1-DRR + Old Partial Clip (post-Mosaic)** | 100 | 1.78M | 6.40 | 0.7720 | 0.6471 | 0.7122 | 0.2612 |
+| **A2_500: FPN-Only P1-GER** | 381 | 1.78M | 6.40 | 0.7628 | 0.7313 | 0.7094 | 0.2475 |
+
 ### Phân tích Computational Cost & Trade-off:
 1. **Cắt giảm tối đa tài nguyên với FPN-Only**:
    * Việc loại bỏ hoàn toàn các lớp Bottom-Up Path (P3->P4->P5) giúp giảm **46.8% số lượng tham số** (từ 3.35M xuống 1.78M) và tiết kiệm **18.6% lượng tính toán** (từ 7.79 GFLOPs xuống 6.34 GFLOPs ở kích thước ảnh 512x512).
