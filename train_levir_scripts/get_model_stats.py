@@ -47,8 +47,9 @@ for family, config, repo, file_path in models_to_eval:
     if local_model_path.exists():
         try:
             model = YOLO(local_model_path)
-            results = model.info(verbose=False)
-            layers, params, gradients, flops = results
+            model.info() # populates flops in model.model
+            params = sum(p.numel() for p in model.model.parameters())
+            flops = getattr(model.model, "flops", 0.0)
             model_stats[f"{family} | {config}"] = {
                 "params": f"{params / 1e6:.2f}M",
                 "flops": f"{flops:.2f}"
