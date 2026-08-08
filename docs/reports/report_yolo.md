@@ -97,10 +97,10 @@ Tất cả kết quả YOLO được lấy từ 11 Hugging Face Dataset repo c�
 ### FPN-only P2-only Ablations (Seed 42)
 This exploratory run evaluates the effect of shared attention vs classification-only attention when restricting the head to a single FPN scale (P2-only, 1-level detect).
 
-| Attention Type | Variant | Params | Val mAP50 | Val mAP50-95 | Test P | Test R | Test mAP50 | Test mAP75 | Test mAP50-95 |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Shared Attention** | `fpn_only_kvca_block` | 1.60M | 0.8177 | 0.3309 | 0.8259 | 0.7529 | 0.7857 | 0.1029 | 0.2990 |
-| **Shared Attention** | `fpn_only_kvca_encoder` | 1.61M | 0.7840 | 0.3167 | 0.7765 | 0.7387 | 0.7694 | 0.0851 | 0.2620 |
-| **Cls-only Attention** | `fpn_only_cbam_clsonly` | 1.60M | 0.7917 | 0.3289 | 0.8086 | 0.7270 | 0.7700 | 0.1141 | 0.2890 |
-| **Cls-only Attention** | `fpn_only_kvca_clsonly` | 1.61M | — | — | 0.7794 | 0.6681 | 0.7202 | 0.0842 | 0.2600 |
+| Attention Type | Variant | Params | Val mAP50 | Val mAP50-95 | Test P | Test R | Test mAP50 | Test mAP75 | Test mAP50-95 | Hugging Face Dataset |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+| **Shared Attention** | `fpn_only_kvca_block` | 1.60M | 0.8177 | 0.3309 | 0.8259 | 0.7529 | 0.7857 | 0.1029 | 0.2990 | [levir-yolov8n-p2-fpn-only-attention-seed42](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-fpn-only-attention-seed42) |
+| **Shared Attention** | `fpn_only_kvca_encoder` | 1.61M | 0.7840 | 0.3167 | 0.7765 | 0.7387 | 0.7694 | 0.0851 | 0.2620 | [levir-yolov8n-p2-fpn-only-attention-seed42](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-fpn-only-attention-seed42) |
+| **Cls-only Attention** | `fpn_only_cbam_clsonly` | 1.60M | 0.7917 | 0.3289 | 0.8086 | 0.7270 | 0.7700 | 0.1141 | 0.2890 | [levir-yolov8n-p2-fpn-only-attention-seed42](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-fpn-only-attention-seed42) |
+| **Cls-only Attention** | `fpn_only_kvca_clsonly` | 1.61M | — | — | 0.7794 | 0.6681 | 0.7202 | 0.0842 | 0.2600 | [levir-yolov8n-p2-fpn-only-attention-seed42](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-fpn-only-attention-seed42) |
 
