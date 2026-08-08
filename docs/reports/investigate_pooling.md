@@ -334,4 +334,47 @@ Module `P1DRR` được nâng cấp từ những bài học của `P1-GER` nhằ
    * Để đưa hai luồng đặc trưng khác nhau (`cls_x` sạch và `box_x` chứa chi tiết) vào đầu ra, các lớp Convolutional tách biệt trong `Detect` head phải xử lý riêng biệt thay vì dùng chung đặc trưng đầu vào.
    * Điều này dẫn đến sự gia tăng GFLOPs từ **6.34 lên 14.73 GFLOPs** (tăng ~2.3 lần) dù số tham số chỉ tăng nhẹ lên 1.89M. Mặc dù tối ưu tuyệt đối cho Precision tránh False Positive trên thiết bị phần cứng mạnh, cấu hình này có độ trễ lớn hơn trên các vi xử lý biên (Edge Devices).
 
+---
+
+## Phân tích Lỗi trên Tập Test (Failure Case Analysis - Seed 42)
+
+Để hiểu rõ tại sao mô hình tốt nhất hiện tại (**A2_200: FPN-Only P1-GER**) vẫn gặp lỗi trên tập Test, chúng tôi đã thực hiện một script chẩn đoán chi tiết đối chiếu các dự đoán (Confidence >= 0.25) với nhãn gốc (Ground Truth) sử dụng ngưỡng IoU >= 0.3.
+
+### 1. Chỉ số chẩn đoán tổng quan:
+* **Tổng số vật thể Ground-Truth**: 696
+* **Tổng số vật thể dự đoán**: 834
+* **Tổng số lỗi bỏ sót (False Negatives - FN)**: 116 (Tỷ lệ bỏ sót thực tế: 16.6%)
+* **Tổng số lỗi báo giả (False Positives - FP)**: 86
+
+### 2. Phân tích chi tiết theo kích thước vật thể (Object Area):
+* **Vật thể Siêu nhỏ - Tiny (< 100 px²)** (kích thước cạnh < 10 pixels ở ảnh 512x512):
+  * **GT**: 14 | **Đã phát hiện (TP)**: 2 | **Bỏ sót (FN)**: 12
+  * **Recall**: **14.29%**
+  * *Nguyên nhân*: Ở kích thước siêu nhỏ này, vật thể chỉ tương đương với vài pixel nhiễu trên ảnh. Qua quá trình downsampling của Backbone (ngay cả ở P2 stride 4, vật thể chỉ còn 2x2 pixels), các tín hiệu này hầu như bị hòa loãng hoàn toàn vào nền biển hoặc bị bộ lọc Conv triệt tiêu như nhiễu tần số cao.
+* **Vật thể Nhỏ - Small (100 - 400 px²)** (kích thước cạnh từ 10-20 pixels):
+  * **GT**: 387 | **Đã phát hiện (TP)**: 304 | **Bỏ sót (FN)**: 83
+  * **Recall**: **78.55%**
+  * *Nguyên nhân*: Đây là vùng vật thể mà cơ chế giải cứu chi tiết (DRR/GER) hoạt động tích cực nhất. Tuy nhiên, các lỗi bỏ sót vẫn xảy ra tập trung ở các khu vực cảng biển neo đậu san sát nhau (dense ports), nơi các hộp neo đậu chồng lấn làm NMS triệt tiêu bớt dự đoán, hoặc ở vùng biển có sóng mạnh nơi cổng gate tự động tiết chế đóng để tránh FP.
+* **Vật thể Vừa & Lớn - Medium/Large (> 400 px²)**:
+  * **GT**: 295 | **Đã phát hiện (TP)**: 274 | **Bỏ sót (FN)**: 21
+  * **Recall**: **92.88%**
+  * *Nguyên nhân*: Đạt độ chính xác rất cao nhờ đặc trưng ngữ cảnh rõ ràng. Các lỗi bỏ sót rất ít, chủ yếu do tàu ở sát rìa ảnh bị cắt một phần.
+
+---
+
+### 3. Danh sách các ảnh lỗi nặng nhất:
+
+#### Top các ảnh bỏ sót nhiều nhất (False Negatives):
+1. **`GF6_WFV_E132.4_N35.8_20200914_L1A1120035552-1_9216_13824.png`** (Sót 13 vật thể):
+   * *Đặc điểm*: Ảnh chụp một khu cảng cực kỳ đông đúc với hàng chục tàu thuyền nhỏ neo sát cạnh nhau. Các tàu bị dính liền vào nhau khiến mô hình nhận diện gộp hoặc bị NMS loại bỏ do trùng lấp cao.
+2. **`GF1_WFV2_E118.9_N24.3_20200710_L2A0004922278_11264_10240.png`** (Sót 7 vật thể):
+   * *Đặc điểm*: Ảnh chứa các tàu cá kích thước siêu nhỏ di chuyển ngoài khơi xa, độ tương phản rất thấp với nền nước biển sâu.
+3. **`GF1_WFV3_E120.2_N22.2_20200710_L2A0004922264_7168_5120.png`** (Sót 6 vật thể).
+
+#### Top các ảnh báo giả nhiều nhất (False Positives):
+1. **`GF6_WFV_E132.4_N35.8_20200914_L1A1120035552-3_11264_7680.png`** (Báo giả 6 vật thể):
+   * *Đặc điểm*: Chứa các dải bọt sóng trắng xóa dọc bờ biển hoặc các đảo đá nhỏ có hình dáng thuôn dài giống hệt tàu thuyền. Cổng giải cứu DRR mở nhẹ ở các vị trí này dẫn đến báo giả.
+2. **`GF1_WFV1_E120.0_N36.3_20200423_L2A0004760887_12288_12288.png`** (Báo giả 2 vật thể).
+
+
 
