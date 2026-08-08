@@ -2417,5 +2417,11 @@ class DetectClsAttention(Detect):
             cls_x_detach = [self.attn(x_detach[0])] + [x_detach[i] for i in range(1, self.nl)]
             one2one = self.forward_head(x_detach, cls_x=cls_x_detach, **self.one2one)
             preds = {"one2many": preds, "one2one": one2one}
-        return preds
+            
+        if self.training:
+            return preds
+        y = self._inference(preds["one2one"] if self.end2end else preds)
+        if self.end2end:
+            y = self.postprocess(y.permute(0, 2, 1))
+        return y if self.export else (y, preds)
 
