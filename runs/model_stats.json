@@ -1,0 +1,114 @@
+{
+  "YOLO DBSS/HIT | yolov10n + dbss": {
+    "params": "3.27M",
+    "flops": "0.00"
+  },
+  "YOLO DBSS/HIT | yolov10n + hit": {
+    "params": "3.27M",
+    "flops": "0.00"
+  },
+  "YOLO DBSS/HIT | yolov5n + dbss": {
+    "params": "3.10M",
+    "flops": "0.00"
+  },
+  "YOLO DBSS/HIT | yolov5n + hit": {
+    "params": "3.10M",
+    "flops": "0.00"
+  },
+  "YOLO DBSS/HIT | yolov8n + dbss": {
+    "params": "3.37M",
+    "flops": "0.00"
+  },
+  "YOLO DBSS/HIT | yolov8n + hit": {
+    "params": "3.37M",
+    "flops": "0.00"
+  },
+  "YOLOv8n DBSS P2 | dbss_p2_aware": {
+    "params": "3.37M",
+    "flops": "0.00"
+  },
+  "YOLOv8n DBSS P2 | dbss_p2_routed": {
+    "params": "3.37M",
+    "flops": "0.00"
+  },
+  "YOLO P2 | yolov8n baseline": {
+    "params": "3.35M",
+    "flops": "0.00"
+  },
+  "YOLO P2 | yolov8n offset": {
+    "params": "3.35M",
+    "flops": "0.00"
+  },
+  "YOLOv8n P2 routing | dbss_pre_p2": {
+    "params": "3.36M",
+    "flops": "0.00"
+  },
+  "YOLOv8n P2 routing | gcts_backbone_p2_p3": {
+    "params": "3.35M",
+    "flops": "0.00"
+  },
+  "YOLO baseline | yolo11n": {
+    "params": "2.96M",
+    "flops": "0.00"
+  },
+  "YOLO baseline | yolov10n": {
+    "params": "3.08M",
+    "flops": "0.00"
+  },
+  "YOLO baseline | yolov5nu": {
+    "params": "2.88M",
+    "flops": "0.00"
+  },
+  "YOLO baseline | yolov8n": {
+    "params": "3.38M",
+    "flops": "0.00"
+  },
+  "YOLO baseline | yolov9t": {
+    "params": "2.28M",
+    "flops": "0.00"
+  },
+  "YOLOv10n GCTS v1 | bilinear_w01": {
+    "params": "3.08M",
+    "flops": "0.00"
+  },
+  "YOLOv10n GCTS v1 | bilinear_w02": {
+    "params": "3.08M",
+    "flops": "0.00"
+  },
+  "YOLOv10n GCTS v1 | onehot_w01": {
+    "params": "3.08M",
+    "flops": "0.00"
+  },
+  "YOLOv10n GCTS v1 | onehot_w02": {
+    "params": "3.08M",
+    "flops": "0.00"
+  },
+  "YOLOv10n GCTS v2 | v2_e05": {
+    "params": "3.08M",
+    "flops": "0.00"
+  },
+  "YOLOv10n GCTS v2 | v2_e05_nogate": {
+    "params": "3.08M",
+    "flops": "0.00"
+  },
+  "YOLOv10n GCTS v2 | v2_e10": {
+    "params": "3.08M",
+    "flops": "0.00"
+  },
+  "YOLOv10n P3 NUDFL | baseline_p3_nudfl": {
+    "params": "3.08M",
+    "flops": "0.00"
+  },
+  "YOLOv10n P3 NUDFL | gcts_v2_e05_p3_nudfl": {
+    "params": "3.08M",
+    "flops": "0.00"
+  },
+  "YOLOv8n P3 NUDFL | yolov8n_baseline": {
+    "params": "3.38M",
+    "flops": "0.00"
+  },
+  "YOLOv8n P3 NUDFL | yolov8n_p3_nudfl": {
+    "params": "3.38M",
+    "flops": "0.00"
+  }
+}
