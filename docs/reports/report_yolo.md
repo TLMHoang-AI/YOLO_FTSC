@@ -93,3 +93,14 @@ Tất cả kết quả YOLO được lấy từ 11 Hugging Face Dataset repo c�
 | YOLOv10n P3 NUDFL | gcts_v2_e05_p3_nudfl | 512 | 3.08M | — | 42 (1) | 0.7698 | 0.7065 | 0.7644 | 0.1609 | 0.3145 | 0.7544 | 0.6638 | 0.7093 | 0.1546 | 0.2862 | [levir-yolov10n-p3-nudfl-ablation](https://huggingface.co/datasets/duyle2408/levir-yolov10n-p3-nudfl-ablation) |
 | YOLOv8n P3 NUDFL | yolov8n_baseline | 512 | 3.38M | — | 42 (1) | 0.7783 | 0.7172 | 0.7547 | 0.0997 | 0.2719 | 0.7331 | 0.6513 | 0.7063 | 0.0671 | 0.2432 | [levir-yolov8n-p3-nudfl-ablation](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p3-nudfl-ablation) |
 | YOLOv8n P3 NUDFL | yolov8n_p3_nudfl | 512 | 3.38M | — | 42 (1) | 0.7554 | 0.7110 | 0.7403 | 0.0884 | 0.2652 | 0.7340 | 0.6739 | 0.7014 | 0.0716 | 0.2387 | [levir-yolov8n-p3-nudfl-ablation](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p3-nudfl-ablation) |
+
+### FPN-only P2-only Ablations (Seed 42)
+This exploratory run evaluates the effect of shared attention vs classification-only attention when restricting the head to a single FPN scale (P2-only, 1-level detect).
+
+| Attention Type | Variant | Params | Val mAP50 | Val mAP50-95 | Test P | Test R | Test mAP50 | Test mAP75 | Test mAP50-95 |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Shared Attention** | `fpn_only_kvca_block` | 1.60M | 0.8177 | 0.3309 | 0.8259 | 0.7529 | 0.7857 | 0.1029 | 0.2990 |
+| **Shared Attention** | `fpn_only_kvca_encoder` | 1.61M | 0.7840 | 0.3167 | 0.7765 | 0.7387 | 0.7694 | 0.0851 | 0.2620 |
+| **Cls-only Attention** | `fpn_only_cbam_clsonly` | 1.60M | 0.7917 | 0.3289 | 0.8086 | 0.7270 | 0.7700 | 0.1141 | 0.2890 |
+| **Cls-only Attention** | `fpn_only_kvca_clsonly` | 1.61M | — | — | 0.7794 | 0.6681 | 0.7202 | 0.0842 | 0.2600 |
+
