@@ -295,17 +295,16 @@ Module `P1DRR` được nâng cấp từ những bài học của `P1-GER` nhằ
 
 ### Kết quả Thực nghiệm FPN-Only & P1-DRR (Seed 42):
 
-| Cấu hình | Epochs | Tham số Neck | Val mAP50 | Val Recall | Test mAP50 | Test Recall |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **A0: Full-Neck Baseline** | 100 | 3.35M (100%) | 0.7654 | 0.7019 | 0.7453 | 0.6681 |
-| **A0_fpn: FPN-Only Baseline** | 100 | 1.78M (53%) | 0.7514 | 0.6551 | 0.7213 | 0.6365 |
-| **A1: FPN-Only Plain Fusion** | 100 | 1.78M (53%) | 0.7958 (+4.4%) | 0.7272 (+7.2%) | 0.7429 (+2.1%) | 0.6671 (+3.1%) |
-| | **200** | 1.78M (53%) | 0.7910 | 0.7095 | 0.7419 | **0.7032 (+6.6%)** |
-| **A2: FPN-Only P1-DRR** | 100 | 1.78M (53%) | **0.7957 (+4.4%)** | **0.7322 (+7.7%)** | **0.7469 (+2.5%)** | **0.6782 (+4.1%)** |
-| **A3: Regression-Only Detail Injection** | 100 | 1.78M (53%) | 0.7908 (+3.9%) | 0.6929 (+3.8%) | 0.7437 (+2.2%) | 0.6638 (+2.7%) |
-| **A4: P1-DRR + Alternate Partial Clip** | 100 | 1.78M (53%) | 0.7793 (+2.8%) | 0.7156 (+6.0%) | 0.7195 (-0.2%) | 0.6707 (+3.4%) |
-| **A2_200: FPN-Only P1-GER** | **200** | 1.78M (53%) | **0.8046 (+5.3%)** | **0.7326 (+7.7%)** | **0.7632 (+4.2%)** | **0.6882 (+5.1%)** |
-
+| Cấu hình | Epochs | Tham số (Params) | GFLOPs (512x512) | Val mAP50 | Val Recall | Test mAP50 | Test Recall |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **A0: Full-Neck Baseline** | 100 | 3.35M (100%) | 7.79 | 0.7654 | 0.7019 | 0.7453 | 0.6681 |
+| **A0_fpn: FPN-Only Baseline** | 100 | 1.78M (53%) | 6.34 | 0.7514 | 0.6551 | 0.7213 | 0.6365 |
+| **A1: FPN-Only Plain Fusion** | 100 | 1.78M (53%) | 6.36 | 0.7958 (+4.4%) | 0.7272 (+7.2%) | 0.7429 (+2.1%) | 0.6671 (+3.1%) |
+| | **200** | 1.78M (53%) | 6.36 | 0.7910 | 0.7095 | 0.7419 | **0.7032 (+6.6%)** |
+| **A2: FPN-Only P1-DRR** | 100 | 1.78M (53%) | 6.40 | **0.7957 (+4.4%)** | **0.7322 (+7.7%)** | **0.7469 (+2.5%)** | **0.6782 (+4.1%)** |
+| **A3: Regression-Only Detail Injection** | 100 | 1.89M (56%) | 14.73 | 0.7908 (+3.9%) | 0.6929 (+3.8%) | 0.7437 (+2.2%) | 0.6638 (+2.7%) |
+| **A4: P1-DRR + Alternate Partial Clip** | 100 | 1.78M (53%) | 6.40 | 0.7793 (+2.8%) | 0.7156 (+6.0%) | 0.7195 (-0.2%) | 0.6707 (+3.4%) |
+| **A2_200: FPN-Only P1-GER** | **200** | 1.78M (53%) | 6.40 | **0.8046 (+5.3%)** | **0.7326 (+7.7%)** | **0.7632 (+4.2%)** | **0.6882 (+5.1%)** |
 
 ### Kết luận Thực nghiệm:
 1. **Minh chứng Ablation cực kỳ sạch**: So sánh trực tiếp giữa **A0_fpn (FPN-Only Baseline)** và các cấu hình giải cứu chi tiết cho thấy hiệu quả vượt trội tuyệt đối:
@@ -319,5 +318,16 @@ Module `P1DRR` được nâng cấp từ những bài học của `P1-GER` nhằ
    * Việc tách Targeted Partial Clip ra khỏi pipeline Mosaic (để chạy độc lập trên ảnh đơn) giúp mô hình cải thiện đáng kể Recall (đạt **0.7156** ở Val và **0.6707** ở Test).
    * Tuy nhiên, sự gia tăng của các mẫu biên cắt một phần hoạt động như một bộ điều hòa (regularizer) mạnh, khiến Test mAP50 giảm nhẹ về **0.7195** trên seed này.
 4. **Hiệu năng FPN-Only 200 Epochs**: Các kết quả thực nghiệm kéo dài 200 Epochs (ở bảng phân tích bên trên) cho thấy mô hình A2 tiếp tục bứt phá lên **Test mAP50 = 0.7632** (+1.8% so với baseline full-neck và **+4.2%** so với baseline FPN-only).
+
+---
+
+### Phân tích Computational Cost & Trade-off:
+1. **Cắt giảm tối đa tài nguyên với FPN-Only**:
+   * Việc loại bỏ hoàn toàn các lớp Bottom-Up Path (P3->P4->P5) giúp giảm **46.8% số lượng tham số** (từ 3.35M xuống 1.78M) và tiết kiệm **18.6% lượng tính toán** (từ 7.79 GFLOPs xuống 6.34 GFLOPs ở kích thước ảnh 512x512).
+2. **Độ phức tạp cực thấp của P1-DRR (A2)**:
+   * Module DRR với các phép chiếu (projection) và cổng đóng mở thông minh chỉ tiêu tốn thêm **0.02M tham số** và **0.06 GFLOPs**, một chi phí tính toán thực tế hoàn toàn có thể bỏ qua khi đổi lấy sự bứt phá hiệu năng lớn (+2.56% Test mAP50).
+3. **Trade-off tính toán của Regression-Only Injection (A3)**:
+   * Để đưa hai luồng đặc trưng khác nhau (`cls_x` sạch và `box_x` chứa chi tiết) vào đầu ra, các lớp Convolutional tách biệt trong `Detect` head phải xử lý riêng biệt thay vì dùng chung đặc trưng đầu vào.
+   * Điều này dẫn đến sự gia tăng GFLOPs từ **6.34 lên 14.73 GFLOPs** (tăng ~2.3 lần) dù số tham số chỉ tăng nhẹ lên 1.89M. Mặc dù tối ưu tuyệt đối cho Precision tránh False Positive trên thiết bị phần cứng mạnh, cấu hình này có độ trễ lớn hơn trên các vi xử lý biên (Edge Devices).
 
 
