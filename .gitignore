@@ -1,6 +1,7 @@
 /data/
 .env
 .env.*
+utils/marimo_config.json
 
 
 # Byte-compiled / optimized / DLL files

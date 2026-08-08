@@ -53,3 +53,19 @@ Công cụ phân tích chẩn đoán chi tiết các ca dự đoán sai (Failure
   ```bash
   python3 utils/diagnose_test_fails.py
   ```
+
+### 6. `marimo_run.py`
+Công cụ điều khiển remote Marimo Server từ terminal local vô cùng nhanh chóng.
+* **Cấu hình session mới**:
+  ```bash
+  python3 utils/marimo_run.py --set-config <SERVER_URL> <TOKEN>
+  ```
+* **Chạy trực tiếp đoạn mã Python**:
+  ```bash
+  python3 utils/marimo_run.py -c "import torch; print(torch.cuda.is_available())"
+  ```
+* **Chạy một file Python nội bộ của local lên server**:
+  ```bash
+  python3 utils/marimo_run.py -f train_levir_scripts/get_model_stats.py
+  ```
+
