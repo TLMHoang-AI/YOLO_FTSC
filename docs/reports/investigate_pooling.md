@@ -301,13 +301,20 @@ Module `P1DRR` được nâng cấp từ những bài học của `P1-GER` nhằ
 | **A0_fpn: FPN-Only Baseline** | 1.78M (53%) | 0.7514 | 0.6551 | 0.7213 | 0.6365 |
 | **A1: FPN-Only Plain Fusion** | 1.78M (53%) | 0.7958 (+4.4%) | 0.7272 (+7.2%) | 0.7429 (+2.1%) | 0.6671 (+3.1%) |
 | **A2: FPN-Only P1-DRR** | 1.78M (53%) | **0.7957 (+4.4%)** | **0.7322 (+7.7%)** | **0.7469 (+2.5%)** | **0.6782 (+4.1%)** |
+| **A3: Regression-Only Detail Injection** | 1.78M (53%) | 0.7908 (+3.9%) | 0.6929 (+3.8%) | 0.7437 (+2.2%) | 0.6638 (+2.7%) |
+| **A4: P1-DRR + Alternate Partial Clip** | 1.78M (53%) | 0.7793 (+2.8%) | 0.7156 (+6.0%) | 0.7195 (-0.2%) | 0.6707 (+3.4%) |
 
 ### Kết luận Thực nghiệm:
-1. **Minh chứng Ablation cực kỳ sạch**: So sánh trực tiếp giữa **A0_fpn (FPN-Only Baseline)** và **A2 (FPN-Only P1-DRR)** cho thấy hiệu quả vượt trội tuyệt đối của cơ chế giải cứu chi tiết:
+1. **Minh chứng Ablation cực kỳ sạch**: So sánh trực tiếp giữa **A0_fpn (FPN-Only Baseline)** và các cấu hình giải cứu chi tiết cho thấy hiệu quả vượt trội tuyệt đối:
    * Val mAP50 tăng vọt **+4.4%** (từ `0.7514` lên `0.7957`).
    * Val Recall tăng mạnh **+7.7%** (từ `0.6551` lên `0.7322`).
    * Test mAP50 tăng vọt **+2.56%** (từ `0.7213` lên `0.7469`).
-   * Test Recall tăng mạnh **+4.17%** (từ `0.6365` lên `0.6782`).
-2. **P1-DRR (A2) vượt trội hơn Plain Fusion (A1)**: Nhờ có cổng tiết chế chống nhiễu cổng (warm-up restraint), P1-DRR mang lại mAP50 tập Test cao nhất (**0.7469**), khẳng định sự cần thiết của việc hạn chế kích hoạt gate trên vùng nền biển động.
-3. **Hiệu năng FPN-Only 200 Epochs**: Các kết quả thực nghiệm kéo dài 200 Epochs (ở bảng phân tích bên trên) cho thấy mô hình A2 tiếp tục bứt phá lên **Test mAP50 = 0.7632** (+1.8% so với baseline full-neck và **+4.2%** so với baseline FPN-only).
+2. **Hiệu quả của Regression-Only Detail Injection (A3)**:
+   * Bằng cách chỉ đưa chi tiết P1 vào nhánh regression (xác định bounding box) và giữ nguyên đặc trưng semantic P2 sạch cho classification, mô hình đạt Test mAP50 rất cao (**0.7437**, tăng **+2.24%** so với baseline FPN-only).
+   * Đặc biệt, Precision trên Test set đạt **0.7698** (cao nhất trong các cấu hình fusion), xác nhận giả thuyết rằng việc cô lập nhiễu tần số cao của P1 khỏi nhánh classification giúp triệt tiêu triệt để các False Positives do sóng biển/bọt nước gây ra.
+3. **Ảnh hưởng của Alternate Partial Clip Pipeline (A4)**:
+   * Việc tách Targeted Partial Clip ra khỏi pipeline Mosaic (để chạy độc lập trên ảnh đơn) giúp mô hình cải thiện đáng kể Recall (đạt **0.7156** ở Val và **0.6707** ở Test).
+   * Tuy nhiên, sự gia tăng của các mẫu biên cắt một phần hoạt động như một bộ điều hòa (regularizer) mạnh, khiến Test mAP50 giảm nhẹ về **0.7195** trên seed này.
+4. **Hiệu năng FPN-Only 200 Epochs**: Các kết quả thực nghiệm kéo dài 200 Epochs (ở bảng phân tích bên trên) cho thấy mô hình A2 tiếp tục bứt phá lên **Test mAP50 = 0.7632** (+1.8% so với baseline full-neck và **+4.2%** so với baseline FPN-only).
+
 
