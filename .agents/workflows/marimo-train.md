@@ -40,7 +40,13 @@ git pull --ff-only origin main
 
 ## 3. Khởi chạy huấn luyện (Detached Process)
 
-Trước khi chạy, đảm bảo `HF_TOKEN` đã được cấu hình trong môi trường và không có PID nào đang chạy trùng lặp.
+`HF_TOKEN` là biến trong live marimo kernel, không mặc định nằm trong `os.environ`. Khi launch qua `marimo-pair`, lấy biến này từ kernel globals và truyền riêng vào `env` của detached subprocess; không in token ra output, log hay notebook cell. Đồng thời đảm bảo không có PID nào đang chạy trùng lặp.
+
+```python
+_env = os.environ.copy()
+_env["HF_TOKEN"] = HF_TOKEN
+_process = subprocess.Popen(command, cwd="/marimo/yolo_code", env=_env, ...)
+```
 Khởi chạy script huấn luyện trong thư mục `train_levir_scripts/` và lưu PID:
 
 ```bash

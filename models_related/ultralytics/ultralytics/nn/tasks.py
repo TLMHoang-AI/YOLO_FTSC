@@ -61,6 +61,7 @@ from ultralytics.nn.modules import (
     ConvTranspose,
     Detect,
     DetectClsAttention,
+    HVDecoupledDetect,
     P2NUDFLDetect,
     P3NUDFLDetect,
     DWConv,
@@ -2339,6 +2340,7 @@ def parse_model(d, ch, verbose=True):
             {
                 Detect,
                 DetectClsAttention,
+                HVDecoupledDetect,
                 P2NUDFLDetect,
                 P3NUDFLDetect,
                 WorldDetect,
@@ -2381,7 +2383,7 @@ def parse_model(d, ch, verbose=True):
                 args.append(attn_type)
             else:
                 args.extend([reg_max, end2end, [ch[x] for x in f]])
-                if m in {Detect, P2NUDFLDetect, P3NUDFLDetect}:
+                if m in {Detect, HVDecoupledDetect, P2NUDFLDetect, P3NUDFLDetect}:
                     args.extend(
                         [
                             cls_geometry_fuse,
@@ -2408,6 +2410,7 @@ def parse_model(d, ch, verbose=True):
             if m in {
                 Detect,
                 DetectClsAttention,
+                HVDecoupledDetect,
                 P2NUDFLDetect,
                 P3NUDFLDetect,
                 YOLOEDetect,

@@ -516,7 +516,10 @@ class Detect(nn.Module):
     def bias_init(self):
         """Initialize Detect() biases, WARNING: requires stride availability."""
         for i, (a, b) in enumerate(zip(self.one2many["box_head"], self.one2many["cls_head"])):  # from
-            if isinstance(a, P2OffsetRegression):
+            if isinstance(a, HVDecoupledRegression):
+                for output in (a.horizontal[-1], a.vertical[-1]):
+                    output.bias.data[:] = 2.0
+            elif isinstance(a, P2OffsetRegression):
                 for side in a.sides:
                     side.bias.data[:] = 2.0
             else:
@@ -607,6 +610,36 @@ class P2NUDFLDetect(Detect):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.register_buffer("p2_dfl_bins", torch.tensor(P2_NUDFL_BINS), persistent=True)
+
+
+class HVDecoupledRegression(nn.Module):
+    """Shared P2 regression stem with horizontal and vertical DFL towers."""
+
+    def __init__(self, channels: int, reg_max: int) -> None:
+        super().__init__()
+        self.reg_max = reg_max
+        self.shared = Conv(channels, 64, 3)
+        self.horizontal = nn.Sequential(Conv(64, 32, 3), nn.Conv2d(32, 2 * reg_max, 1))
+        self.vertical = nn.Sequential(Conv(64, 32, 3), nn.Conv2d(32, 2 * reg_max, 1))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        shared = self.shared(x)
+        horizontal = self.horizontal(shared).unflatten(1, (2, self.reg_max))
+        vertical = self.vertical(shared).unflatten(1, (2, self.reg_max))
+        return torch.stack((horizontal[:, 0], vertical[:, 0], horizontal[:, 1], vertical[:, 1]), dim=1).flatten(1, 2)
+
+
+class HVDecoupledDetect(Detect):
+    """P2-only Detect head with direction-specific regression representations."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        if self.nl != 1:
+            raise ValueError(f"HVDecoupledDetect requires one P2 detection level, got {self.nl}")
+        if self.end2end:
+            raise ValueError("HVDecoupledDetect does not support end2end mode")
+        channels = self.cv2[0][0].conv.in_channels
+        self.cv2[0] = HVDecoupledRegression(channels, self.reg_max)
 
 
 class Segment(Detect):
