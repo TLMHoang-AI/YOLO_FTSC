@@ -109,6 +109,8 @@ box: 7.5 # (float) box loss gain
 bbox_iou_loss: ciou # (str) bbox regression IoU loss: ciou, wiou, iou, giou, diou, eiou, siou
 wiou_monotonous: false # (bool) Wise-IoU focusing mode: false=non-monotonic, true=monotonic
 cls_iou_target: false # (bool) EXPERIMENTAL use assigned box IoU as positive classification target
+positive_confidence_rescue_gain: 0.0 # (float) EXPERIMENTAL TAL-positive confidence rescue gain
+positive_confidence_rescue_gamma: 1.0 # (float) EXPERIMENTAL low-target rescue focusing exponent
 vfl: false # (bool) EXPERIMENTAL use Varifocal Loss with assigned IoU as positive classification target
 vfl_alpha: 0.75 # (float) EXPERIMENTAL Varifocal Loss negative alpha
 vfl_gamma: 2.0 # (float) EXPERIMENTAL Varifocal Loss focusing gamma

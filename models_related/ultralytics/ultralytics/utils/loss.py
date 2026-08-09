@@ -923,6 +923,15 @@ class v8DetectionLoss:
         self.rank_tau = float(getattr(h, "rank_tau", 0.25))
         self.rank_iou_margin = float(getattr(h, "rank_iou_margin", 0.10))
         self.rank_topk = int(getattr(h, "rank_topk", 10))
+        self.positive_confidence_rescue_gain = float(getattr(h, "positive_confidence_rescue_gain", 0.0))
+        self.positive_confidence_rescue_gamma = float(getattr(h, "positive_confidence_rescue_gamma", 1.0))
+        if self.positive_confidence_rescue_gain < 0 or self.positive_confidence_rescue_gamma < 0:
+            raise ValueError("positive confidence rescue gain and gamma must be non-negative")
+        if self.positive_confidence_rescue_gain and (
+            self.vfl is not None or bool(getattr(h, "cls_iou_target", False))
+        ):
+            raise ValueError("positive confidence rescue requires default TAL-BCE classification")
+        self.positive_confidence_rescue_metrics = {}
         self.loc_assign = bool(getattr(h, "loc_assign", False))
         self.loc_assign_topk = int(getattr(h, "loc_assign_topk", 3))
         self.loc_assign_max_stride = float(getattr(h, "loc_assign_max_stride", 8.0))
@@ -972,6 +981,17 @@ class v8DetectionLoss:
             out[batch_idx, within_idx] = targets[:, 1:]
             out[..., 1:5] = xywh2xyxy(out[..., 1:5].mul_(scale_tensor))
         return out
+
+    def positive_confidence_rescue_loss(
+        self, pred_scores: torch.Tensor, target_scores: torch.Tensor, fg_mask: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return low-target TAL-positive rescue loss and the selected targets/logits."""
+        positive_targets, positive_classes = target_scores.max(dim=-1)
+        positive_logits = pred_scores.gather(-1, positive_classes.unsqueeze(-1)).squeeze(-1)
+        target = positive_targets[fg_mask].detach().to(pred_scores.dtype)
+        logits = positive_logits[fg_mask]
+        raw = ((1.0 - target).pow(self.positive_confidence_rescue_gamma) * F.softplus(-logits)).sum()
+        return raw / fg_mask.sum().clamp_min(1), target, logits
 
     def bbox_decode(
         self,
@@ -1585,6 +1605,35 @@ class v8DetectionLoss:
             if self.class_weights is not None:
                 bce_loss *= self.class_weights
             loss[1] = bce_loss.sum() / cls_target_scores_sum  # BCE
+
+        self.positive_confidence_rescue_metrics = {}
+        if self.positive_confidence_rescue_gain > 0:
+            raw_rescue, target, logits = self.positive_confidence_rescue_loss(pred_scores, target_scores, fg_mask)
+            original_cls = loss[1].detach()
+            applied_rescue = raw_rescue * self.positive_confidence_rescue_gain
+            loss[1] = loss[1] + applied_rescue
+            target_quantiles = (
+                torch.quantile(target.float(), torch.tensor([0.25, 0.5, 0.75], device=target.device))
+                if target.numel()
+                else target.new_zeros(3).float()
+            )
+            scores = logits.detach().float().sigmoid()
+            self.positive_confidence_rescue_metrics = {
+                "rescue_positive_count": float(target.numel()),
+                "rescue_target_mean": float(target.float().mean().item()) if target.numel() else 0.0,
+                "rescue_target_q25": float(target_quantiles[0].item()),
+                "rescue_target_q50": float(target_quantiles[1].item()),
+                "rescue_target_q75": float(target_quantiles[2].item()),
+                "rescue_positive_score_mean": float(scores.mean().item()) if scores.numel() else 0.0,
+                "rescue_score_target_lt_025": float(scores[target < 0.25].mean().item()) if (target < 0.25).any() else 0.0,
+                "rescue_score_target_025_050": float(scores[(target >= 0.25) & (target < 0.5)].mean().item())
+                if ((target >= 0.25) & (target < 0.5)).any() else 0.0,
+                "rescue_score_target_ge_050": float(scores[target >= 0.5].mean().item())
+                if (target >= 0.5).any() else 0.0,
+                "rescue_raw_loss": float(raw_rescue.detach().item()),
+                "rescue_applied_loss": float(applied_rescue.detach().item()),
+                "rescue_to_cls_loss_ratio": float(applied_rescue.detach().div(original_cls.clamp_min(1e-12)).item()),
+            }
 
         # Bbox loss. Optionally use a localization-only positive set that does not affect cls targets.
         self.bbox_loss.last_p2_conflict = None

@@ -195,6 +195,8 @@ CFG_FLOAT_KEYS = frozenset(
         "loc_assign_center_radius",
         "loc_assign_weight",
         "box_consensus_gain",
+        "positive_confidence_rescue_gain",
+        "positive_confidence_rescue_gamma",
         "positive_support_gain",
         "positive_support_prob",
         "dfl_residual_scale",
