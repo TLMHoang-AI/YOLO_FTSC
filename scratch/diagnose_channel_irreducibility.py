@@ -13,6 +13,7 @@ from huggingface_hub import hf_hub_download
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "models_related/ultralytics"))
 from ultralytics import YOLO
+from ultralytics.models.yolo.detect import DetectionValidator
 
 class Reconstructor(nn.Module):
     def __init__(self, channels=32):
@@ -44,7 +45,7 @@ def main():
     
     # Get test data loader
     data_yaml = ROOT / "datasets/levir_ship_yolo_seed42/levir_ship.yaml"
-    validator = model.smart_load("validator")(args=dict(
+    validator = DetectionValidator(args=dict(
         data=str(data_yaml), imgsz=512, batch=8, device=device, rect=False
     ))
     dataloader = validator.get_dataloader(ROOT / "datasets/levir_ship_yolo_seed42", batch=8)
