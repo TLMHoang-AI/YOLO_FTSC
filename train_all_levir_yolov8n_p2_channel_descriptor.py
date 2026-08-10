@@ -29,15 +29,15 @@ def local_ultralytics() -> None:
         sys.path.insert(0, str(ULTRALYTICS))
 
 
-def seed_everything() -> None:
+def seed_everything(seed: int = 42) -> None:
     import numpy as np
     import torch
 
-    random.seed(42)
-    np.random.seed(42)
-    torch.manual_seed(42)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(42)
+        torch.cuda.manual_seed_all(seed)
 
 
 def prepare_split(args: argparse.Namespace) -> Path:
@@ -70,15 +70,15 @@ def complete(run_dir: Path, epochs: int) -> bool:
     return all((run_dir / path).is_file() for path in REQUIRED) and sum(1 for _ in results.open(encoding="utf-8")) - 1 == epochs
 
 
-def train(variant: str, data_yaml: Path, args: argparse.Namespace) -> Path:
-    run_dir = args.project / variant / "seed_42"
+def train(variant: str, data_yaml: Path, seed: int, args: argparse.Namespace) -> Path:
+    run_dir = args.project / variant / f"seed_{seed}"
     if complete(run_dir, args.epochs):
         return run_dir
-    seed_everything()
+    seed_everything(seed)
     model_for(variant, args.pretrained).train(
         data=str(data_yaml), epochs=args.epochs, imgsz=args.imgsz, batch=args.batch_size,
-        device=args.device, workers=args.workers, patience=0, seed=42, deterministic=True,
-        amp=True, plots=False, project=str(args.project / variant), name="seed_42", exist_ok=True,
+        device=args.device, workers=args.workers, patience=0, seed=seed, deterministic=True,
+        amp=True, plots=False, project=str(args.project / variant), name=f"seed_{seed}", exist_ok=True,
     )
     required_before_evaluation = ("weights/best.pt", "weights/last.pt", "results.csv", "args.yaml")
     missing = [path for path in required_before_evaluation if not (run_dir / path).is_file()]
@@ -106,7 +106,7 @@ def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[s
     return metrics
 
 
-def write_metadata(variant: str, run_dir: Path, args: argparse.Namespace) -> None:
+def write_metadata(variant: str, run_dir: Path, seed: int, args: argparse.Namespace) -> None:
     local_ultralytics()
     from ultralytics import YOLO
     from ultralytics.utils.torch_utils import get_flops
@@ -115,7 +115,7 @@ def write_metadata(variant: str, run_dir: Path, args: argparse.Namespace) -> Non
     model = YOLO(run_dir / "weights/best.pt")
     head, attention = model.model.model[-1], model.model.model[19]
     manifest = {
-        "variant": variant, "seed": 42, "split_seed": 42, "config": VARIANTS[variant].name,
+        "variant": variant, "seed": seed, "split_seed": 42, "config": VARIANTS[variant].name,
         "descriptor": attention.descriptor, "topology": "P2 -> ChannelAttention -> shared Detect",
         "attention_layer": 19, "detect_from": head.f, "detect_stride": head.stride.tolist(),
         "epochs": args.epochs, "imgsz": args.imgsz, "batch_size": args.batch_size,
@@ -148,11 +148,11 @@ class Uploader:
                     raise
                 time.sleep(2**attempt)
 
-    def upload_run(self, variant: str, run_dir: Path) -> None:
+    def upload_run(self, variant: str, seed: int, run_dir: Path) -> None:
         missing = [path for path in REQUIRED if not (run_dir / path).is_file()]
         if missing:
             raise RuntimeError(f"{variant}: refusing incomplete upload: {missing}")
-        remote = f"runs/{variant}/seed_42"
+        remote = f"runs/{variant}/seed_{seed}"
         self.retry(lambda: self.api.upload_folder(folder_path=run_dir, path_in_repo=remote, repo_id=self.repo_id, repo_type="dataset"))
         expected = {f"{remote}/{path}" for path in REQUIRED}
         uploaded = set(self.retry(lambda: self.api.list_repo_files(self.repo_id, repo_type="dataset")))
@@ -160,7 +160,7 @@ class Uploader:
         if missing:
             raise RuntimeError(f"{variant}: Hugging Face verification failed: {missing}")
         marker = run_dir / "upload_complete.json"
-        marker.write_text(json.dumps({"repo_id": self.repo_id, "variant": variant, "verified": sorted(expected)}, indent=2) + "\n", encoding="utf-8")
+        marker.write_text(json.dumps({"repo_id": self.repo_id, "variant": variant, "seed": seed, "verified": sorted(expected)}, indent=2) + "\n", encoding="utf-8")
         self.retry(lambda: self.api.upload_file(path_or_fileobj=marker, path_in_repo=f"{remote}/{marker.name}", repo_id=self.repo_id, repo_type="dataset"))
 
 
@@ -176,6 +176,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", default="0")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--hf-repo-id", default="duyle2408/levir-yolov8n-p2-channel-descriptor-seed42")
+    parser.add_argument("--seeds", type=int, nargs="+", default=[42])
+    parser.add_argument("--variants", nargs="+", choices=list(VARIANTS.keys()), default=list(VARIANTS.keys()))
     return parser.parse_args(argv)
 
 
@@ -184,13 +186,14 @@ def main() -> None:
     args.data_root, args.dataset_root, args.project = (path.resolve() for path in (args.data_root, args.dataset_root, args.project))
     uploader = Uploader(args.hf_repo_id)
     data_yaml = prepare_split(args)
-    for variant in VARIANTS:
-        run_dir = train(variant, data_yaml, args)
-        evaluate(run_dir, data_yaml, args)
-        write_metadata(variant, run_dir, args)
-        if not complete(run_dir, args.epochs):
-            raise RuntimeError(f"{variant}: required post-evaluation artifacts are incomplete")
-        uploader.upload_run(variant, run_dir)
+    for seed in args.seeds:
+        for variant in args.variants:
+            run_dir = train(variant, data_yaml, seed, args)
+            evaluate(run_dir, data_yaml, args)
+            write_metadata(variant, run_dir, seed, args)
+            if not complete(run_dir, args.epochs):
+                raise RuntimeError(f"{variant}: required post-evaluation artifacts are incomplete")
+            uploader.upload_run(variant, seed, run_dir)
 
 
 if __name__ == "__main__":
