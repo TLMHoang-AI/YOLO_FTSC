@@ -227,3 +227,32 @@ Chúng tôi tiến hành chẩn đoán sâu 135 đối tượng bị bỏ sót (
 3. **Cơ hội từ Box Consensus**:
    * Box Consensus giúp co cụm và giảm phương sai của các anchors quanh vùng biên. Khi kết hợp với WIoU, Consensus có thể giúp mô hình giữ vững khả năng tìm kiếm diện rộng của WIoU, đồng thời tinh chỉnh (refine) sai lệch kích thước tuyệt đối $2.7 - 3.2$ pixel này về dưới $1.0$ pixel, cải thiện đáng kể mAP75.
 
+---
+
+## 10. Nghiên cứu Cơ chế Channel Attention bằng Phép Can thiệp (Channel Gate Interventions)
+
+Để làm rõ nguồn gốc cải thiện nhất quán của cơ chế `ChannelAttention` (bản GAP - Average pooling) đối với độ chính xác định vị và phân loại, chúng tôi đã tiến hành chẩn đoán sâu thông qua phép can thiệp ma trận (Inference Intervention Matrix) trực tiếp trên checkpoint đã huấn luyện (seed 42, test split 788 ảnh, NMS IoU = 0.50). 
+
+Bằng cách thay thế trọng số attention của từng kênh kích hoạt $g_{i,c}$ bằng các cấu hình can thiệp tĩnh/vô hướng trong quá trình suy luận, chúng tôi thu được kết quả định lượng như sau:
+
+| Phương pháp can thiệp | Mô tả toán học | Test AP50 | Test AP75 | Test mAP50-95 | Test Precision | Test Recall |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| **Original** | Không can thiệp ($g_{i,c} = \text{act}(gate)$) | 0.8162 | 0.1305 | 0.3106 | 0.8266 | 0.7701 |
+| **Static-channel** | Lấy trung bình ảnh: $g'_{i,c} = \text{mean}_i(g_{i,c})$ | 0.8229 | 0.1357 | 0.3198 | 0.8148 | **0.7839** |
+| **Dynamic-scalar** | Chỉ giữ scale của ảnh: $g'_{i,c} = \text{mean}_c(g_{i,c})$ | **0.8329** | **0.1421** | **0.3254** | 0.8409 | 0.7802 |
+| **Global-scalar** | Trọng số hằng số: $g' = \text{mean}_{i,c}(g_{i,c})$ | 0.8319 | 0.1382 | 0.3241 | **0.8431** | 0.7718 |
+| **Cross-image shuffle**| Phá sự tương ứng ảnh: $g'_{i,c} = g_{j,c}$ | 0.8095 | 0.1244 | 0.3084 | 0.8242 | 0.7748 |
+| **Channel shuffle** | Phá tương quan kênh: permute $g_{i,c}$ theo $c$ | 0.8123 | 0.1259 | 0.3057 | 0.8352 | 0.7572 |
+
+### Kết luận cơ chế quan trọng:
+
+1. **Sự sụt giảm do Channel-specific Gating (Channel Distortion)**:
+   * Mô hình nguyên bản (**Original**) có kết quả **tệ hơn đáng kể** ở mọi chỉ số so với việc ép tất cả các kênh chia sẻ chung một tỷ lệ scale (**`Dynamic-scalar`** và **`Global-scalar`**). 
+   * Cụ thể, việc đồng nhất hóa trọng số kênh theo từng ảnh (`Dynamic-scalar`) giúp **AP50 vọt lên 0.8329 (+1.67%) và AP75 lên 0.1421 (+1.16%)**.
+2. **Bản chất cơ chế là Adaptive Feature Amplitude Calibration**:
+   * Việc `Dynamic-scalar` và `Global-scalar` đạt hiệu suất cao nhất chứng minh rằng giá trị thực tế của `ChannelAttention` không nằm ở việc "chọn lọc đặc trưng ngữ nghĩa kênh" (semantic channel selection), mà chỉ đóng vai trò như một **bộ hiệu chuẩn biên độ kích hoạt toàn cục** (global activation amplitude calibrator) cho feature map P2.
+   * Việc áp đặt các trọng số attention khác nhau lên từng kênh (Original) vô tình làm méo cấu trúc đồng thích ứng kênh (channel co-adaptation) đã được tối ưu hóa ở các lớp tích chập phía trước, gây tác động tiêu cực đến downstream Detect head.
+3. **Khuyến nghị kiến trúc tiếp theo**:
+   * Các nghiên cứu attention tiếp theo nên tập trung vào các cơ chế hiệu chuẩn biên độ vô hướng (scalar-amplitude calibration) đơn giản như **`DynamicScalarScale`** thay vì các khối attention phức tạp biến đổi kênh riêng biệt.
+
+
