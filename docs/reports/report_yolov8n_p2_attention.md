@@ -324,6 +324,40 @@ Chúng tôi đã hoàn thành huấn luyện bổ sung hai mô hình `gap` (Aver
 - **GMP consistently degrades AP75**: Thử nghiệm đa hạt giống xác nhận Max pooling làm sụt giảm nghiêm trọng độ ổn định định vị (AP75 giảm trung bình **-1.69%** absolute so với GAP) trên toàn bộ các hạt giống, chứng minh sự ảnh hưởng tiêu cực của nhiễu cục bộ và tính không nhất quán của score-field.
 - **Thất bại của giải thuyết kết hợp**: Việc kết hợp `gap_gmp` cho kết quả tệ hơn cả hai bản đơn lẻ ở AP50 (`0.7891`) và mAP (`0.2862`), cho thấy Max pooling làm loãng tín hiệu bối cảnh nền ổn định do Average pooling mang lại.
 
+### Gate Intervention Matrix: Phân tích cơ chế suy luận thực tế (Inference Interventions)
+
+Để cô lập cơ chế mang lại lợi ích của `ChannelAttention`, chúng tôi chạy phép thử can thiệp (Inference Intervention Matrix) trên chính checkpoint `gap` seed 42 (đã học xong với NMS IoU = 0.50). Bằng cách can thiệp động hoặc tĩnh vào trọng số attention $g_{i,c} \in (0, 1)^C$ tại inference, chúng tôi thu được kết quả:
+
+* **Trung bình toàn bộ (Global mean) của gate weights ban đầu**: **`0.4514`**
+
+| Cấu hình can thiệp | Test AP50 | Test AP75 | Test mAP50-95 | Test Precision | Test Recall |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Original** (Không can thiệp) | 0.8162 | 0.1305 | 0.3106 | 0.8266 | 0.7701 |
+| **Static-channel** ($g'_{i,c} = \text{mean}_i(g_{i,c})$) | 0.8229 | 0.1357 | 0.3198 | 0.8148 | **0.7839** |
+| **Dynamic-scalar** ($g'_{i,c} = \text{mean}_c(g_{i,c})$) | 0.8329 | 0.1421 | **0.3254** | 0.8409 | 0.7802 |
+| **Global-scalar** ($g' = 0.4514$ constant) | 0.8319 | 0.1382 | 0.3241 | **0.8431** | 0.7718 |
+| **Cross-image shuffle** | 0.8095 | 0.1244 | 0.3084 | 0.8242 | 0.7748 |
+| **Channel shuffle** | 0.8189 | **0.1474** | 0.3148 | 0.8380 | 0.7658 |
+| **Identity (g = 1.0)** (Bỏ attention hoàn toàn) | 0.8212 | 0.1233 | 0.3115 | 0.8189 | 0.7796 |
+| **Sweep g = 0.25** | 0.6989 | 0.0895 | 0.2676 | 0.6259 | 0.7787 |
+| **Sweep g = 0.40** | 0.8263 | 0.1356 | 0.3240 | 0.8487 | 0.7672 |
+| **Sweep g = 0.50** | **0.8345** | 0.1349 | 0.3208 | 0.8364 | 0.7902 |
+| **Sweep g = 0.60** | 0.8315 | 0.1327 | 0.3144 | 0.8237 | 0.7919 |
+| **Sweep g = 0.75** | 0.8164 | 0.1218 | 0.3091 | 0.8239 | 0.7796 |
+
+### Nhận xét & Diễn giải khoa học:
+
+1. **Channel-specific gating không cần thiết khi suy luận (Inference-time Gating Redundancy)**:
+   * Việc loại bỏ hoàn toàn tính năng thay đổi trọng số theo từng kênh bằng cách đặt toàn bộ $g = 0.4514$ (`Global-scalar`) hoặc $g = 0.40$ (`Sweep g=0.40`) giúp tăng mAP tương ứng lên **0.3241** và **0.3240** (+1.35% absolute so với Original).
+   * Điều này chứng minh rằng cơ chế lựa chọn kênh động (dynamic channel-specific selection) theo ảnh tại thời điểm suy luận là không cần thiết, thậm chí còn gây méo cấu trúc kênh được học ở các lớp trước đó.
+2. **Optimum Curve của biên độ đặc trưng (Optimal Feature Amplitude)**:
+   * Phép sweep giá trị tĩnh tạo ra một đường cong tối ưu (parabolic curve) rõ rệt: mAP đạt đỉnh tại $g \approx 0.40 - 0.45$ (mAP 0.3240) và giảm dần khi dịch về hai phía ($g = 0.25$ làm mAP giảm về 0.2676; $g = 1.0$ đạt mAP 0.3115).
+   * Điều này ủng hộ mạnh mẽ cho giả thuyết **hiệu chuẩn biên độ kích hoạt (Feature Amplitude Calibration)** tại thời điểm suy luận.
+3. **Phân rã tác động: Inference Calibration vs Training Regularization**:
+   * Việc `Identity (g=1.0)` đạt mAP **0.3115** (gần như tương đương `Original` 0.3106) cho thấy: bản thân việc nhân chập gate $g(F)$ động lúc inference không tạo ra bất kỳ gain nào so với việc bỏ khối attention hoàn toàn.
+   * Do đó, phần lớn độ chính xác vượt trội của checkpoint được huấn luyện với `ChannelAttention` so với baseline thô không nằm ở sức mạnh biểu diễn (representational power) của khối attention lúc suy luận, mà nằm ở **tác dụng điều hòa tối ưu hóa lúc huấn luyện (training-time regularization/co-adaptation)**. downstream layers và Detect head đã co-adapt để thích nghi với một feature map được attenuation ổn định.
+
+
 ## Nguồn truy vết
 
 - PAN YAML, per-seed metrics, args và aggregate: [HF PAN-P3 3-seed](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-pan-p3-attention-3seed).
