@@ -556,7 +556,10 @@ class ChannelAttention(nn.Module):
         else:
             maximum = self.fc(self.max_pool(x)) if descriptor == "max" else self.max_fc(self.max_pool(x))
             gate = maximum if descriptor == "max" else average + maximum
-        return x * self.act(gate)
+        act_gate = self.act(gate)
+        if getattr(self, "override_gate_fn", None) is not None:
+            act_gate = self.override_gate_fn(self, act_gate)
+        return x * act_gate
 
 
 class SpatialAttention(nn.Module):
