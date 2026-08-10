@@ -23,5 +23,5 @@ head:
   - [-1, 1, nn.Upsample, [null, 2, nearest]]
   - [[-1, 2], 1, Concat, [1]]
   - [-1, 3, C2f, [128]]
-  - [-1, 1, AmplitudePerturbation, ["image", [0.7, 1.3]]]
+  - [-1, 1, LearnableGlobalScalar, []]
   - [[19], 1, Detect, [nc]]

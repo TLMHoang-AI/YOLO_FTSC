@@ -26,6 +26,7 @@ __all__ = (
     "SpatialAttention",
     "P2AmplitudeCalibrator",
     "AmplitudePerturbation",
+    "LearnableGlobalScalar",
 )
 
 
@@ -568,8 +569,9 @@ class P2AmplitudeCalibrator(nn.Module):
     """
     Computes a single scalar scaling factor alpha per image based on global statistics of P2.
     Preserves all spatial and channel correlation relationships.
+    Initialized as an identity mapping (alpha=1.0) at step 0.
     """
-    def __init__(self, channels, hidden_dim=16, min_val=0.25, max_val=1.0) -> None:
+    def __init__(self, channels=None, hidden_dim=16, min_val=0.25, max_val=1.75) -> None:
         super().__init__()
         self.min_val = min_val
         self.scale = max_val - min_val
@@ -578,9 +580,11 @@ class P2AmplitudeCalibrator(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(4, hidden_dim),
             nn.ReLU(inplace=True),
-            nn.Linear(hidden_dim, 1),
-            nn.Sigmoid()
+            nn.Linear(hidden_dim, 1)
         )
+        # Initialize last layer to zeros to ensure initial output is 0.0 (identity mapping)
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: [B, C, H, W]
@@ -602,11 +606,28 @@ class P2AmplitudeCalibrator(nn.Module):
         # Stack stats
         stats = torch.stack([mean_abs, rms, std, chan_disp], dim=1)  # [B, 4]
         
-        # Predict alpha
-        alpha = self.min_val + self.scale * self.mlp(stats)  # [B, 1]
+        # Predict z, apply sigmoid and scale to range [min_val, max_val]
+        z = self.mlp(stats)  # [B, 1]
+        alpha = self.min_val + self.scale * torch.sigmoid(z)  # [B, 1]
         
         # Apply scaling: [B, 1, 1, 1] * [B, C, H, W]
         return x * alpha.view(B, 1, 1, 1)
+
+
+class LearnableGlobalScalar(nn.Module):
+    """
+    A single learnable scalar parameter shared across all images and channels.
+    Initialized as an identity mapping (alpha=1.0) at step 0.
+    """
+    def __init__(self, channels=None) -> None:
+        super().__init__()
+        # Initialize parameter to 0.0, passing through sigmoid:
+        # alpha = 0.25 + 1.5 * sigmoid(param) -> param=0.0 means alpha=1.0
+        self.param = nn.Parameter(torch.zeros(1))
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        alpha = 0.25 + 1.5 * torch.sigmoid(self.param)
+        return x * alpha
 
 
 class AmplitudePerturbation(nn.Module):
