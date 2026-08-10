@@ -550,11 +550,12 @@ class ChannelAttention(nn.Module):
             (torch.Tensor): Channel-attended output tensor.
         """
         average = self.fc(self.pool(x))
-        if self.descriptor == "avg":
+        descriptor = getattr(self, "descriptor", "avg")
+        if descriptor == "avg":
             gate = average
         else:
-            maximum = self.fc(self.max_pool(x)) if self.descriptor == "max" else self.max_fc(self.max_pool(x))
-            gate = maximum if self.descriptor == "max" else average + maximum
+            maximum = self.fc(self.max_pool(x)) if descriptor == "max" else self.max_fc(self.max_pool(x))
+            gate = maximum if descriptor == "max" else average + maximum
         return x * self.act(gate)
 
 
