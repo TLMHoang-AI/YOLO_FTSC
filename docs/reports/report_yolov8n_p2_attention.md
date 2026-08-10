@@ -433,56 +433,50 @@ Chúng tôi đã thực hiện một chuỗi thực nghiệm kiểm chứng nghi
   4. Quét mức độ triệt tiêu mềm (Soft Suppression Sweep) với hệ số $\lambda$.
 
 ### 2. Độ ổn định tập hợp (Set Stability)
-Thống kê các kênh khó khôi phục nhất (Top-6 Hardest Channels) thu được từ Train và Test:
-- **Train hard channels**: `[11, 25, 19, 18, 3, 12]`
-- **Test hard channels**:  `[18, 11, 19, 25, 3, 12]`
-- **Chỉ số tương đồng Jaccard**: **`1.0000` (Trùng khớp 100%)**
+Thống kê các kênh khó khôi phục nhất (Top-6 Hardest Channels) thu được từ Zero-Diagonal Reconstructor và hệ tọa độ Object Mask (xyxy) chuẩn xác:
+- **Consolidated Train hard channels**: `[28, 1, 30, 21, 12, 29]`
+- **Test hard channels**:  `[28, 1, 30, 21, 12, 13]`
+- **Độ ổn định Reconstructor (5 seeds)**: Mean Jaccard = **`0.8286`** (Xếp hạng cực kỳ vững chắc qua các seed khởi tạo khác nhau).
+- **Chỉ số tương đồng Jaccard chéo (Train vs Test)**: **`0.7143`** (Trùng khớp 5/6 kênh).
 
-Kết quả này chứng minh rằng **độ không thể khôi phục (irreducibility) là một thuộc tính tĩnh và cực kỳ ổn định của biểu diễn P2**, không phụ thuộc vào việc tính toán trên tập dữ liệu nào. Do đó, việc xác định tập kênh này hoàn toàn có thể thực hiện offline trên Train set và áp dụng tĩnh khi inference.
-
-### 3. Phân tích đối chứng Confound Control
-Chúng tôi so sánh hiệu năng test (NMS IoU = 0.50) khi triệt tiêu $K=6$ kênh theo các tiêu chí khác nhau để đảm bảo tín hiệu irreducibility không phải là proxy của biên độ hay phương sai:
+### 3. Phân tích đối chứng Confound Control (Isolated Process)
+Chúng tôi cô lập hoàn toàn từng đợt đánh giá bằng cách khởi tạo mới YOLO instance và validator, đồng thời sử dụng bboxes projection chuẩn xác để tính toán `xyxy` object mask. Kết quả đo đạc khi triệt tiêu hoàn toàn ($\lambda=0.0$) nhóm 6 kênh theo các tiêu chí khác nhau:
 
 | Cấu hình triệt tiêu ($K=6$) | Test AP50 | Test AP75 | Test mAP50-95 | Delta mAP50-95 |
 | :--- | :---: | :---: | :---: | :---: |
 | **Baseline** (Plain P2 Control) | 0.7530 | 0.1026 | 0.2741 | — |
-| **Train-Hard (Oracle-Free)** | **0.7853** | **0.1228** | **0.2983** | **+0.0242** |
-| **Test-Hard (Oracle)** | **0.7853** | **0.1228** | **0.2983** | **+0.0242** |
-| **Easy (Predictable)** | 0.7093 | 0.0620 | 0.2366 | -0.0375 |
-| **Highest RMS** | 0.7302 | 0.0623 | 0.2443 | -0.0298 |
-| **Highest Variance** | 0.7302 | 0.0623 | 0.2443 | -0.0298 |
-| **Lowest RMS** | 0.7597 | 0.1018 | 0.2731 | -0.0010 |
+| **Easy (Predictable) - Oracle-Free** | **0.8210** | **0.1280** | **0.2987** | **+0.0246** |
+| **Highest RMS** | 0.6970 | 0.0810 | 0.1959 | -0.0782 |
+| **Highest Variance** | 0.7540 | 0.0910 | 0.2430 | -0.0311 |
+| **Lowest RMS** | 0.7870 | 0.1010 | 0.2735 | -0.0006 |
 | **Random (5-trial Avg)** | 0.7410 | 0.0910 | 0.2586 | -0.0155 |
+| **Train-Hard (Oracle-Free)** | 0.3360 | 0.0260 | 0.1032 | -0.1709 |
+| **Test-Hard (Oracle)** | 0.4040 | 0.0310 | 0.1248 | -0.1493 |
 
 **Nhận xét**: 
-- Chỉ có việc triệt tiêu nhóm **Hard channels** (cả bản Oracle và Oracle-Free) đem lại hiệu năng vượt trội vượt qua baseline (+2.42% mAP). 
-- Triệt tiêu các kênh có biên độ lớn (Highest RMS/Variance) làm sụt giảm nghiêm trọng hiệu năng của detector (giảm ~2.98% mAP), chứng tỏ các kênh có biên độ lớn vẫn chứa thông tin hữu ích và không trùng khớp với tập Hard channels. Điều này bác bỏ hoàn toàn giả thuyết bias do biên độ.
+- **Sự đảo chiều đầy bất ngờ**: Sau khi chuẩn hóa Object Mask và loại bỏ self-reconstruction thông qua Zero-Diagonal Reconstructor, **Easy channels** (các kênh dễ khôi phục chéo từ các kênh còn lại) mới chính là các kênh mang thông tin dư thừa hoặc gây nhiễu cho detector. Việc tắt hoàn toàn chúng (`Easy Mute`) đem lại bước nhảy hiệu năng ấn tượng **+2.46% mAP50-95 (lên 0.2987)**.
+- **Hard channels mang thông tin sống còn**: Việc tắt các kênh Hard chéo (`Train-Hard` / `Test-Hard`) khiến detector sập hoàn toàn (giảm từ `0.2741` xuống `0.1032` mAP). Điều này phản ánh chính xác bản chất: các kênh độc lập, khó khôi phục chứa đựng các đặc trưng quan trọng nhất giúp detector định vị và phân loại đối tượng, trong khi các kênh có mức độ phụ thuộc chéo quá cao (Easy) hoạt động giống như một không gian con nhiễu nền hoặc đồng thuận dư thừa (redundant consensus).
 
-### 4. Quét mức độ triệt tiêu mềm (Soft Suppression Sweep)
-Chúng tôi kiểm tra ảnh hưởng của việc triệt tiêu mềm bằng cách nhân các kênh Hard với hệ số $\lambda \in [0.0, 1.0]$:
-
-[
-X'_c =
-\begin{cases}
-\lambda X_c,&c\in H_{\text{train}}\
-X_c,&\text{otherwise}
-\end{cases}
-]
+### 4. Quét mức độ triệt tiêu mềm đối với Hard Channels (Soft Suppression Sweep)
+Chúng tôi kiểm tra ảnh hưởng của mức độ triệt tiêu Hard channels bằng cách nhân chúng với hệ số $\lambda \in [0.0, 1.0]$:
 
 | Hệ số $\lambda$ | Test AP50 | Test AP75 | Test mAP50-95 |
 | :---: | :---: | :---: | :---: |
-| **0.00** (Pruning hoàn toàn) | **0.7853** | **0.1228** | **0.2983** |
-| **0.25** | **0.7853** | **0.1228** | **0.2983** |
-| **0.50** | 0.7820 | 0.1197 | 0.2974 |
-| **0.75** | 0.7628 | 0.1105 | 0.2831 |
+| **0.00** (Pruning hoàn toàn) | 0.3426 | 0.0262 | 0.1032 |
+| **0.25** | 0.5550 | 0.0549 | 0.1837 |
+| **0.50** | 0.6647 | 0.0913 | 0.2389 |
+| **0.75** | 0.7279 | 0.0997 | 0.2659 |
 | **1.00** (Baseline) | 0.7530 | 0.1026 | 0.2741 |
 
-**Nhận xét**: Sau khi cô lập hoàn toàn môi trường đánh giá (isolated validation process) và loại bỏ hoàn toàn side-effects của dataloader caching, đường cong tối ưu hóa đạt trạng thái tốt nhất khi **$\lambda \le 0.25$ (mAP 0.2983, tăng mạnh +2.42% absolute so với Baseline)**. Việc triệt tiêu mạnh mẽ các kênh không đồng thuận này là tối ưu nhất.
+**Nhận xét**: Hiệu năng sụt giảm tuyến tính/phi tuyến tính cực kỳ rõ nét khi $\lambda$ tiến dần về 0. Điều này xác thực mạnh mẽ tầm quan trọng sống còn của các kênh Hard độc lập.
 
-### 5. Kết luận khoa học mới: Cơ chế Đồng Thuận Kênh (Channel Consensus)
-- **Redundancy là một Feature**: Việc triệt tiêu các kênh dễ khôi phục (`Easy`) làm sập mô hình mạnh mẽ nhất (giảm xuống `0.2366` mAP). Điều này gợi ý Detect head phụ thuộc chặt chẽ vào một không gian con các kênh có sự đồng thuận, liên kết chặt chẽ và có thể dự báo lẫn nhau (coherent, mutually predictable channel subspace).
-- **Mâu thuẫn Representation**: Các kênh Hard đại diện cho các thành phần đặc trưng lệch pha (deviation/residual) không nhận được sự corroboration (xác nhận chéo) từ các kênh còn lại. Đối với detector, các phản hồi dị biệt này hoạt động giống như một nhiễu loạn phá vỡ sự đồng thuận của subspace chung.
-- **Ý tưởng thiết kế Module mới**: Thay vì tăng cường (amplify) các kênh salient một cách mù quáng, chúng ta nên xây dựng module **hiệu chuẩn độ lệch kênh (deviation calibration)**: tự động ước lượng độ không thể khôi phục chéo kênh $E_c$ trực tiếp trên P2 và thực hiện đè nén (suppress với scale $\approx 0.0 - 0.25$) các kênh có độ không đồng thuận cao.
+### 5. Kết luận khoa học mới: Khử nhiễu dựa trên Không gian Đồng thuận (Consensus-Guided Denoising)
+- **Hard channels = Core Semantics**: Các kênh không thể khôi phục chéo chứa các đặc trưng độc nhất vô nhị không thể thay thế bởi phần còn lại. Detector phụ thuộc tuyệt đối vào chúng.
+- **Easy channels = Redundant Clutter**: Các kênh dễ khôi phục chéo mang thông tin đồng thuận cao nhưng dư thừa, có xu hướng khuếch đại nhiễu nền của background hoặc gây nhiễu loạn thông tin biên của đối tượng nhỏ trên P2.
+- **Ý tưởng thiết kế Module mới**: Thay vì cố gắng giữ lại tất cả các kênh, một thiết kế lý tưởng là **Consensus Denoising Module**:
+  $$X'_c = (1 - g_c) X_c$$
+  Trong đó $g_c$ ước lượng độ đồng thuận chéo kênh (cross-channel predictability). Các kênh có độ dự báo chéo cao (Easy) sẽ bị suy giảm cường độ mềm ($g_c \to 0.75$), trong khi các kênh độc lập (Hard) được bảo toàn tuyệt đối ($g_c \to 0$).
+
 
 
 
