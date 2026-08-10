@@ -4578,3 +4578,76 @@ class P1DRR(nn.Module):
             self.gate_tensor = G
             
         return x_p2 + G * R
+
+
+class ChannelKVCompressedAttention(nn.Module):
+    """Channel-wise Key-Value Compressed Attention (Channel-KVCA).
+    
+    Treats channels as tokens and compressed spatial positions as token features.
+    Computes global channel affinity matrix A [B, C, C] and applies it to full-resolution values V [B, C, H*W].
+    Does not transport information across spatial coordinates.
+    """
+
+    def __init__(self, channels: int, sr_ratio: int = 8, mode: str = "group_weight"):
+        super().__init__()
+        self.channels = channels
+        self.sr_ratio = max(1, int(sr_ratio))
+        self.mode = mode
+        self.temperature = nn.Parameter(torch.tensor(1.0))
+        
+        # Spatial compression
+        if self.mode == "group_weight" and self.sr_ratio > 1:
+            self.group_score = nn.Linear(channels, 1)
+        else:
+            self.group_score = None
+            self.compress = nn.Sequential(
+                nn.AvgPool2d(self.sr_ratio, self.sr_ratio),
+                nn.GroupNorm(min(32, channels), channels),
+            ) if self.sr_ratio > 1 else nn.Identity()
+
+        # Query, Key, Value projections
+        self.q = nn.Conv1d(channels, channels, 1, bias=False)
+        self.k = nn.Conv1d(channels, channels, 1, bias=False)
+        self.v = nn.Conv2d(channels, channels, 1, bias=False)
+        self.proj = nn.Conv2d(channels, channels, 1, bias=False)
+        
+        # Initialize projection weights
+        self.beta = nn.Parameter(torch.tensor(0.0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        b, c, h, w = x.shape
+        
+        # 1. Compress spatial dimension of F to get T [B, C, N]
+        if self.group_score is not None:
+            t = _group_weight_compress(x, self.sr_ratio, self.group_score)
+        else:
+            t = self.compress(x)
+            
+        t = t.flatten(2)  # [B, C, N]
+        
+        # 2. Query & Key projections (treating channels as tokens, N as channel embedding size)
+        q = self.q(t)  # [B, C, N]
+        k = self.k(t)  # [B, C, N]
+        
+        # Normalize q and k along spatial dimension N to stabilize attention logits
+        q = F.normalize(q, dim=-1)
+        k = F.normalize(k, dim=-1)
+        
+        # 3. Compute global channel affinity matrix A [B, C, C]
+        a = torch.matmul(q, k.transpose(-1, -2))  # [B, C, C]
+        
+        # Softmax over channel key dimension (dim=-1)
+        temp = torch.clamp(self.temperature, min=0.01, max=10.0)
+        a = torch.softmax(a / temp, dim=-1)
+        
+        # 4. Value projection of full-resolution F: V [B, C, HW]
+        v = self.v(x).flatten(2)  # [B, C, HW]
+        
+        # 5. Apply channel affinity matrix to values
+        y = torch.matmul(a, v)
+        
+        # 6. Reshape & Project back
+        y = y.view(b, c, h, w)
+        y = self.proj(y)
+        
+        return x + self.beta * y

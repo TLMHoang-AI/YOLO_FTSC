@@ -82,6 +82,7 @@ from ultralytics.nn.modules import (
     SpatialAttention,
     KVCompressedAttentionPartial,
     KVCompressedTransformerEncoder,
+    ChannelKVCompressedAttention,
     LRPCHead,
     LocalDetailRepC2f,
     P1FusionLocalDetail,
@@ -2322,7 +2323,7 @@ def parse_model(d, ch, verbose=True):
         elif m is P1GER:
             c2 = ch[f[0]]
             args = [[ch[x] for x in f], *args]
-        elif m in frozenset({CBAM, ChannelAttention, SpatialAttention}):
+        elif m in frozenset({CBAM, ChannelAttention, SpatialAttention, ChannelKVCompressedAttention}):
             c2 = ch[f]
             if m is not SpatialAttention:
                 args = [c2, *args]
