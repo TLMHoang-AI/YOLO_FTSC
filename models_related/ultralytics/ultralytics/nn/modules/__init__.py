@@ -102,6 +102,8 @@ from .local_detail import LocalDetailRepC2f
 from .conv import (
     CBAM,
     ChannelAttention,
+    P2AmplitudeCalibrator,
+    AmplitudePerturbation,
     Concat,
     Conv,
     Conv2,
@@ -204,6 +206,8 @@ __all__ = (
     "CBFuse",
     "CBLinear",
     "ChannelAttention",
+    "P2AmplitudeCalibrator",
+    "AmplitudePerturbation",
     "Classify",
     "Concat",
     "ContrastiveHead",

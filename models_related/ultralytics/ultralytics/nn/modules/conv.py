@@ -24,6 +24,8 @@ __all__ = (
     "LightConv",
     "RepConv",
     "SpatialAttention",
+    "P2AmplitudeCalibrator",
+    "AmplitudePerturbation",
 )
 
 
@@ -560,6 +562,78 @@ class ChannelAttention(nn.Module):
         if getattr(self, "override_gate_fn", None) is not None:
             act_gate = self.override_gate_fn(self, act_gate)
         return x * act_gate
+
+
+class P2AmplitudeCalibrator(nn.Module):
+    """
+    Computes a single scalar scaling factor alpha per image based on global statistics of P2.
+    Preserves all spatial and channel correlation relationships.
+    """
+    def __init__(self, channels, hidden_dim=16, min_val=0.25, max_val=1.0) -> None:
+        super().__init__()
+        self.min_val = min_val
+        self.scale = max_val - min_val
+        
+        # 4 features: Mean Absolute, RMS, Std, Channel Dispersion Std
+        self.mlp = nn.Sequential(
+            nn.Linear(4, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid()
+        )
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [B, C, H, W]
+        B, C, H, W = x.shape
+        
+        # 1. Mean absolute activation
+        mean_abs = torch.mean(torch.abs(x), dim=[1, 2, 3])  # [B]
+        
+        # 2. RMS
+        rms = torch.sqrt(torch.mean(x ** 2, dim=[1, 2, 3]) + 1e-6)  # [B]
+        
+        # 3. Spatial/channel Standard Deviation
+        std = torch.std(x, dim=[1, 2, 3])  # [B]
+        
+        # 4. Channel dispersion (std of channel means)
+        channel_means = torch.mean(x, dim=[2, 3])  # [B, C]
+        chan_disp = torch.std(channel_means, dim=1)  # [B]
+        
+        # Stack stats
+        stats = torch.stack([mean_abs, rms, std, chan_disp], dim=1)  # [B, 4]
+        
+        # Predict alpha
+        alpha = self.min_val + self.scale * self.mlp(stats)  # [B, 1]
+        
+        # Apply scaling: [B, 1, 1, 1] * [B, C, H, W]
+        return x * alpha.view(B, 1, 1, 1)
+
+
+class AmplitudePerturbation(nn.Module):
+    """
+    Applies random scale perturbation to channel amplitudes during training.
+    Bypassed during evaluation (clean inference).
+    """
+    def __init__(self, mode: str = "channel", scale_range=(0.7, 1.3), chan_range=(0.95, 1.05)) -> None:
+        super().__init__()
+        self.mode = mode  # "image", "channel", or "none"
+        self.scale_range = scale_range
+        self.chan_range = chan_range
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.training or self.mode == "none":
+            return x
+            
+        B, C, H, W = x.shape
+        if self.mode == "image":
+            # Single random scalar per image
+            s = x.new_empty(B, 1, 1, 1).uniform_(*self.scale_range)
+            return x * s
+        elif self.mode == "channel":
+            # Random scaling factor per channel per image
+            s = x.new_empty(B, C, 1, 1).uniform_(*self.chan_range)
+            return x * s
+        return x
 
 
 class SpatialAttention(nn.Module):
