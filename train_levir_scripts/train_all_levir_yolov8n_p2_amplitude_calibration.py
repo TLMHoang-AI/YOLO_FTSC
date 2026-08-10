@@ -48,7 +48,7 @@ def model_for(variant: str, pretrained: str):
     from ultralytics import YOLO
     model = YOLO(VARIANTS[variant])
     # Run topology verification
-    verify_topology(model.model, variant)
+    verify_topology(model.model.model, variant)
     model.load(pretrained, smart_transfer=True)
     return model
 
