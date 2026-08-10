@@ -418,55 +418,71 @@ Kết quả thu được từ **Marimo Server 2** (NMS IoU = 0.50):
    - Khi kết hợp calibrator và perturbation theo đúng thứ tự logic (`P2 -> Calibrator -> Perturbation -> Detect`), mô hình đạt val mAP50-95 `0.3116`, test mAP50-95 `0.2763`. 
    - Việc kết hợp này không mang lại sự cải thiện so với A3 đơn lẻ, cho thấy việc thêm calibrator động (được huấn luyện chung với perturbation) có thể khiến quá trình tối ưu hóa phức tạp hơn mà không đem lại lợi ích trực tiếp về độ chính xác định vị.
 
-## Phép thử giả thuyết Channel Irreducibility (Tính không thể thu gọn của Kênh)
+## Phép thử giả thuyết Channel Irreducibility & Consensus (Sự Đồng Thuận Kênh)
 
-Chúng tôi đã triển khai một thực nghiệm đo đạc độ dự báo chéo kênh (cross-channel reconstructability) trên checkpoint `plain_p2_only` (seed 42, NMS IoU = 0.50) để kiểm chứng liệu thông tin kênh không thể khôi phục (irreducible/hard channels) có tương quan chặt chẽ với nhiệm vụ phát hiện đối tượng nhỏ (tàu thủy) hay không.
+Chúng tôi đã thực hiện một chuỗi thực nghiệm kiểm chứng nghiêm ngặt để xác thực sâu hơn về cơ chế "không thể thu gọn chéo kênh" (cross-channel irreducibility) trên checkpoint `plain_p2_only` (seed 42, NMS IoU = 0.50). 
 
-### 1. Thiết lập thực nghiệm (Methodology)
-- Trích xuất 204 bản đồ đặc trưng P2 ($X \in \mathbb{R}^{32 \times 128 \times 128}$) tương ứng với tập test LEVIR-Ship.
-- Xây dựng một bộ reconstructor tuyến tính cực nhỏ sử dụng **1x1 Conv** để khôi phục các kênh bị che (masking 25% số lượng kênh ngẫu nhiên cho mỗi mẫu trong batch). Do không sử dụng spatial convolution, bộ khôi phục buộc phải học cách tái tạo một kênh hoàn toàn từ các kênh còn lại.
-- Huấn luyện reconstructor bằng tối ưu hóa Adam (L1 Loss) trong 30 epochs.
-- Đo sai số khôi phục cục bộ cho từng kênh $c$:
-  - Sai số trên vùng đối tượng nhỏ: $e_c^{\text{obj}} = \mathbb{E}[|X_c - \hat{X}_c| \mid \text{GT box}]$
-  - Sai số trên vùng nền (sea background): $e_c^{\text{bg}} = \mathbb{E}[|X_c - \hat{X}_c| \mid \text{background}]$
-- Xác định độ không thể thu gọn (Irreducibility): $I_c = e_c^{\text{obj}} - e_c^{\text{bg}}$.
+### 1. Thiết lập thực nghiệm nâng cao (Oracle-Free & Confound Control)
+- **Thu thập dữ liệu**: Trích xuất bản đồ đặc trưng P2 ($X \in \mathbb{R}^{32 \times 128 \times 128}$) trên cả **tập huấn luyện (Train split)** và **tập kiểm thử (Test split)** của LEVIR-Ship.
+- **Huấn luyện reconstructor**: Huấn luyện hai bộ reconstructor 1x1 Conv độc lập trên Train split và Test split để khôi phục các kênh bị che (masking 25% ngẫu nhiên).
+- **Tính toán Irreducibility ($I_c$)**: Đo sai số khôi phục trên vùng đối tượng ($e_c^{\text{obj}}$) và vùng nền ($e_c^{\text{bg}}$) trên cả hai tập dữ liệu độc lập.
+- **Mục tiêu**:
+  1. Loại bỏ yếu tố oracle bằng cách lấy xếp hạng kênh từ Train split và áp dụng trực tiếp lên Test split.
+  2. Đo độ ổn định tập hợp (Set Stability) của các kênh khó khôi phục giữa Train và Test.
+  3. Loại trừ các yếu tố gây nhiễu về biên độ đặc trưng (Confound Control) như RMS (Root Mean Square) hay Variance.
+  4. Quét mức độ triệt tiêu mềm (Soft Suppression Sweep) với hệ số $\lambda$.
 
-### 2. Thống kê độ không thể thu gọn (Top 10 Hardest Channels)
-Reconstructor hội tụ nhanh chóng (Val Loss giảm từ 0.1332 xuống 0.0911). Thống kê chi tiết chỉ ra các kênh có độ lệch sai số cao nhất khi khôi phục trên vùng tàu thủy so với vùng nền:
+### 2. Độ ổn định tập hợp (Set Stability)
+Thống kê các kênh khó khôi phục nhất (Top-6 Hardest Channels) thu được từ Train và Test:
+- **Train hard channels**: `[11, 25, 19, 18, 3, 12]`
+- **Test hard channels**:  `[18, 11, 19, 25, 3, 12]`
+- **Chỉ số tương đồng Jaccard**: **`1.0000` (Trùng khớp 100%)**
 
-| Hạng | Kênh | Độ không thể thu gọn ($I_c$) | Obj Error ($e_c^{\text{obj}}$) | BG Error ($e_c^{\text{bg}}$) |
-| :---: | :---: | :---: | :---: | :---: |
-| **1** | Channel 18 | **0.0456** | 0.1264 | 0.0808 |
-| **2** | Channel 11 | **0.0455** | 0.1288 | 0.0832 |
-| **3** | Channel 19 | **0.0402** | 0.1198 | 0.0796 |
-| **4** | Channel 25 | **0.0336** | 0.1131 | 0.0794 |
-| **5** | Channel 03 | **0.0245** | 0.0834 | 0.0589 |
-| **6** | Channel 12 | **0.0224** | 0.1078 | 0.0854 |
-| **7** | Channel 10 | **0.0221** | 0.0986 | 0.0764 |
-| **8** | Channel 27 | **0.0195** | 0.1148 | 0.0953 |
-| **9** | Channel 04 | **0.0163** | 0.0899 | 0.0735 |
-| **10**| Channel 07 | **0.0142** | 0.0729 | 0.0587 |
+Kết quả này chứng minh rằng **độ không thể khôi phục (irreducibility) là một thuộc tính tĩnh và cực kỳ ổn định của biểu diễn P2**, không phụ thuộc vào việc tính toán trên tập dữ liệu nào. Do đó, việc xác định tập kênh này hoàn toàn có thể thực hiện offline trên Train set và áp dụng tĩnh khi inference.
 
-### 3. Phép thử triệt tiêu (Kill-tests / Mute Interventions)
-Để kiểm tra xem các kênh này ảnh hưởng thế nào đến hiệu năng phát hiện đối tượng, chúng tôi chạy thử nghiệm triệt tiêu (đưa giá trị kênh về 0.0 tại đầu vào của Detect head) trên tập test:
-- **Hard-mute**: Triệt tiêu 6 kênh khó khôi phục nhất (top $I_c$ cao nhất): `[18, 11, 19, 25, 3, 12]`.
-- **Easy-mute**: Triệt tiêu 6 kênh dễ khôi phục nhất (top $I_c$ thấp nhất): `[6, 2, 29, 22, 17, 30]`.
+### 3. Phân tích đối chứng Confound Control
+Chúng tôi so sánh hiệu năng test (NMS IoU = 0.50) khi triệt tiêu $K=6$ kênh theo các tiêu chí khác nhau để đảm bảo tín hiệu irreducibility không phải là proxy của biên độ hay phương sai:
 
-Kết quả thu được trên tập Test (NMS IoU = 0.50):
-
-| Cấu hình triệt tiêu | Test AP50 | Test AP75 | Test mAP50-95 | Delta mAP50-95 |
+| Cấu hình triệt tiêu ($K=6$) | Test AP50 | Test AP75 | Test mAP50-95 | Delta mAP50-95 |
 | :--- | :---: | :---: | :---: | :---: |
 | **Baseline** (Plain P2 Control) | 0.7530 | 0.1026 | 0.2741 | — |
-| **Mute Hard Channels** | **0.7853** | **0.1228** | **0.2983** | **+0.0242** |
-| **Mute Easy Channels** | 0.7093 | 0.0620 | 0.2366 | **-0.0375** |
+| **Train-Hard (Oracle-Free)** | **0.7853** | **0.1228** | **0.2983** | **+0.0242** |
+| **Test-Hard (Oracle)** | **0.7853** | **0.1228** | **0.2983** | **+0.0242** |
+| **Easy (Predictable)** | 0.7093 | 0.0620 | 0.2366 | -0.0375 |
+| **Highest RMS** | 0.7302 | 0.0623 | 0.2443 | -0.0298 |
+| **Highest Variance** | 0.7302 | 0.0623 | 0.2443 | -0.0298 |
+| **Lowest RMS** | 0.7597 | 0.1018 | 0.2731 | -0.0010 |
+| **Random (5-trial Avg)** | 0.7410 | 0.0910 | 0.2586 | -0.0155 |
 
-### 4. Kết luận khoa học từ diagnostic:
-- **Hiệu ứng đảo ngược bất ngờ (Counter-intuitive Denoising Effect)**: 
-  * Triệt tiêu các kênh dễ khôi phục nhất (`Easy-mute`) làm mAP sụt giảm mạnh **-3.75%** (từ 0.2741 xuống 0.2366) và AP75 giảm mạnh xuống 0.0620. Điều này chứng minh các kênh dễ khôi phục chéo kênh chứa các basis biểu diễn cốt lõi và ổn định của mạng.
-  * Ngược lại, triệt tiêu các kênh khó khôi phục nhất (`Hard-mute`) lại giúp **tăng mạnh hiệu năng định vị và phân loại: mAP50-95 tăng +2.42% (lên 0.2983) và AP75 tăng từ 0.1026 lên 0.1228**.
-- **Giải thích cơ chế vật lý**: 
-  * Các kênh có $I_c$ cao (khó khôi phục chéo kênh trên đối tượng so với nền) thực chất chứa nhiều **thành phần nhiễu cục bộ không tương quan (uncorrelated noise/sea clutter)** hoặc các đặc trưng dị biệt chỉ xuất hiện khi có đối tượng nhưng gây nhiễu cho Detect head. Việc triệt tiêu chúng hoạt động như một cơ chế **khử nhiễu đặc trưng (feature denoising)** cực kỳ hiệu quả, giúp Detect head tập trung vào các basis biểu diễn ổn định.
-  * Điều này giải thích sâu sắc cho các kết quả trước đó: các cơ chế channel attention động hay channel mixing (như KVCA) cố gắng điều biến các kênh này nhưng vô tình khuếch đại hoặc lan truyền nhiễu chéo kênh, dẫn đến việc tắt KVCA hoặc cố định scalar biên độ lại hoạt động tốt hơn.
-  * Hướng đi tiềm năng tiếp theo: Thiết kế một module tự động nhận diện và suppress (loại bỏ/đè nén) các kênh có độ nhiễu/dự báo kém (hard channels) này tại P2, thay vì cố gắng khuếch đại (reweight) chúng như SE/CBAM truyền thống.
+**Nhận xét**: 
+- Chỉ có việc triệt tiêu nhóm **Hard channels** (cả bản Oracle và Oracle-Free) đem lại hiệu năng vượt trội vượt qua baseline (+2.42% mAP). 
+- Triệt tiêu các kênh có biên độ lớn (Highest RMS/Variance) làm sụt giảm nghiêm trọng hiệu năng của detector (giảm ~2.98% mAP), chứng tỏ các kênh có biên độ lớn vẫn chứa thông tin hữu ích và không trùng khớp với tập Hard channels. Điều này bác bỏ hoàn toàn giả thuyết bias do biên độ.
+
+### 4. Quét mức độ triệt tiêu mềm (Soft Suppression Sweep)
+Chúng tôi kiểm tra ảnh hưởng của việc triệt tiêu mềm bằng cách nhân các kênh Hard với hệ số $\lambda \in [0.0, 1.0]$:
+
+[
+X'_c =
+\begin{cases}
+\lambda X_c,&c\in H_{\text{train}}\
+X_c,&\text{otherwise}
+\end{cases}
+]
+
+| Hệ số $\lambda$ | Test AP50 | Test AP75 | Test mAP50-95 |
+| :---: | :---: | :---: | :---: |
+| **0.00** (Pruning hoàn toàn) | **0.7853** | **0.1228** | **0.2983** |
+| **0.25** | **0.7853** | **0.1228** | **0.2983** |
+| **0.50** | 0.7820 | 0.1197 | 0.2974 |
+| **0.75** | 0.7628 | 0.1105 | 0.2831 |
+| **1.00** (Baseline) | 0.7530 | 0.1026 | 0.2741 |
+
+**Nhận xét**: Đường cong tối ưu hóa đạt trạng thái tốt nhất và đi ngang khi $\lambda \le 0.25$. Điều này cho thấy các kênh không đồng thuận (unsupported/hard channels) mang thông tin gây nhiễu định vị và phân loại đối với detector, và việc triệt tiêu mạnh ($\lambda \to 0$) là tối ưu.
+
+### 5. Kết luận khoa học mới: Cơ chế Đồng Thuận Kênh (Channel Consensus)
+- **Redundancy là một Feature**: Việc triệt tiêu các kênh dễ khôi phục (`Easy`) làm sập mô hình mạnh mẽ nhất. Điều này gợi ý Detect head phụ thuộc chặt chẽ vào một không gian con các kênh có sự đồng thuận, liên kết chặt chẽ và có thể dự báo lẫn nhau (coherent, mutually predictable channel subspace).
+- **Mâu thuẫn Representation**: Các kênh Hard đại diện cho các thành phần đặc trưng lệch pha (deviation/residual) không nhận được sự corroboration (xác nhận chéo) từ các kênh còn lại. Đối với detector, các phản hồi dị biệt này hoạt động giống như một nhiễu loạn phá vỡ sự đồng thuận của subspace chung.
+- **Ý tưởng thiết kế Module mới**: Thay vì tăng cường (amplify) các kênh salient một cách mù quáng, chúng ta nên xây dựng module **khử độ lệch kênh (deviation suppression)**: tự động ước lượng độ không thể khôi phục chéo kênh $E_c$ trực tiếp trên P2 và thực hiện đè nén (suppress) các kênh có độ không đồng thuận cao.
+
 
 
