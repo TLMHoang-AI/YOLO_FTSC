@@ -77,12 +77,12 @@ P2 FPN ────────────────┐
 
 ### FPN-only, seed 42
 
-| Variant | Val P | Val R | Val AP50 | Val AP75 | Val mAP50-95 | Test P | Test R | Test AP50 | Test AP75 | Test mAP50-95 |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `fpn_only_kvca_block` | 0.8449 | 0.7333 | 0.8123 | 0.1775 | 0.3359 | 0.7838 | 0.7188 | 0.7647 | 0.1389 | 0.3122 |
-| `fpn_only_kvca_encoder` | 0.8110 | 0.6752 | 0.7719 | 0.1890 | 0.3178 | 0.7653 | 0.6667 | 0.7419 | 0.1246 | 0.2734 |
-| `fpn_only_cbam_clsonly` | 0.8479 | 0.7262 | 0.8113 | 0.1684 | 0.3338 | 0.7912 | 0.6805 | 0.7514 | 0.1528 | 0.3010 |
-| `fpn_only_kvca_clsonly` | 0.7445 | 0.6233 | 0.7008 | 0.1533 | 0.2861 | 0.6725 | 0.5991 | 0.6394 | 0.1310 | 0.2585 |
+| Variant | Params | GFLOPs | Val P | Val R | Val AP50 | Val AP75 | Val mAP50-95 | Test P | Test R | Test AP50 | Test AP75 | Test mAP50-95 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `fpn_only_kvca_block` | 1.61M | 5.58 | 0.8449 | 0.7333 | 0.8123 | 0.1775 | 0.3359 | 0.7838 | 0.7188 | 0.7647 | 0.1389 | 0.3122 |
+| `fpn_only_kvca_encoder` | 1.61M | 5.58 | 0.8110 | 0.6752 | 0.7719 | 0.1890 | 0.3178 | 0.7653 | 0.6667 | 0.7419 | 0.1246 | 0.2734 |
+| `fpn_only_cbam_clsonly` | 1.60M | 5.58 | 0.8479 | 0.7262 | 0.8113 | 0.1684 | 0.3338 | 0.7912 | 0.6805 | 0.7514 | 0.1528 | 0.3010 |
+| `fpn_only_kvca_clsonly` | 1.61M | 5.58 | 0.7445 | 0.6233 | 0.7008 | 0.1533 | 0.2861 | 0.6725 | 0.5991 | 0.6394 | 0.1310 | 0.2585 |
 
 Source: [levir-yolov8n-p2-fpn-only-attention-seed42](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-fpn-only-attention-seed42).
 
@@ -90,13 +90,13 @@ Source: [levir-yolov8n-p2-fpn-only-attention-seed42](https://huggingface.co/data
 
 Các run dưới đây giữ cùng fixed split, 512 px, 100 epochs và Detect stride 4. `plain_p2_only` là control trực tiếp. `cls_context_mid_cbam` chỉ refine classification, `reg_local` chỉ refine input regression nhưng vẫn dùng nguyên tower bốn cạnh, `hv_decoupled` tách regression thành horizontal `[L,R]` và vertical `[T,B]`, còn `p1drr_cbam_shared` chạy `P1DRR(P2,P1) → CBAM → Detect`, nên CBAM dùng chung cho cả box và class tower.
 
-| Variant | Val P | Val R | Val AP50 | Val AP75 | Val mAP50-95 | Test P | Test R | Test AP50 | Test AP75 | Test mAP50-95 |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `plain_p2_only` | 0.8178 | 0.6717 | 0.7565 | 0.1686 | 0.3206 | 0.8049 | 0.6223 | 0.7213 | 0.1353 | 0.2815 |
-| `cls_context_mid_cbam` | 0.8427 | 0.7294 | 0.8050 | 0.1594 | 0.3315 | 0.7865 | 0.6987 | 0.7633 | 0.1284 | 0.2946 |
-| `reg_local` | 0.8076 | 0.6857 | 0.7719 | 0.1736 | 0.3272 | 0.7952 | 0.6807 | 0.7411 | 0.1323 | 0.2937 |
-| `hv_decoupled` | 0.7808 | 0.6974 | 0.7629 | 0.1528 | 0.3003 | 0.7492 | 0.6767 | 0.7214 | 0.1116 | 0.2699 |
-| `p1drr_cbam_shared` | 0.7231 | 0.6884 | 0.7387 | 0.1465 | 0.3047 | 0.7095 | 0.6652 | 0.7096 | 0.1319 | 0.2833 |
+| Variant | Params | GFLOPs | Val P | Val R | Val AP50 | Val AP75 | Val mAP50-95 | Test P | Test R | Test AP50 | Test AP75 | Test mAP50-95 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `plain_p2_only` | 1.61M | 5.58 | 0.8178 | 0.6717 | 0.7565 | 0.1686 | 0.3206 | 0.8049 | 0.6223 | 0.7213 | 0.1353 | 0.2815 |
+| `cls_context_mid_cbam` | 1.60M | 5.58 | 0.8427 | 0.7294 | 0.8050 | 0.1594 | 0.3315 | 0.7865 | 0.6987 | 0.7633 | 0.1284 | 0.2946 |
+| `reg_local` | 1.60M | 5.58 | 0.8076 | 0.6857 | 0.7719 | 0.1736 | 0.3272 | 0.7952 | 0.6807 | 0.7411 | 0.1323 | 0.2937 |
+| `hv_decoupled` | 1.64M | 5.62 | 0.7808 | 0.6974 | 0.7629 | 0.1528 | 0.3003 | 0.7492 | 0.6767 | 0.7214 | 0.1116 | 0.2699 |
+| `p1drr_cbam_shared` | 1.64M | 5.80 | 0.7231 | 0.6884 | 0.7387 | 0.1465 | 0.3047 | 0.7095 | 0.6652 | 0.7096 | 0.1319 | 0.2833 |
 
 Sources: [asymmetric screen](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-asymmetric-screen-seed42), [HV-decoupled](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-hv-decoupled-seed42), [P1-DRR + shared CBAM](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-p1drr-cbam-shared-seed42).
 
@@ -122,7 +122,7 @@ Các số dưới đây được chép riêng từ mục “Kết quả Test v�
 | FPN-only shared | `fpn_only_kvca_block` | 42 | 0.8177 | 0.3309 | 0.8259 | 0.7529 | 0.7857 | 0.1029 | 0.2990 |
 | FPN-only shared | `fpn_only_kvca_encoder` | 42 | 0.7840 | 0.3167 | 0.7765 | 0.7387 | 0.7694 | 0.0851 | 0.2620 |
 | FPN-only cls-only | `fpn_only_cbam_clsonly` | 42 | 0.7917 | 0.3289 | 0.8086 | 0.7270 | 0.7700 | 0.1141 | 0.2890 |
-| FPN-only cls-only | `fpn_only_kvca_clsonly` | 42 | — | — | 0.7794 | 0.6681 | 0.7202 | 0.0842 | 0.2600 |
+| FPN-only cls-only | `fpn_only_kvca_clsonly` | 42 | 0.7008 | 0.2861 | 0.7794 | 0.6681 | 0.7202 | 0.0842 | 0.2600 |
 | PAN-P3 shared | `pan_p3_kvca` | 42/43/44 | 0.8258 ± 0.0090 | 0.3222 ± 0.0124 | 0.8199 ± 0.0103 | 0.7481 ± 0.0102 | 0.7916 ± 0.0175 | 0.1146 ± 0.0114 | 0.3013 ± 0.0119 |
 | PAN-P3 shared | `pan_p3_cbam` | 42/43/44 | 0.8390 ± 0.0071 | 0.3295 ± 0.0042 | 0.8279 ± 0.0099 | 0.7716 ± 0.0128 | 0.8076 ± 0.0100 | 0.1094 ± 0.0085 | 0.3012 ± 0.0062 |
 
@@ -130,10 +130,10 @@ Các số dưới đây được chép riêng từ mục “Kết quả Test v�
 
 Đây là replication seeds 42/43/44 cho hai shared block P2-only. Seed huấn luyện thay đổi, nhưng dataset split luôn cố định ở seed 42. Bảng dùng `best.pt`; độ lệch chuẩn là sample standard deviation.
 
-| Variant | Seeds | Test P | Test R | Test AP50 | Test AP75 | Test mAP50-95 |
-| :--- | :---: | ---: | ---: | ---: | ---: | ---: |
-| `shared_kvca` | 42/43/44 | 0.8228 ± 0.0036 | 0.7556 ± 0.0105 | 0.7979 ± 0.0109 | 0.1045 ± 0.0130 | 0.2987 ± 0.0056 |
-| `shared_cbam` | 42/43/44 | **0.8328 ± 0.0158** | **0.7768 ± 0.0087** | **0.8076 ± 0.0102** | **0.1115 ± 0.0058** | **0.3089 ± 0.0054** |
+| Variant | Seeds | Params | GFLOPs | Val P | Val R | Val AP50 | Val AP75 | Val mAP50-95 | Test P | Test R | Test AP50 | Test AP75 | Test mAP50-95 |
+| :--- | :---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `shared_kvca` | 42/43/44 | 1.61M | 5.58 | 0.8653 ± 0.0126 | 0.7782 ± 0.0195 | 0.8350 ± 0.0142 | 0.1310 ± 0.0075 | 0.3240 ± 0.0077 | 0.8228 ± 0.0036 | 0.7556 ± 0.0105 | 0.7979 ± 0.0109 | 0.1045 ± 0.0130 | 0.2987 ± 0.0056 |
+| `shared_cbam` | 42/43/44 | 1.60M | 5.58 | 0.8551 ± 0.0070 | 0.7739 ± 0.0120 | 0.8298 ± 0.0081 | 0.1397 ± 0.0077 | 0.3270 ± 0.0027 | 0.8328 ± 0.0158 | 0.7768 ± 0.0087 | 0.8076 ± 0.0102 | 0.1115 ± 0.0058 | 0.3089 ± 0.0054 |
 
 CBAM cao hơn KVCA về mean trên cả năm test metric trong matrix này. Đây là comparison giữa hai shared module, không phải kết luận rằng CBAM luôn tốt hơn KVCA ở topology khác.
 
@@ -163,11 +163,11 @@ cls-only: P2 ─┬→ bare KVCA(group_weight, heads=4, SR=8) → cls
 
 Cả hai resolved model có 1,607,764 parameters; block có đúng 6,257 parameters và pretrained transfer đều đạt 230 tensors. Matched cls-only được train mới từ `yolov8n.pt`, seed 42, đủ 100 epochs, `patience=0`; best training row nằm ở epoch 99.
 
-| Placement | Val P | Val R | Val AP50 | Val AP75 | Val mAP50-95 | Test P | Test R | Test AP50 | Test AP75 | Test mAP50-95 |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Shared bare KVCA | **0.8597** | **0.7789** | **0.8339** | **0.1347** | **0.3233** | **0.8259** | **0.7529** | **0.7857** | **0.1029** | **0.2988** |
-| Matched bare KVCA cls-only | 0.8333 | 0.7638 | 0.8027 | 0.1203 | 0.3058 | 0.7769 | 0.7405 | 0.7641 | 0.0831 | 0.2705 |
-| Shared − cls-only | +0.0264 | +0.0150 | +0.0312 | +0.0144 | +0.0175 | +0.0490 | +0.0124 | +0.0216 | +0.0198 | +0.0283 |
+| Placement | Params | GFLOPs | Val P | Val R | Val AP50 | Val AP75 | Val mAP50-95 | Test P | Test R | Test AP50 | Test AP75 | Test mAP50-95 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Shared bare KVCA | 1.61M | 5.58 | **0.8597** | **0.7789** | **0.8339** | **0.1347** | **0.3233** | **0.8259** | **0.7529** | **0.7857** | **0.1029** | **0.2988** |
+| Matched bare KVCA cls-only | 1.61M | 5.58 | 0.8333 | 0.7638 | 0.8027 | 0.1203 | 0.3058 | 0.7769 | 0.7405 | 0.7641 | 0.0831 | 0.2705 |
+| Shared − cls-only | — | — | +0.0264 | +0.0150 | +0.0312 | +0.0144 | +0.0175 | +0.0490 | +0.0124 | +0.0216 | +0.0198 | +0.0283 |
 
 Khi đã match module, capacity và training length, shared vẫn thắng toàn bộ metric. Kết quả này loại được hai confound lớn của run cũ (full encoder và early stopping), đồng thời ủng hộ việc box/class tower cần co-adapt trên cùng feature KVCA. Nó chưa trực tiếp chứng minh gradient regression đóng vai trò regularizer; claim đó cần gradient/assignment intervention riêng.
 
@@ -177,11 +177,11 @@ Source: [matched KVCA block cls-only full-100](https://huggingface.co/datasets/d
 
 Screen giữ shared placement, `group_weight` và 4 heads; chỉ đổi SR từ 8 xuống 4 hoặc 2. SR4 chạy đủ 100 epochs, evaluate `best.pt` ở NMS IoU 0.5 và upload verified. SR2 dùng khoảng 34.7 GB GPU, chạy chậm hơn rõ và bị chủ động dừng ở epoch 9 vì SR4 không cho gain tổng thể; SR2 không có test metrics và không được upload như một run hoàn tất.
 
-| SR | Trạng thái | Test P | Test R | Test AP50 | Test AP75 | Test mAP50-95 |
-| ---: | :--- | ---: | ---: | ---: | ---: | ---: |
-| 8 | Control hoàn tất | **0.8259** | **0.7529** | **0.7857** | 0.1029 | **0.2988** |
-| 4 | Hoàn tất, HF verified | 0.7862 | 0.7428 | 0.7633 | **0.1107** | 0.2863 |
-| 2 | Dừng epoch 9 | — | — | — | — | — |
+| SR | Params | GFLOPs | Val P | Val R | Val AP50 | Val AP75 | Val mAP50-95 | Test P | Test R | Test AP50 | Test AP75 | Test mAP50-95 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | 1.61M | 5.58 | **0.8597** | 0.7789 | **0.8339** | **0.1347** | **0.3233** | **0.8259** | **0.7529** | **0.7857** | 0.1029 | **0.2988** |
+| 4 | 1.61M | 5.58 | 0.8402 | **0.7882** | 0.8286 | 0.1464 | 0.3264 | 0.7862 | 0.7428 | 0.7633 | **0.1107** | 0.2863 |
+| 2 | 1.61M | 5.58 | — | — | — | — | — | — | — | — | — | — |
 
 SR4 tăng AP75 `0.0078` nhưng giảm precision `0.0397`, recall `0.0101`, AP50 `0.0225` và mAP50-95 `0.0125` so với SR8. Do đó không có evidence rằng finer K/V compression cải thiện tổng thể; SR8 vẫn là lựa chọn tốt hơn cho shared KVCA hiện tại.
 
@@ -191,11 +191,11 @@ Source: [KVCA SR ablation](https://huggingface.co/datasets/duyle2408/levir-yolov
 
 `Patch-KVCA` vẫn đặt P2-only trước Detect, giữ 4 heads, cùng fixed split, 100 epochs, 512 px, batch 8, AMP và NMS IoU 0.5. Cả `patch_kvca_r0` và `patch_kvca_r1` resolved ở 1,607,764 parameters. `r0` chỉ cho mỗi query một compressed K/V cùng group; `r1` mở cửa sổ đến tối đa 3×3 = 9 compressed K/V. Đây là hai run train hoàn tất, không phải inference mask, và cả hai đã upload/verify tại [duyle2408/levir-yolov8n-p2-patch-kvca-seed42](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-patch-kvca-seed42).
 
-| Variant | Val P | Val R | Val AP50 | Val AP75 | Val mAP50-95 | Test P | Test R | Test AP50 | Test AP75 | Test mAP50-95 |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `patch_kvca_r0` | 0.8163196117 | 0.7639939486 | 0.8033620760 | 0.1200413441 | 0.3096335358 | 0.7990656122 | 0.7199288362 | 0.7688674943 | 0.09019193685 | 0.2803782064 |
-| `patch_kvca_r1` | 0.8524668414 | 0.7692533998 | 0.8220254433 | 0.1248511663 | 0.3163521421 | 0.8209153064 | 0.7284482759 | 0.7847413931 | 0.09658735394 | 0.2852108676 |
-| `r1 - r0` | — | — | — | — | +0.0067186060 | +0.0218496940 | +0.0085194400 | +0.0158738990 | +0.0063954170 | +0.0048326610 |
+| Variant | Params | GFLOPs | Val P | Val R | Val AP50 | Val AP75 | Val mAP50-95 | Test P | Test R | Test AP50 | Test AP75 | Test mAP50-95 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `patch_kvca_r0` | 1.61M | 5.58 | 0.8163 | 0.7640 | 0.8034 | 0.1200 | 0.3096 | 0.7991 | 0.7199 | 0.7689 | 0.0902 | 0.2804 |
+| `patch_kvca_r1` | 1.61M | 5.58 | 0.8525 | 0.7693 | 0.8220 | 0.1249 | 0.3164 | 0.8209 | 0.7284 | 0.7847 | 0.0966 | 0.2852 |
+| `r1 - r0` | — | — | — | — | — | — | +0.0067 | +0.0218 | +0.0085 | +0.0159 | +0.0064 | +0.0048 |
 
 Mở local receptive field từ `r0` sang `r1` cải thiện cả năm test metric trong comparison này. Tuy nhiên đây là ablation locality giữa hai Patch-KVCA đã retrain; nó không thay thế comparison với global KVCA hoặc suy luận từ mask OOD ở phần dưới.
 
@@ -246,9 +246,9 @@ Trên all-GT, paired mean `mask - global` của `r0` là best `-0.0303424`, top 
 
 `natten_k3` dùng `NATBlock` full-resolution P2 tại layer 19, 4 heads, kernel 3. Run hoàn tất seed 42 với 100 epochs, 512 px, batch 8, AMP, NMS 0.5; model có 1,610,052 parameters (1,606,548 sau fuse) và artifact đã hoàn tất tại [duyle2408/levir-yolov8n-p2-nat-k3-seed42](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-nat-k3-seed42).
 
-| Variant | Val P | Val R | Val AP50 | Val AP75 | Val mAP50-95 | Test P | Test R | Test AP50 | Test AP75 | Test mAP50-95 |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `natten_k3` | 0.8626760340 | 0.7508053097 | 0.8120441687 | 0.1456191978 | 0.3141977316 | 0.7977270062 | 0.7126436782 | 0.7594006623 | 0.1031567361 | 0.2782841146 |
+| Variant | Params | GFLOPs | Val P | Val R | Val AP50 | Val AP75 | Val mAP50-95 | Test P | Test R | Test AP50 | Test AP75 | Test mAP50-95 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `natten_k3` | 1.61M | 5.58 | 0.8627 | 0.7508 | 0.8120 | 0.1456 | 0.3142 | 0.7977 | 0.7126 | 0.7594 | 0.1032 | 0.2783 |
 
 So với Patch-KVCA `r1` trên test, NATTEN giảm mAP `0.006926753` và AP50 `0.025340731`, nhưng tăng AP75 `0.006569382`. Đây là mechanism screen, không phải connectivity-only control sạch: NATBlock mang full-resolution QKV/relative attention, MLP và gamma. AP75 cao hơn nhưng metric tổng thể thấp hơn, nên nó không thay thế `patch_kvca_r1`.
 
@@ -308,17 +308,17 @@ Một exploratory run đã train shared CBAM mới đến 400 epochs và tiếp 
 
 Chúng tôi đã hoàn thành huấn luyện bổ sung hai mô hình `gap` (Average pooling) và `gmp` (Max pooling) trên hai hạt giống `seed 43` và `seed 44` (mỗi mô hình 100 epochs, 512px, batch 8, NMS IoU = 0.50). Đồng thời, mô hình đề xuất kết hợp `gap_gmp` (Avg+Max pooling) trên `seed 42` cũng đã hoàn thành. Kết quả đầy đủ trên tập Test (NMS IoU = 0.50) được ghi nhận trong bảng sau:
 
-| Variant | Seed | Test AP50 | Test AP75 | Test mAP50-95 | Trạng thái |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **`gap` (Average - Control)** | 42 | 0.8162 | 0.1305 | 0.3106 | Hoàn thành |
-| | 43 | 0.7913 | 0.1060 | 0.2893 | Hoàn thành |
-| | 44 | 0.8057 | 0.1093 | 0.3061 | Hoàn thành |
-| *Trung bình (Average)* | | **0.8044** | **0.1153** | **0.3020** | |
-| **`gmp` (Max - Falsify)** | 42 | 0.8206 | 0.0947 | 0.2995 | Hoàn thành |
-| | 43 | 0.7996 | 0.0968 | 0.2840 | Hoàn thành |
-| | 44 | 0.7941 | 0.1038 | 0.2902 | Hoàn thành |
-| *Trung bình (Average)* | | **0.8048** | **0.0984** | **0.2912** | |
-| **`gap_gmp` (Avg+Max - Proposed)** | 42 | 0.7891 | 0.1028 | 0.2862 | Hoàn thành |
+| Variant | Seed | Params | GFLOPs | Val AP50 | Val mAP50-95 | Test AP50 | Test AP75 | Test mAP50-95 | Trạng thái |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`gap` (Average - Control)** | 42 | 1.60M | 5.58 | 0.8383 | 0.3353 | 0.8162 | 0.1305 | 0.3106 | Hoàn thành |
+| | 43 | 1.60M | 5.58 | 0.8170 | 0.3131 | 0.7913 | 0.1060 | 0.2893 | Hoàn thành |
+| | 44 | 1.60M | 5.58 | 0.8378 | 0.3334 | 0.8057 | 0.1093 | 0.3061 | Hoàn thành |
+| *Trung bình (Average)* | | — | — | **0.8310 ± 0.0121** | **0.3272 ± 0.0123** | **0.8044** | **0.1153** | **0.3020** | |
+| **`gmp` (Max - Falsify)** | 42 | 1.60M | 5.58 | 0.8330 | 0.3190 | 0.8206 | 0.0947 | 0.2995 | Hoàn thành |
+| | 43 | 1.60M | 5.58 | 0.8453 | 0.3198 | 0.7996 | 0.0968 | 0.2840 | Hoàn thành |
+| | 44 | 1.60M | 5.58 | 0.8472 | 0.3166 | 0.7941 | 0.1038 | 0.2902 | Hoàn thành |
+| *Trung bình (Average)* | | — | — | **0.8418 ± 0.0077** | **0.3185 ± 0.0017** | **0.8048** | **0.0984** | **0.2912** | |
+| **`gap_gmp` (Avg+Max - Proposed)** | 42 | 1.60M | 5.58 | 0.8391 | 0.3130 | 0.7891 | 0.1028 | 0.2862 | Hoàn thành |
 
 ### Diễn giải kết quả:
 - **GMP consistently degrades AP75**: Thử nghiệm đa hạt giống xác nhận Max pooling làm sụt giảm nghiêm trọng độ ổn định định vị (AP75 giảm trung bình **-1.69%** absolute so với GAP) trên toàn bộ các hạt giống, chứng minh sự ảnh hưởng tiêu cực của nhiễu cục bộ và tính không nhất quán của score-field.
