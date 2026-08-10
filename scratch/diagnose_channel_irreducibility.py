@@ -43,14 +43,16 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.model.to(device)
     
+    from ultralytics.data.utils import check_det_dataset
     # Get test data loader
     data_yaml = ROOT / "datasets/levir_ship_yolo_seed42/levir_ship.yaml"
+    data_dict = check_det_dataset(data_yaml)
     validator = DetectionValidator(args=dict(
         data=str(data_yaml), imgsz=512, batch=8, device=device, rect=False
     ))
-    # Initialize stride required by get_dataloader
+    validator.data = data_dict
     validator.stride = model.model.stride
-    dataloader = validator.get_dataloader(validator.data["test"], batch_size=8)
+    dataloader = validator.get_dataloader(data_dict["test"], batch_size=8)
     
     # 2. Collect P2 activations and GT boxes
     print("Collecting P2 activations and target masks...")
