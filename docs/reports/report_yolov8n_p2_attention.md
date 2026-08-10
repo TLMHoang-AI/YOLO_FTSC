@@ -477,6 +477,25 @@ Chúng tôi kiểm tra ảnh hưởng của mức độ triệt tiêu Hard chann
   $$X'_c = (1 - g_c) X_c$$
   Trong đó $g_c$ ước lượng độ đồng thuận chéo kênh (cross-channel predictability). Các kênh có độ dự báo chéo cao (Easy) sẽ bị suy giảm cường độ mềm ($g_c \to 0.75$), trong khi các kênh độc lập (Hard) được bảo toàn tuyệt đối ($g_c \to 0$).
 
+---
+
+# Kết quả Thực nghiệm Amplitude Calibration (Seed 42)
+
+Chúng tôi đã hoàn thành việc huấn luyện và đánh giá (Isolated Validation Process) các mô hình hiệu chuẩn biên độ động (Global Scalar) và nhiễu loạn huấn luyện (Perturbation) trên LEVIR-Ship:
+
+| Phương pháp | Test AP50 | Test AP75 | Test mAP50-95 | Delta vs Baseline |
+| :--- | :---: | :---: | :---: | :---: |
+| **Baseline** (Plain P2 Control) | 0.7530 | 0.1026 | 0.2741 | — |
+| **Global Scalar** (Dynamic scalar scale $\alpha$) | 0.8178 | 0.0880 | **0.2818** | **+0.0077** |
+| **Amplitude Perturbation** (Noise training, clean inference) | 0.8000 | 0.0912 | **0.2801** | **+0.0060** |
+| **Calibrator Perturbation** (Noisy calibrator training) | 0.7960 | 0.0890 | **0.2763** | **+0.0022** |
+| *Easy Mute (Consensus-guided Denoising)* | 0.8210 | 0.1280 | **0.2987** | **+0.0246** |
+
+**Nhận xét**: 
+1. Việc bổ sung cơ chế hiệu chuẩn biên độ (Global/Channel scaling) giúp cải thiện nhẹ hiệu năng so với baseline (+0.0060 đến +0.0077 mAP).
+2. Tuy nhiên, mức độ cải thiện này thấp hơn rõ rệt so với phương pháp **Consensus-guided Denoising** (+0.0246 mAP). Điều này chỉ ra rằng việc hiệu chuẩn biên độ toàn cục không giải quyết triệt để sự lệch pha thông tin giữa các kênh. Thay vào đó, việc tập trung nhận diện và khử nhiễu/triệt tiêu các kênh dư thừa (Easy channels) mang lại hiệu quả vượt trội.
+
+
 
 
 
