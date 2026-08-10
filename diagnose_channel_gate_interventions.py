@@ -51,6 +51,8 @@ def main():
     
     # Convert to a single tensor of shape [N_images, C]
     all_gates_tensor = torch.stack(all_gates) # [N_images, C]
+    global_mean = all_gates_tensor.mean().item()
+    print(f"Collected gates global mean: {global_mean:.6f}")
     
     # Pre-calculate intervention gates
     interventions = {}
@@ -67,7 +69,6 @@ def main():
     interventions["Dynamic-scalar"] = dynamic_scalar_gate
     
     # 4. Global-scalar
-    global_mean = all_gates_tensor.mean()
     interventions["Global-scalar"] = torch.full_like(all_gates_tensor, global_mean)
     
     # 5. Cross-image shuffle
@@ -77,12 +78,18 @@ def main():
     interventions["Cross-image shuffle"] = all_gates_tensor[shuffled_indices]
     
     # 6. Channel shuffle
-    # permute channels within each image
     channel_shuffled = all_gates_tensor.clone()
     for i in range(N_images):
         perm = torch.randperm(C)
         channel_shuffled[i] = channel_shuffled[i][perm]
     interventions["Channel shuffle"] = channel_shuffled
+    
+    # 7. Identity (g = 1.0)
+    interventions["Identity (g=1.0)"] = torch.ones_like(all_gates_tensor)
+    
+    # 8. Fixed Scalar Sweeps
+    for val in (0.25, 0.4, 0.5, 0.6, 0.75):
+        interventions[f"Sweep g={val}"] = torch.full_like(all_gates_tensor, val)
 
     # Phase 2: Run validation with each intervention
     results = {}
