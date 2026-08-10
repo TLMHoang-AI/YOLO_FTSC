@@ -469,20 +469,21 @@ X_c,&\text{otherwise}
 \end{cases}
 ]
 
-| Hệ số $\lambda$ | Test mAP50-95 |
-| :---: | :---: |
-| **0.00** (Pruning hoàn toàn) | 0.2840 |
-| **0.25** | 0.2914 |
-| **0.50** (Tối ưu) | **0.2918** |
-| **0.75** | 0.2801 |
-| **1.00** (Baseline) | 0.2741 |
+| Hệ số $\lambda$ | Test AP50 | Test AP75 | Test mAP50-95 |
+| :---: | :---: | :---: | :---: |
+| **0.00** (Pruning hoàn toàn) | **0.7853** | **0.1228** | **0.2983** |
+| **0.25** | **0.7853** | **0.1228** | **0.2983** |
+| **0.50** | 0.7820 | 0.1197 | 0.2974 |
+| **0.75** | 0.7628 | 0.1105 | 0.2831 |
+| **1.00** (Baseline) | 0.7530 | 0.1026 | 0.2741 |
 
-**Nhận xét**: Đường cong tối ưu hóa (optimum curve) đạt đỉnh rõ rệt tại **$\lambda \approx 0.50$ (mAP 0.2918, tăng +1.77% absolute so với Baseline)**. Khi triệt tiêu hoàn toàn ($\lambda = 0.00$), hiệu năng vẫn tăng so với baseline nhưng kém hơn so với việc giữ lại một phần năng lượng của kênh ($0.25 - 0.50$). Kết quả này khẳng định vững chắc giả thuyết **reconstruction-guided calibration** (hiệu chuẩn dựa trên khôi phục chéo kênh): các kênh không đồng thuận vẫn mang một lượng thông tin hữu ích nhất định, nhưng biên độ của chúng cần được đè nén/giảm nhẹ khoảng 50% để tránh lấn át/gây nhiễu cho detector.
+**Nhận xét**: Sau khi cô lập hoàn toàn môi trường đánh giá (isolated validation process) và loại bỏ hoàn toàn side-effects của dataloader caching, đường cong tối ưu hóa đạt trạng thái tốt nhất khi **$\lambda \le 0.25$ (mAP 0.2983, tăng mạnh +2.42% absolute so với Baseline)**. Việc triệt tiêu mạnh mẽ các kênh không đồng thuận này là tối ưu nhất.
 
 ### 5. Kết luận khoa học mới: Cơ chế Đồng Thuận Kênh (Channel Consensus)
-- **Redundancy là một Feature**: Việc triệt tiêu các kênh dễ khôi phục (`Easy`) làm sập mô hình mạnh mẽ nhất. Điều này gợi ý Detect head phụ thuộc chặt chẽ vào một không gian con các kênh có sự đồng thuận, liên kết chặt chẽ và có thể dự báo lẫn nhau (coherent, mutually predictable channel subspace).
+- **Redundancy là một Feature**: Việc triệt tiêu các kênh dễ khôi phục (`Easy`) làm sập mô hình mạnh mẽ nhất (giảm xuống `0.2366` mAP). Điều này gợi ý Detect head phụ thuộc chặt chẽ vào một không gian con các kênh có sự đồng thuận, liên kết chặt chẽ và có thể dự báo lẫn nhau (coherent, mutually predictable channel subspace).
 - **Mâu thuẫn Representation**: Các kênh Hard đại diện cho các thành phần đặc trưng lệch pha (deviation/residual) không nhận được sự corroboration (xác nhận chéo) từ các kênh còn lại. Đối với detector, các phản hồi dị biệt này hoạt động giống như một nhiễu loạn phá vỡ sự đồng thuận của subspace chung.
-- **Ý tưởng thiết kế Module mới**: Thay vì tăng cường (amplify) các kênh salient một cách mù quáng, chúng ta nên xây dựng module **hiệu chuẩn độ lệch kênh (deviation calibration)**: tự động ước lượng độ không thể khôi phục chéo kênh $E_c$ trực tiếp trên P2 và thực hiện đè nén mềm (suppress với scale $\approx 0.50$) các kênh có độ không đồng thuận cao.
+- **Ý tưởng thiết kế Module mới**: Thay vì tăng cường (amplify) các kênh salient một cách mù quáng, chúng ta nên xây dựng module **hiệu chuẩn độ lệch kênh (deviation calibration)**: tự động ước lượng độ không thể khôi phục chéo kênh $E_c$ trực tiếp trên P2 và thực hiện đè nén (suppress với scale $\approx 0.0 - 0.25$) các kênh có độ không đồng thuận cao.
+
 
 
 
