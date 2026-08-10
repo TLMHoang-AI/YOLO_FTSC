@@ -40,6 +40,9 @@ results = []
 for metrics_path in glob.glob('/marimo/yolo_code/runs/**/evaluation_metrics.json', recursive=True):
     metrics_path = Path(metrics_path)
     run_dir = metrics_path.parent
+    if 'nat_k3' in str(run_dir):
+        print(f"Skipping {run_dir} to avoid natten dependency")
+        continue
     pt_path = run_dir / 'weights' / 'best.pt'
     if not pt_path.exists():
         pt_path = run_dir / 'best.pt' # fallback
