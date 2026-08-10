@@ -48,7 +48,9 @@ def main():
     validator = DetectionValidator(args=dict(
         data=str(data_yaml), imgsz=512, batch=8, device=device, rect=False
     ))
-    dataloader = validator.get_dataloader(ROOT / "datasets/levir_ship_yolo_seed42", batch=8)
+    # Initialize stride required by get_dataloader
+    validator.stride = model.model.stride
+    dataloader = validator.get_dataloader(validator.data["test"], batch_size=8)
     
     # 2. Collect P2 activations and GT boxes
     print("Collecting P2 activations and target masks...")
