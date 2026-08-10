@@ -304,6 +304,25 @@ Một exploratory run đã train shared CBAM mới đến 400 epochs và tiếp 
 - CBAM cls-only giữ localization tốt nhất trong bốn FPN-only variant theo HF test AP75 (`0.1528`), nhưng shared KVCA block có mAP50-95 cao nhất (`0.3122`). Điều này ủng hộ trade-off giữa detectability và localization-aware ranking, không chứng minh attention cls-only luôn tốt hơn shared attention.
 - PAN-P3 CBAM là variant ổn định nhất trong family PAN: test AP50 `0.7893 ± 0.0078`, recall `0.7284 ± 0.0102`, mAP50-95 `0.3135 ± 0.0052` theo artifact HF.
 - Không dùng PAN-P3 để kết luận causal rằng thêm P3 tốt hơn P2-only: PAN có thêm bottom-up fusion, thêm detection level, attention placement khác và ba seed thay vì một seed.
+## Channel descriptor multi-seed evaluation results
+
+Chúng tôi đã hoàn thành huấn luyện bổ sung hai mô hình `gap` (Average pooling) và `gmp` (Max pooling) trên hai hạt giống `seed 43` và `seed 44` (mỗi mô hình 100 epochs, 512px, batch 8, NMS IoU = 0.50). Đồng thời, mô hình đề xuất kết hợp `gap_gmp` (Avg+Max pooling) trên `seed 42` cũng đã hoàn thành. Kết quả đầy đủ trên tập Test (NMS IoU = 0.50) được ghi nhận trong bảng sau:
+
+| Variant | Seed | Test AP50 | Test AP75 | Test mAP50-95 | Trạng thái |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **`gap` (Average - Control)** | 42 | 0.8162 | 0.1305 | 0.3106 | Hoàn thành |
+| | 43 | 0.7913 | 0.1060 | 0.2893 | Hoàn thành |
+| | 44 | 0.8057 | 0.1093 | 0.3061 | Hoàn thành |
+| *Trung bình (Average)* | | **0.8044** | **0.1153** | **0.3020** | |
+| **`gmp` (Max - Falsify)** | 42 | 0.8206 | 0.0947 | 0.2995 | Hoàn thành |
+| | 43 | 0.7996 | 0.0968 | 0.2840 | Hoàn thành |
+| | 44 | 0.7941 | 0.1038 | 0.2902 | Hoàn thành |
+| *Trung bình (Average)* | | **0.8048** | **0.0984** | **0.2912** | |
+| **`gap_gmp` (Avg+Max - Proposed)** | 42 | 0.7891 | 0.1028 | 0.2862 | Hoàn thành |
+
+### Diễn giải kết quả:
+- **GMP consistently degrades AP75**: Thử nghiệm đa hạt giống xác nhận Max pooling làm sụt giảm nghiêm trọng độ ổn định định vị (AP75 giảm trung bình **-1.69%** absolute so với GAP) trên toàn bộ các hạt giống, chứng minh sự ảnh hưởng tiêu cực của nhiễu cục bộ và tính không nhất quán của score-field.
+- **Thất bại của giải thuyết kết hợp**: Việc kết hợp `gap_gmp` cho kết quả tệ hơn cả hai bản đơn lẻ ở AP50 (`0.7891`) và mAP (`0.2862`), cho thấy Max pooling làm loãng tín hiệu bối cảnh nền ổn định do Average pooling mang lại.
 
 ## Nguồn truy vết
 
