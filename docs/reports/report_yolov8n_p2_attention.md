@@ -405,18 +405,20 @@ Các mô hình được chạy phân tán trên hai server Marimo:
 
 Kết quả thu được từ **Marimo Server 2** (NMS IoU = 0.50):
 
-| Variant | Params | GFLOPs | Val AP50 | Val AP75 | Val mAP50-95 | Test AP50 | Test AP75 | Test mAP50-95 |
+| Variant | Params | GFLOPs | Val AP50 | Val mAP50-95 | Test AP50 | Test AP75 | Test mAP50-95 | Delta mAP |
 | :--- | ---: | ---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`amplitude_perturbation` (A3)** | 1.60M | 5.58 | 0.8336 | 0.1185 | 0.3159 | 0.7750 | 0.1018 | 0.2801 |
-| **`calibrator_perturbation` (A4)** | 1.60M | 5.58 | 0.8128 | 0.1125 | 0.3116 | 0.7803 | 0.0926 | 0.2763 |
+| **`global_scalar` (A1)** | 1.60M | 5.58 | 0.8118 | 0.3344 | 0.8178 | 0.0880 | **0.2818** | **+0.0077** |
+| **`amplitude_calibrator` (A2)** | 1.60M | 5.58 | 0.6792 | 0.2710 | — | — | *Terminated* | — |
+| **`amplitude_perturbation` (A3)** | 1.60M | 5.58 | 0.8595 | 0.3285 | 0.8000 | 0.0912 | **0.2801** | **+0.0060** |
+| **`calibrator_perturbation` (A4)** | 1.60M | 5.58 | 0.8484 | 0.3110 | 0.7960 | 0.0890 | **0.2763** | **+0.0022** |
 
-### Phân tích kết quả Server 2:
-1. **Tác động của Perturbation thuần (A3)**:
-   - Trong `amplitude_perturbation` (A3), việc thêm nhiễu biên độ ảnh (`image-scalar perturbation`) trong quá trình huấn luyện và sử dụng clean inference cho ra kết quả val mAP50-95 đạt `0.3159`, test mAP50-95 đạt `0.2801`.
-   - Kết quả này chứng minh rằng việc huấn luyện với nhiễu biên độ giúp mô hình duy trì độ chính xác tương đối tốt, đóng vai trò như một regularizer. Tuy nhiên, nó chưa vượt qua được baseline clean ở giai đoạn test.
+### Phân tích kết quả:
+1. **Hiệu năng các bộ hiệu chuẩn biên độ động (A1, A3, A4)**:
+   - Các biến thể hiệu chuẩn biên độ đều cho thấy sự cải thiện nhẹ so với baseline clean (`0.2741` mAP), đạt mức tăng từ **`+0.0022` đến `+0.0077` mAP**.
+   - Tuy nhiên, sự cải thiện này thấp hơn rất nhiều so với phương pháp **Consensus-guided Denoising** (tắt các kênh Easy dư thừa đạt **`+0.0246` mAP**). Điều này gợi ý rằng việc hiệu chuẩn biên độ toàn cục/kênh đơn thuần chỉ giải quyết phần ngọn, trong khi việc định vị và triệt tiêu các đặc trưng dư thừa (Easy) mới là chìa khóa tối ưu hóa thực sự.
 2. **Sự kết hợp Calibrator + Perturbation (A4)**:
-   - Khi kết hợp calibrator và perturbation theo đúng thứ tự logic (`P2 -> Calibrator -> Perturbation -> Detect`), mô hình đạt val mAP50-95 `0.3116`, test mAP50-95 `0.2763`. 
-   - Việc kết hợp này không mang lại sự cải thiện so với A3 đơn lẻ, cho thấy việc thêm calibrator động (được huấn luyện chung với perturbation) có thể khiến quá trình tối ưu hóa phức tạp hơn mà không đem lại lợi ích trực tiếp về độ chính xác định vị.
+   - Khi kết hợp calibrator và perturbation theo đúng thứ tự logic (`P2 -> Calibrator -> Perturbation -> Detect`), mô hình đạt test mAP50-95 `0.2763`. Việc kết hợp này không mang lại sự cải thiện so với A3 đơn lẻ, cho thấy việc thêm calibrator động (được huấn luyện chung với perturbation) có thể khiến quá trình tối ưu hóa phức tạp hơn mà không đem lại lợi ích trực tiếp về độ chính xác định vị.
+
 
 ## Phép thử giả thuyết Channel Irreducibility & Consensus (Sự Đồng Thuận Kênh)
 
@@ -477,23 +479,6 @@ Chúng tôi kiểm tra ảnh hưởng của mức độ triệt tiêu Hard chann
   $$X'_c = (1 - g_c) X_c$$
   Trong đó $g_c$ ước lượng độ đồng thuận chéo kênh (cross-channel predictability). Các kênh có độ dự báo chéo cao (Easy) sẽ bị suy giảm cường độ mềm ($g_c \to 0.75$), trong khi các kênh độc lập (Hard) được bảo toàn tuyệt đối ($g_c \to 0$).
 
----
-
-# Kết quả Thực nghiệm Amplitude Calibration (Seed 42)
-
-Chúng tôi đã hoàn thành việc huấn luyện và đánh giá (Isolated Validation Process) các mô hình hiệu chuẩn biên độ động (Global Scalar) và nhiễu loạn huấn luyện (Perturbation) trên LEVIR-Ship:
-
-| Phương pháp | Test AP50 | Test AP75 | Test mAP50-95 | Delta vs Baseline |
-| :--- | :---: | :---: | :---: | :---: |
-| **Baseline** (Plain P2 Control) | 0.7530 | 0.1026 | 0.2741 | — |
-| **Global Scalar** (Dynamic scalar scale $\alpha$) | 0.8178 | 0.0880 | **0.2818** | **+0.0077** |
-| **Amplitude Perturbation** (Noise training, clean inference) | 0.8000 | 0.0912 | **0.2801** | **+0.0060** |
-| **Calibrator Perturbation** (Noisy calibrator training) | 0.7960 | 0.0890 | **0.2763** | **+0.0022** |
-| *Easy Mute (Consensus-guided Denoising)* | 0.8210 | 0.1280 | **0.2987** | **+0.0246** |
-
-**Nhận xét**: 
-1. Việc bổ sung cơ chế hiệu chuẩn biên độ (Global/Channel scaling) giúp cải thiện nhẹ hiệu năng so với baseline (+0.0060 đến +0.0077 mAP).
-2. Tuy nhiên, mức độ cải thiện này thấp hơn rõ rệt so với phương pháp **Consensus-guided Denoising** (+0.0246 mAP). Điều này chỉ ra rằng việc hiệu chuẩn biên độ toàn cục không giải quyết triệt để sự lệch pha thông tin giữa các kênh. Thay vào đó, việc tập trung nhận diện và khử nhiễu/triệt tiêu các kênh dư thừa (Easy channels) mang lại hiệu quả vượt trội.
 
 
 
