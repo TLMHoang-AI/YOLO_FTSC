@@ -235,24 +235,33 @@ Chúng tôi tiến hành chẩn đoán sâu 135 đối tượng bị bỏ sót (
 
 Bằng cách thay thế trọng số attention của từng kênh kích hoạt $g_{i,c}$ bằng các cấu hình can thiệp tĩnh/vô hướng trong quá trình suy luận, chúng tôi thu được kết quả định lượng như sau:
 
-| Phương pháp can thiệp | Mô tả toán học | Test AP50 | Test AP75 | Test mAP50-95 | Test Precision | Test Recall |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Original** | Không can thiệp ($g_{i,c} = \text{act}(gate)$) | 0.8162 | 0.1305 | 0.3106 | 0.8266 | 0.7701 |
-| **Static-channel** | Lấy trung bình ảnh: $g'_{i,c} = \text{mean}_i(g_{i,c})$ | 0.8229 | 0.1357 | 0.3198 | 0.8148 | **0.7839** |
-| **Dynamic-scalar** | Chỉ giữ scale của ảnh: $g'_{i,c} = \text{mean}_c(g_{i,c})$ | **0.8329** | **0.1421** | **0.3254** | 0.8409 | 0.7802 |
-| **Global-scalar** | Trọng số hằng số: $g' = \text{mean}_{i,c}(g_{i,c})$ | 0.8319 | 0.1382 | 0.3241 | **0.8431** | 0.7718 |
-| **Cross-image shuffle**| Phá sự tương ứng ảnh: $g'_{i,c} = g_{j,c}$ | 0.8095 | 0.1244 | 0.3084 | 0.8242 | 0.7748 |
-| **Channel shuffle** | Phá tương quan kênh: permute $g_{i,c}$ theo $c$ | 0.8123 | 0.1259 | 0.3057 | 0.8352 | 0.7572 |
+* **Trung bình toàn bộ (Global mean) của gate weights ban đầu**: **`0.4514`**
 
-### Kết luận cơ chế quan trọng:
+| Cấu hình can thiệp | Test AP50 | Test AP75 | Test mAP50-95 | Test Precision | Test Recall |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Original** (Không can thiệp) | 0.8162 | 0.1305 | 0.3106 | 0.8266 | 0.7701 |
+| **Static-channel** ($g'_{i,c} = \text{mean}_i(g_{i,c})$) | 0.8229 | 0.1357 | 0.3198 | 0.8148 | **0.7839** |
+| **Dynamic-scalar** ($g'_{i,c} = \text{mean}_c(g_{i,c})$) | 0.8329 | 0.1421 | **0.3254** | 0.8409 | 0.7802 |
+| **Global-scalar** ($g' = 0.4514$ constant) | 0.8319 | 0.1382 | 0.3241 | **0.8431** | 0.7718 |
+| **Cross-image shuffle** | 0.8095 | 0.1244 | 0.3084 | 0.8242 | 0.7748 |
+| **Channel shuffle** | 0.8189 | **0.1474** | 0.3148 | 0.8380 | 0.7658 |
+| **Identity (g = 1.0)** (Bỏ attention hoàn toàn) | 0.8212 | 0.1233 | 0.3115 | 0.8189 | 0.7796 |
+| **Sweep g = 0.25** | 0.6989 | 0.0895 | 0.2676 | 0.6259 | 0.7787 |
+| **Sweep g = 0.40** | 0.8263 | 0.1356 | 0.3240 | 0.8487 | 0.7672 |
+| **Sweep g = 0.50** | **0.8345** | 0.1349 | 0.3208 | 0.8364 | 0.7902 |
+| **Sweep g = 0.60** | 0.8315 | 0.1327 | 0.3144 | 0.8237 | 0.7919 |
+| **Sweep g = 0.75** | 0.8164 | 0.1218 | 0.3091 | 0.8239 | 0.7796 |
 
-1. **Sự sụt giảm do Channel-specific Gating (Channel Distortion)**:
-   * Mô hình nguyên bản (**Original**) có kết quả **tệ hơn đáng kể** ở mọi chỉ số so với việc ép tất cả các kênh chia sẻ chung một tỷ lệ scale (**`Dynamic-scalar`** và **`Global-scalar`**). 
-   * Cụ thể, việc đồng nhất hóa trọng số kênh theo từng ảnh (`Dynamic-scalar`) giúp **AP50 vọt lên 0.8329 (+1.67%) và AP75 lên 0.1421 (+1.16%)**.
-2. **Bản chất cơ chế là Adaptive Feature Amplitude Calibration**:
-   * Việc `Dynamic-scalar` và `Global-scalar` đạt hiệu suất cao nhất chứng minh rằng giá trị thực tế của `ChannelAttention` không nằm ở việc "chọn lọc đặc trưng ngữ nghĩa kênh" (semantic channel selection), mà chỉ đóng vai trò như một **bộ hiệu chuẩn biên độ kích hoạt toàn cục** (global activation amplitude calibrator) cho feature map P2.
-   * Việc áp đặt các trọng số attention khác nhau lên từng kênh (Original) vô tình làm méo cấu trúc đồng thích ứng kênh (channel co-adaptation) đã được tối ưu hóa ở các lớp tích chập phía trước, gây tác động tiêu cực đến downstream Detect head.
-3. **Khuyến nghị kiến trúc tiếp theo**:
-   * Các nghiên cứu attention tiếp theo nên tập trung vào các cơ chế hiệu chuẩn biên độ vô hướng (scalar-amplitude calibration) đơn giản như **`DynamicScalarScale`** thay vì các khối attention phức tạp biến đổi kênh riêng biệt.
+### Nhận xét & Diễn giải khoa học:
+
+1. **Channel-specific gating không cần thiết khi suy luận (Inference-time Gating Redundancy)**:
+   * Việc loại bỏ hoàn toàn tính năng thay đổi trọng số theo từng kênh bằng cách đặt toàn bộ $g = 0.4514$ (`Global-scalar`) hoặc $g = 0.40$ (`Sweep g=0.40`) giúp tăng mAP tương ứng lên **0.3241** và **0.3240** (+1.35% absolute so với Original).
+   * Điều này chứng minh rằng cơ chế lựa chọn kênh động (dynamic channel-specific selection) theo ảnh tại thời điểm suy luận là không cần thiết, thậm chí còn gây méo cấu trúc kênh được học ở các lớp trước đó.
+2. **Optimum Curve của biên độ đặc trưng (Optimal Feature Amplitude)**:
+   * Phép sweep giá trị tĩnh tạo ra một đường cong tối ưu (parabolic curve) rõ rệt: mAP đạt đỉnh tại $g \approx 0.40 - 0.45$ (mAP 0.3240) và giảm dần khi dịch về hai phía ($g = 0.25$ làm mAP giảm về 0.2676; $g = 1.0$ đạt mAP 0.3115).
+   * Điều này ủng hộ mạnh mẽ cho giả thuyết **hiệu chuẩn biên độ kích hoạt (Feature Amplitude Calibration)** tại thời điểm suy luận.
+3. **Phân rã tác động: Inference Calibration vs Training Regularization**:
+   * Việc `Identity (g=1.0)` đạt mAP **0.3115** (gần như tương đương `Original` 0.3106) cho thấy: bản thân việc nhân chập gate $g(F)$ động lúc inference không tạo ra bất kỳ gain nào so với việc bỏ khối attention hoàn toàn.
+   * Do đó, phần lớn độ chính xác vượt trội của checkpoint được huấn luyện với `ChannelAttention` so với baseline thô không nằm ở sức mạnh biểu diễn (representational power) của khối attention lúc suy luận, mà nằm ở **tác dụng điều hòa tối ưu hóa lúc huấn luyện (training-time regularization/co-adaptation)**. Các lớp hạ nguồn (downstream layers) và đầu Detect đã đồng thích ứng (co-adapt) để thích nghi với một feature map được giảm độ suy hao (attenuation) ổn định.
 
 
