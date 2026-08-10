@@ -355,7 +355,9 @@ Chúng tôi đã hoàn thành huấn luyện bổ sung hai mô hình `gap` (Aver
    * Điều này ủng hộ mạnh mẽ cho giả thuyết **hiệu chuẩn biên độ kích hoạt (Feature Amplitude Calibration)** tại thời điểm suy luận.
 3. **Phân rã tác động: Inference Calibration vs Training Regularization**:
    * Việc `Identity (g=1.0)` đạt mAP **0.3115** (gần như tương đương `Original` 0.3106) cho thấy: bản thân việc nhân chập gate $g(F)$ động lúc inference không tạo ra bất kỳ gain nào so với việc bỏ khối attention hoàn toàn.
-   * Do đó, phần lớn độ chính xác vượt trội của checkpoint được huấn luyện với `ChannelAttention` so với baseline thô không nằm ở sức mạnh biểu diễn (representational power) của khối attention lúc suy luận, mà nằm ở **tác dụng điều hòa tối ưu hóa lúc huấn luyện (training-time regularization/co-adaptation)**. ### Chẩn đoán Channel-KVCA: Vai trò của tham số Beta và Khử nhiễu Kênh (Beta=0 Intervention)
+   * Do đó, phần lớn độ chính xác vượt trội của checkpoint được huấn luyện với `ChannelAttention` so với baseline thô không nằm ở sức mạnh biểu diễn (representational power) của khối attention lúc suy luận, mà nằm ở **tác dụng điều hòa tối ưu hóa lúc huấn luyện (training-time regularization/co-adaptation)**.
+
+### Chẩn đoán Channel-KVCA: Vai trò của tham số Beta và Khử nhiễu Kênh (Beta=0 Intervention)
 
 Mô hình **Channel-KVCA** (Channel-wise Key-Value Compressed Attention) trên `seed 42` ban đầu cho thấy hiệu suất suy giảm nghiêm trọng so với GAP (`0.2913` so với `0.3106` mAP). Để cô lập tác động của nhánh cross-channel attention này, chúng tôi thực hiện chẩn đoán giá trị tham số học được `beta` và chạy can thiệp `beta = 0.0` tại inference (loại bỏ hoàn toàn tác động của khối KVCA):
 
