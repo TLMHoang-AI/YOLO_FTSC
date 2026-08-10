@@ -252,11 +252,40 @@ Trên all-GT, paired mean `mask - global` của `r0` là best `-0.0303424`, top 
 
 So với Patch-KVCA `r1` trên test, NATTEN giảm mAP `0.006926753` và AP50 `0.025340731`, nhưng tăng AP75 `0.006569382`. Đây là mechanism screen, không phải connectivity-only control sạch: NATBlock mang full-resolution QKV/relative attention, MLP và gamma. AP75 cao hơn nhưng metric tổng thể thấp hơn, nên nó không thay thế `patch_kvca_r1`.
 
-## Channel descriptor follow-up: protocol pending
+## Channel descriptor follow-up: diagnostic results
 
-Channel-only GAP control hiện có sẽ được so sánh hẹp với GMP và GAP+GMP, cùng seed huấn luyện 42, fixed split seed 42, P2-only `ChannelAttention → Detect` stride 4 và NMS IoU 0.50. Chưa có kết quả từ matrix này.
+Diagnostic so sánh checkpoint channel-only và spatial-only trên đúng 788 test images / 696 GT với NMS IoU 0.50. Kết quả như sau:
 
-Diagnostic đi kèm không dùng local ranking hay suy luận về max-background suppression để kết luận channel hơn spatial. Nó sẽ so sánh checkpoint channel-only và spatial-only trên đúng 788 test images/696 GT: raw P2 candidates có center trong GT, sau đó post-NMS (IoU 0.50, confidence thấp cho PR) được sắp toàn cục theo score và greedy one-to-one matching riêng tại IoU 0.50/0.75. Báo cáo sẽ ghi quantile/rate của `IoU_topscore`, multiplicity quanh top score, phân phối confidence TP, PR operating points và paired image bootstrap 4,000 lần (channel − spatial). Cho đến khi artifact này chạy xong, không có claim mechanism hay superiority channel-vs-spatial.
+### So sánh Anchor-GT Matching (Pre-NMS)
+
+| Chỉ số | Channel-only | Spatial-only | Paired Delta (Channel - Spatial) [95% CI] |
+| :--- | :---: | :---: | :---: |
+| **Mean `IoU_topscore`** | 0.6868 (median) | 0.6890 (median) | +0.0019 `[-0.0066, 0.0106]` |
+| **`IoU_topscore` ≥ 0.50 Rate** | 89.22% | 88.79% | -0.11% `[-2.42%, +2.16%]` |
+| **`IoU_topscore` ≥ 0.75 Rate** | 31.47% | 31.03% | +1.24% `[-2.81%, +5.39%]` |
+| **`raw_half_top_multiplicity`** (mean) | 9.0 (median) | 9.0 (median) | **-0.2035** `[-0.3899, -0.0113]` |
+
+### Phân bố Confidence của True Positives (Post-NMS)
+
+| Ngưỡng IoU | Phân vị (Quantile) | Channel-only | Spatial-only |
+| :--- | :---: | :---: | :---: |
+| **IoU ≥ 0.50** | 5% / 25% / 50% / 75% / 95% | 0.0387 / 0.3447 / 0.4707 / 0.5483 / 0.6267 | 0.0534 / 0.3793 / 0.4770 / 0.5397 / 0.6081 |
+| **IoU ≥ 0.75** | 5% / 25% / 50% / 75% / 95% | 0.0116 / 0.3732 / 0.4978 / 0.5711 / 0.6504 | 0.0251 / 0.3907 / 0.4885 / 0.5431 / 0.6141 |
+
+### Điểm vận hành Precision-Recall (Post-NMS)
+
+| Metric | Ngưỡng Target | Channel-only | Spatial-only |
+| :--- | :---: | :---: | :---: |
+| **Precision @ Recall (IoU 0.50)** | R = 0.25 / 0.50 / 0.75 | 95.85% / 92.67% / 84.06% | 94.14% / 90.33% / 85.23% |
+| **Recall @ Precision (IoU 0.50)** | P = 0.50 / 0.75 / 0.90 | 87.64% / 82.04% / 58.62% | 87.50% / 81.75% / 60.92% |
+| **Precision @ Recall (IoU 0.75)** | R = 0.25 / 0.50 / 0.75 | 36.31% / None / None | 34.38% / None / None |
+| **Recall @ Precision (IoU 0.75)** | P = 0.50 / 0.75 / 0.90 | **10.78%** / 2.87% / 0.14% | **1.58%** / None / None |
+
+### Diễn giải cơ chế:
+- **Candidate Multiplicity**: Việc delta `raw_half_top_multiplicity` âm ổn định và có ý nghĩa thống kê xác nhận Spatial attention tạo ra trường điểm số bao quanh object bị phân tán/lặp nhiều hơn (diffuse/duplicated), gây ảnh hưởng tiêu cực lên cơ chế lọc của NMS.
+- **Tính nhất quán phân phối điểm số**: Ở ngưỡng IoU 0.75 nghiêm ngặt, tại Precision 50%, Channel-only giữ được Recall là **10.78%** trong khi Spatial-only sụt giảm mạnh về **1.58%**. Kết quả này chỉ ra rằng Spatial gating phá vỡ tính nhất quán của thang điểm số (global score-field scale inconsistency) giữa các ảnh trên toàn bộ dataset, trực tiếp giải thích khoảng cách AP75 (`0.1305 vs 0.0928`).
+
+Channel-only GAP control hiện tại đang được so sánh hẹp với GMP và GAP+GMP (proposed) trên server.
 
 ## Ghi chú run 400 epochs
 
