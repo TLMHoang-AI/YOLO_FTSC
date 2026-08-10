@@ -17,7 +17,7 @@ from ultralytics import YOLO
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", type=str, default="/marimo/yolo_code/runs/levir_yolov8n_p2_channel_descriptor/gap/seed_42/weights/best.pt")
-    parser.add_argument("--data-yaml", type=str, default="/marimo/yolo_code/datasets/LevirShipData/data_split_42.yaml")
+    parser.add_argument("--data-yaml", type=str, default="/marimo/datasets/levir_ship_yolo_seed42/levir_ship.yaml")
     args = parser.parse_args()
 
     # Load model
