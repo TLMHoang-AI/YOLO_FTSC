@@ -230,3 +230,5 @@ misc_varroa/
 .claude/
 .codex/
 diagnostics/
+.agents/
+.ai-bridge/

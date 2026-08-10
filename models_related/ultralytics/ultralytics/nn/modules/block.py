@@ -64,7 +64,10 @@ __all__ = (
     "HGBlock",
     "HGStem",
     "ImagePoolingAttn",
+    "FullSelfAttention",
+    "GlobalChannelContextCalibration",
     "KVCompressedAttention",
+    "PatchKVCompressedAttention",
     "KVCompressedAttentionPartial",
     "KVCompressedTransformerEncoder",
     "M3NATFuse",
@@ -1298,6 +1301,24 @@ def _choose_attention_heads(channels: int, requested_heads: int) -> int:
     return 1
 
 
+def _group_weight_compress(x: torch.Tensor, sr_ratio: int, scorer: nn.Linear) -> torch.Tensor:
+    """Compress non-overlapping spatial groups with learned softmax token weights."""
+    if sr_ratio <= 1:
+        return x
+    b, c, h, w = x.shape
+    pad_h = (sr_ratio - h % sr_ratio) % sr_ratio
+    pad_w = (sr_ratio - w % sr_ratio) % sr_ratio
+    if pad_h or pad_w:
+        x = F.pad(x, (0, pad_w, 0, pad_h))
+    hp, wp = x.shape[-2:]
+    gh, gw = hp // sr_ratio, wp // sr_ratio
+    tokens = x.view(b, c, gh, sr_ratio, gw, sr_ratio).permute(0, 2, 4, 3, 5, 1).contiguous()
+    tokens = tokens.view(b, gh, gw, sr_ratio * sr_ratio, c)
+    weights = scorer(tokens).softmax(dim=3)
+    compressed = (tokens * weights).sum(dim=3)
+    return compressed.permute(0, 3, 1, 2).contiguous()
+
+
 class KVCompressedAttention(nn.Module):
     """Self-attention with full-resolution queries and spatially compressed keys/values.
 
@@ -1397,20 +1418,7 @@ class KVCompressedAttention(nn.Module):
 
     def _compress_group_weight(self, x: torch.Tensor) -> torch.Tensor:
         """Compress each sr_ratio x sr_ratio token group with learned softmax weights."""
-        if self.sr_ratio <= 1:
-            return x
-        b, c, h, w = x.shape
-        pad_h = (self.sr_ratio - h % self.sr_ratio) % self.sr_ratio
-        pad_w = (self.sr_ratio - w % self.sr_ratio) % self.sr_ratio
-        if pad_h or pad_w:
-            x = F.pad(x, (0, pad_w, 0, pad_h))
-        hp, wp = x.shape[-2:]
-        gh, gw = hp // self.sr_ratio, wp // self.sr_ratio
-        tokens = x.view(b, c, gh, self.sr_ratio, gw, self.sr_ratio).permute(0, 2, 4, 3, 5, 1).contiguous()
-        tokens = tokens.view(b, gh, gw, self.sr_ratio * self.sr_ratio, c)
-        weights = self.group_score(tokens).softmax(dim=3)
-        compressed = (tokens * weights).sum(dim=3)
-        return compressed.permute(0, 3, 1, 2).contiguous()
+        return _group_weight_compress(x, self.sr_ratio, self.group_score)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply KV-compressed attention and return a BCHW tensor."""
@@ -1448,6 +1456,166 @@ class KVCompressedAttention(nn.Module):
             scale=self.scale,
         )
 
+        out = out.transpose(1, 2).reshape(b, h * w, c).transpose(1, 2).reshape(b, c, h, w)
+        out = self.proj_bn(self.proj(out))
+        return x + out if self.residual else out
+
+
+class GlobalChannelContextCalibration(nn.Module):
+    """Calibrate local features using global cross-channel relationships without spatial content transport."""
+
+    def __init__(
+        self,
+        c1: int,
+        c2: int,
+        sr_ratio: int = 8,
+        temperature: float = 0.07,
+        alpha_init: float = 0.0,
+    ):
+        """Initialize learned group compression and global channel-affinity gating."""
+        super().__init__()
+        if isinstance(sr_ratio, bool) or int(sr_ratio) != sr_ratio or sr_ratio <= 0:
+            raise ValueError(f"sr_ratio must be a positive integer, got {sr_ratio}")
+        if temperature <= 0:
+            raise ValueError(f"temperature must be positive, got {temperature}")
+        self.c2 = c2
+        self.sr_ratio = int(sr_ratio)
+        self.temperature = float(temperature)
+        self.input_proj = nn.Identity() if c1 == c2 else Conv(c1, c2, 1, 1)
+        self.group_score = nn.Linear(c2, 1)
+        self.q = nn.Conv1d(c2, c2, 1, bias=False)
+        self.k = nn.Conv1d(c2, c2, 1, bias=False)
+        self.v = nn.Conv1d(c2, c2, 1, bias=False)
+        self.gate_proj = nn.Linear(c2, c2)
+        self.alpha = nn.Parameter(torch.tensor(float(alpha_init)))
+        self.last_gate_shape = None
+
+    def _compress_group_weight(self, x: torch.Tensor) -> torch.Tensor:
+        """Expose the matched KVCA compression for validation and diagnostics."""
+        return _group_weight_compress(x, self.sr_ratio, self.group_score)
+
+    def channel_gate(self, x: torch.Tensor) -> torch.Tensor:
+        """Return a global gate of shape B,C,1,1."""
+        tokens = self._compress_group_weight(x).flatten(2)  # B,C,N
+        q = F.normalize(self.q(tokens), dim=-1)
+        k = F.normalize(self.k(tokens), dim=-1)
+        affinity = torch.softmax(torch.matmul(q, k.transpose(-1, -2)) / self.temperature, dim=-1)
+        descriptor = self.v(tokens).mean(dim=-1)
+        context = torch.matmul(affinity, descriptor.unsqueeze(-1)).squeeze(-1)
+        return torch.sigmoid(self.gate_proj(context)).unsqueeze(-1).unsqueeze(-1)
+
+    def analytical_macs(self, height: int, width: int) -> int:
+        """Return custom-operator MACs for one sample, including compression and feature modulation."""
+        groups = math.ceil(height / self.sr_ratio) * math.ceil(width / self.sr_ratio)
+        c = self.c2
+        return height * width * c + 3 * groups * c * c + 2 * groups * c * c + 2 * c * c + height * width * c
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply multiplicative channel calibration while preserving each location's local feature."""
+        x = self.input_proj(x)
+        gate = self.channel_gate(x)
+        self.last_gate_shape = tuple(gate.shape)
+        return x * (1.0 + self.alpha * gate)
+
+
+class PatchKVCompressedAttention(KVCompressedAttention):
+    """Group-weight KV attention restricted to a local compressed-grid neighborhood."""
+
+    def __init__(
+        self,
+        c1: int,
+        c2: int,
+        num_heads: int = 4,
+        sr_ratio: int = 8,
+        patch_radius: int = 1,
+        residual: bool = True,
+    ):
+        """Initialize Patch-KVCA with the same projections as group-weight KVCA."""
+        if int(patch_radius) != patch_radius or patch_radius < 0:
+            raise ValueError(f"patch_radius must be a non-negative integer, got {patch_radius}")
+        super().__init__(c1, c2, num_heads, sr_ratio, mode="group_weight", residual=residual)
+        self.patch_radius = int(patch_radius)
+
+    @staticmethod
+    def _validity_mask(gh: int, gw: int, radius: int, device: torch.device) -> torch.Tensor:
+        """Return valid local keys for every compressed-grid location."""
+        kernel_size = 2 * radius + 1
+        valid = F.unfold(
+            torch.ones(1, 1, gh, gw, dtype=torch.bool, device=device),
+            kernel_size=kernel_size,
+            padding=radius,
+        )
+        return valid.transpose(1, 2)  # [1, groups, local keys]
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply local Patch-KVCA and return a BCHW tensor."""
+        x = self.input_proj(x)
+        b, c, h, w = x.shape
+        sr = self.sr_ratio
+        pad_h = (sr - h % sr) % sr
+        pad_w = (sr - w % sr) % sr
+        hp, wp = h + pad_h, w + pad_w
+        gh, gw = hp // sr, wp // sr
+
+        # Keep full-resolution Q; padding only fills incomplete edge groups and is cropped after attention.
+        q = self.q(x)
+        if pad_h or pad_w:
+            q = F.pad(q, (0, pad_w, 0, pad_h))
+        q = q.reshape(b, self.num_heads, self.head_dim, gh, sr, gw, sr)
+        q = q.permute(0, 1, 3, 5, 4, 6, 2).reshape(
+            b, self.num_heads, gh * gw, sr * sr, self.head_dim
+        )
+        q = self.q_norm(q)
+
+        kv_source = self._compress_group_weight(x)
+        kv = self.kv(kv_source).reshape(b, 2, self.num_heads, self.head_dim, gh, gw)
+        k_map, v_map = kv[:, 0], kv[:, 1]
+        kernel_size = 2 * self.patch_radius + 1
+
+        def _local_patches(t: torch.Tensor) -> torch.Tensor:
+            patches = F.unfold(
+                t.reshape(b, c, gh, gw),
+                kernel_size=kernel_size,
+                padding=self.patch_radius,
+            )
+            return patches.reshape(b, self.num_heads, self.head_dim, kernel_size**2, gh * gw).permute(
+                0, 1, 4, 3, 2
+            )
+
+        k = _local_patches(k_map)
+        v = _local_patches(v_map)
+        local_batch = b * self.num_heads * gh * gw
+        q = q.reshape(local_batch, sr * sr, self.head_dim)
+        k = k.reshape(local_batch, kernel_size**2, self.head_dim)
+        v = v.reshape(local_batch, kernel_size**2, self.head_dim)
+        mask = self._validity_mask(gh, gw, self.patch_radius, x.device)
+        mask = mask[:, None].expand(b, self.num_heads, gh * gw, kernel_size**2)
+        mask = mask.reshape(local_batch, 1, kernel_size**2)
+
+        out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, scale=self.scale)
+        out = out.reshape(b, self.num_heads, gh, gw, sr, sr, self.head_dim)
+        out = out.permute(0, 1, 6, 2, 4, 3, 5).reshape(b, c, hp, wp)[..., :h, :w]
+        out = self.proj_bn(self.proj(out))
+        return x + out if self.residual else out
+
+
+class FullSelfAttention(KVCompressedAttention):
+    """Full-resolution self-attention using the same projections as group-weight KVCA."""
+
+    def __init__(self, c1: int, c2: int, num_heads: int = 4, residual: bool = True):
+        """Initialize full P2 self-attention without spatial K/V compression."""
+        super().__init__(c1, c2, num_heads, sr_ratio=8, mode="group_weight", residual=residual)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply full-resolution self-attention and return a BCHW tensor."""
+        x = self.input_proj(x)
+        b, c, h, w = x.shape
+        q = self.q(x).flatten(2).transpose(1, 2)
+        q = q.reshape(b, h * w, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        q = self.q_norm(q)
+        kv = self.kv(x).flatten(2).transpose(1, 2)
+        kv = kv.reshape(b, h * w, 2, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        out = F.scaled_dot_product_attention(q, kv[0], kv[1], scale=self.scale)
         out = out.transpose(1, 2).reshape(b, h * w, c).transpose(1, 2).reshape(b, c, h, w)
         out = self.proj_bn(self.proj(out))
         return x + out if self.residual else out
@@ -4410,7 +4578,3 @@ class P1DRR(nn.Module):
             self.gate_tensor = G
             
         return x_p2 + G * R
-
-
-
-

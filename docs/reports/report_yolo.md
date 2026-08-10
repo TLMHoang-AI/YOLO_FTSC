@@ -99,8 +99,28 @@ This exploratory run evaluates the effect of shared attention vs classification-
 
 | Attention Type | Variant | Params | Val mAP50 | Val mAP50-95 | Test P | Test R | Test mAP50 | Test mAP75 | Test mAP50-95 | Hugging Face Dataset |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+| **P2–P5 Baseline** | `yolov8n_p2_baseline` | 3.35M | 0.7654 | 0.3165 | 0.7824 | 0.6681 | 0.7453 | 0.1360 | 0.2924 | [levir-ship-yolo-p2](https://huggingface.co/datasets/duyle2408/levir-ship-yolo-p2) |
 | **Shared Attention** | `fpn_only_kvca_block` | 1.60M | 0.8177 | 0.3309 | 0.8259 | 0.7529 | 0.7857 | 0.1029 | 0.2990 | [levir-yolov8n-p2-fpn-only-attention-seed42](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-fpn-only-attention-seed42) |
 | **Shared Attention** | `fpn_only_kvca_encoder` | 1.61M | 0.7840 | 0.3167 | 0.7765 | 0.7387 | 0.7694 | 0.0851 | 0.2620 | [levir-yolov8n-p2-fpn-only-attention-seed42](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-fpn-only-attention-seed42) |
 | **Cls-only Attention** | `fpn_only_cbam_clsonly` | 1.60M | 0.7917 | 0.3289 | 0.8086 | 0.7270 | 0.7700 | 0.1141 | 0.2890 | [levir-yolov8n-p2-fpn-only-attention-seed42](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-fpn-only-attention-seed42) |
 | **Cls-only Attention** | `fpn_only_kvca_clsonly` | 1.61M | — | — | 0.7794 | 0.6681 | 0.7202 | 0.0842 | 0.2600 | [levir-yolov8n-p2-fpn-only-attention-seed42](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-fpn-only-attention-seed42) |
 
+#### P2-only task-specific head screen (Seed 42)
+
+Ba run mới dùng cùng backbone, FPN-only neck và Detect P2-only. `plain_p2_only` là control trực tiếp; checkpoint CBAM cls-only cũ chỉ là reference phụ. Tất cả số dưới đây lấy từ `best.pt` được đánh giá riêng trên fixed val/test split, mỗi split 788 ảnh.
+
+| Role | Variant | Params | Val P | Val R | Val mAP50 | Val mAP75 | Val mAP50-95 | Test P | Test R | Test mAP50 | Test mAP75 | Test mAP50-95 | Source |
+| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :--- |
+| Control | `plain_p2_only` | 1.6015M | 0.8178 | 0.6717 | 0.7565 | 0.1686 | 0.3206 | 0.8049 | 0.6223 | 0.7213 | 0.1353 | 0.2815 | [asymmetric-screen-seed42](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-asymmetric-screen-seed42) |
+| CBAM reference | `fpn_only_cbam_clsonly` | 1.60M | — | — | 0.7917 | — | 0.3289 | 0.8086 | 0.7270 | 0.7700 | 0.1141 | 0.2890 | [fpn-only-attention-seed42](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-fpn-only-attention-seed42) |
+| A1: cls context | `cls_context_mid_cbam` | 1.6058M | 0.8427 | 0.7294 | 0.8050 | 0.1594 | 0.3315 | 0.7865 | 0.6987 | 0.7633 | 0.1284 | 0.2946 | [asymmetric-screen-seed42](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-asymmetric-screen-seed42) |
+| A2: reg local | `reg_local` | 1.6032M | 0.8076 | 0.6857 | 0.7719 | 0.1736 | 0.3272 | 0.7952 | 0.6807 | 0.7411 | 0.1323 | 0.2937 | [asymmetric-screen-seed42](https://huggingface.co/datasets/duyle2408/levir-yolov8n-p2-asymmetric-screen-seed42) |
+
+Paired test delta so với `plain_p2_only`:
+
+| Variant | ΔP | ΔR | ΔmAP50 | ΔmAP75 | ΔmAP50-95 | Gate |
+| :--- | ---: | ---: | ---: | ---: | ---: | :--- |
+| `cls_context_mid_cbam` | -0.0184 | +0.0764 | +0.0420 | -0.0069 | +0.0132 | **Fail A1**: gain detectability đạt, nhưng precision giảm quá 0.01 |
+| `reg_local` | -0.0097 | +0.0584 | +0.0198 | -0.0030 | +0.0123 | **Fail A2**: mAP50 được giữ, nhưng mAP75 không tăng 0.01 |
+
+Theo decision gate định trước, không đề xuất A3 từ seed này vì cả A1 và A2 đều không đạt vai trò đầy đủ. A1 cung cấp evidence rõ rằng context trong classification tower tăng recall và mAP50, nhưng không giữ được precision/localization-aware performance. A2 cũng tăng recall, mAP50 và mAP50-95 nhưng không tạo gain mAP75; nhánh localization này được đóng thay vì tiếp tục chỉnh depth, kernel, gain hoặc loss. GFLOPs trong artifact bị ghi thành `0.0` do profiling không khả dụng, nên không dùng giá trị đó trong bảng.

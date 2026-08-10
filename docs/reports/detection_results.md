@@ -166,17 +166,64 @@ Kết quả đo đạc trung bình trên P2 feature map:
 - Khi vật thể chạm rìa và bị cắt cụt (BORDER_TOUCHING), vector đặc trưng bị biến dạng mạnh (cosine similarity giảm sâu xuống **`0.2779`**). Tuy nhiên, độ sụt giảm confidence và IoU của các vật thể này vẫn bằng **0.00**.
 - **Kết luận**: Hiện tượng xoay/lệch pha đặc trưng khi chạm biên *không phải* nguyên nhân gây bỏ sót (miss). Đầu Detect của mô hình cực kỳ bền bỉ trước sự xoay đặc trưng này. Điểm nghẽn bỏ sót thực tế nằm ở **vấn đề quan sát một phần (partial-observation difficulty)**: khi các vật thể nhỏ chạm biên bị cắt bớt quá nhiều thông tin chi tiết, lượng điểm ảnh còn lại không đủ cấu trúc ngữ cảnh để classifier nhận diện.
 
----
+### 8.3. Thống kê Chi tiết Bỏ sót (False Negatives) trên nhóm Small & Large của YOLOv8n P2 Baseline vs P1-DRR
+
+Để làm rõ nguyên nhân bỏ sót ngoài nhóm Siêu Nhỏ (Tiny < 100 px²), chúng tôi chạy kiểm chứng định lượng trên tập kiểm thử (Test split, 788 ảnh) đối với mô hình YOLOv8n P2 Baseline và mô hình sử dụng P1-DRR (Cơ chế cổng giải cứu chi tiết và restraint loss):
+
+* **Nhóm SMALL (100–400 px²)**: 
+  * Baseline bỏ sót **68 vật thể** (Recall đạt **65.48%**).
+  * P1-DRR giảm số lượng bỏ sót xuống **61 vật thể** (Recall tăng lên **69.04%**, tức cứu thêm 7 vật thể nhỏ).
+  * Dải diện tích bị bỏ sót của nhóm này tập trung từ **106.5 px² đến 385.9 px²** (trung bình **262.4 px²**, tương đương kích thước khoảng $16\times16$ pixels).
+* **Nhóm LARGE (> 400 px²)**:
+  * Baseline bỏ sót **67 vật thể** (Recall đạt **86.33%**).
+  * P1-DRR giảm số lượng bỏ sót xuống **63 vật thể** (Recall tăng lên **87.14%**).
+  * Dải diện tích bị bỏ sót của nhóm này tập trung từ **400.0 px² đến 3937.5 px²** (trung bình **788.9 px²**, tương đương kích thước khoảng $28\times28$ pixels).
+
+#### Phân bố ảnh lỗi nhiều nhất (Top FN Images):
+1. **`GF6_WFV_E132.4_N35.8_20200914_L1A1120035552-1_9216_13824.png`** (Bỏ sót **19 vật thể**): Đây là khu cảng neo đậu tàu bận rộn với mật độ tàu cực dày đặc. Do các tàu neo sát cạnh nhau, NMS hoặc Assigner gộp nhãn dẫn đến bỏ sót hàng loạt.
+2. **`GF1_WFV1_E120.0_N36.3_20200423_L2A0004760887_10240_9216.png`** (Bỏ sót **5 vật thể**).
+3. **`GF1_WFV3_E120.2_N22.2_20200710_L2A0004922264_7168_5120.png`** (Bỏ sót **5 vật thể**).
+4. **`GF1_WFV3_E122.4_N37.3_20190805_L2A0004161911_6144_5632.png`** (Bỏ sót **4 vật thể**).
+5. **`GF1_WFV3_E120.2_N22.2_20200710_L2A0004922264_6656_5120.png`** (Bỏ sót **3 vật thể**).
+
+#### Khoảng cách mật độ (Proximity Check):
+* Phân tích cho thấy **15.97%** số FNs ở P2 Baseline (23/144 FN) và **17.29%** số FNs ở P1-DRR (23/133 FN) nằm ở khoảng cách rất gần (**< 40 pixels**) so với một vật thể khác trên ảnh, khẳng định sự chồng lấn trong cụm (dense port) vẫn là một trong các nguyên nhân chính gây bỏ sót.
+
+#### Phân Tích Cơ Chế Lỗi (Classification vs Localization Failures):
+Chúng tôi tiến hành chẩn đoán sâu 135 đối tượng bị bỏ sót (nhóm SMALL + LARGE) của mô hình Baseline nhằm xác định lỗi thuộc về đầu định vị (Regression) hay đầu phân loại (Classification):
+* **Lỗi Phân loại (Classification Failures): 85.19%** (115 / 135 vật thể).
+  * *Chi tiết*: Đây là các vật thể **được định vị chính xác** (có đề xuất bounding box đạt IoU $\ge$ 0.3 với GT) nhưng bị bỏ sót vì **điểm Confidence thấp hơn ngưỡng 0.25** (Conf trung bình của các candidate này chỉ đạt **0.1042**, cao nhất là **0.2430**).
+* **Lỗi Định vị (Localization Failures): 14.81%** (20 / 135 vật thể).
+  * *Chi tiết*: Mô hình thực sự không tìm thấy hoặc không đưa ra được bất kỳ bounding box nào chồng lấn tốt với GT (IoU < 0.3).
+
+**Nguyên nhân cụ thể gây ra lỗi Classification ở các vật thể bị sót:**
+1. **Sự thiếu hụt ngữ cảnh ngữ nghĩa (Semantic Context)**: Các vật thể nhỏ hoặc rất nhỏ không có đủ cấu trúc chi tiết bên trong (như cabin, boong tàu) và thông tin bối cảnh. Dù đầu hồi quy (Regression head) định vị dựa trên biên độ đặc trưng biên rất tốt, đầu phân loại (Classification head) vẫn đánh giá độ tự tin thấp vì bối cảnh xung quanh quá đơn giản (chỉ có nước biển).
+2. **Sự tương đồng về tần số với nhiễu nền (Sea Clutter Similarity)**: Tần số không gian của sóng biển/bọt nước lân cận có tính chất tương tự một phần với các tàu cá nhỏ ngoài khơi xa. Để kiểm soát False Positives (FP) không bùng nổ, classifier bắt buộc phải siết chặt phân phối xác suất (đưa conf về mức rất thấp ~0.10) ở những khu vực không có ngữ nghĩa rõ ràng, vô tình triệt tiêu luôn cả các vật thể thực sự.
+3. **Bài toán gán nhãn TAL trong quá trình huấn luyện**: Vì vật thể nhỏ, chỉ cần bounding box dự đoán lệch nhẹ 1-2 pixel là IoU rụng về 0. Task-Aligned Assigner (TAL) của YOLOv8n chọn positive anchor dựa trên tích số `Score * IoU`. Khi IoU sụt giảm mạnh do kích thước nhỏ, TAL sẽ gán các anchor này là background, khiến classification head của mô hình bị huấn luyện để triệt tiêu độ tự tin tại các vị trí này.
 
 ## 9. Kết Luận & Định Hướng Cải Tiến
 
+### 9.1. Thống kê Phân bổ Mẫu Gán (Target Assignment) theo Tầng Đặc trưng
 
+Để hiểu rõ mức độ đóng góp của từng tầng Scale (P2/P3/P4/P5) đối với các vật thể nhỏ trong LEVIR-Ship, chúng tôi đã trích xuất kết quả gán nhãn thực tế từ **Task-Aligned Assigner (TAL)** trên tập test (tổng số **6,913 positive anchors** được gán):
 
+* **Stride 4 (Tầng P2 - $1/4$ độ phân giải ảnh gốc): 6,878 anchors (chiếm 99.49%)**
+* **Stride 8 (Tầng P3 - $1/8$ độ phân giải ảnh gốc): 35 anchors (chiếm 0.51%)**
+* **Stride 16 (Tầng P4): 0 anchors (0.00%)**
+* **Stride 32 (Tầng P5): 0 anchors (0.00%)**
 
-1. **WIoU chịu ảnh hưởng nặng từ kích thước:**
-   * Tỉ lệ bỏ sót nhóm **Siêu Nhỏ (<10x10 px)** là **100%**. Đây là giới hạn vật lý của feature map khi không được tối ưu đặc trưng cục bộ mịn.
-   * Nhóm **Rất Nhỏ (10x10 đến 20x20 px)** là nhóm phổ biến nhất trong dataset (chiếm 55.6% tổng số GT) nhưng tỉ lệ bỏ sót vẫn còn cao ở mức **24.29%**.
-2. **Sai lệch hộp giới hạn thấp:**
-   * Sai số lệch tâm trung bình chỉ **`1.85 pixel`** và sai số kích thước tuyệt đối khoảng **`2.7 - 3.2 pixel`** cho thấy mô hình Wise-IoU định vị tương đối ổn định sau khi đã tìm ra vật thể.
-3. **Cơ hội từ Box Consensus:**
+> [!WARNING]
+> Kết quả định lượng này cho thấy **99.5%** vật thể được gán hoàn toàn vào tầng độ phân giải cao nhất **P2**. Tầng P3 chỉ xử lý 0.51% lượng anchor (35 anchors trên toàn bộ tập test), trong khi P4 và P5 hoàn toàn trống rỗng.
+
+---
+
+### 9.2. Định Hướng Cải Tiến
+
+1. **Chuyển dịch sang cấu trúc P2-Only (Bỏ qua P3/P4/P5)**:
+   * Vì P3 chỉ đóng góp 0.51% lượng mẫu gán, toàn bộ các nhánh top-down/bottom-up PAN liên quan tới P3, P4, P5 đang gây lãng phí tham số và FLOPs nghiêm trọng.
+   * **Khuyến nghị**: Thiết kế mô hình cực đoan **YOLOv8n-P2-Only** (chỉ giữ lại 1 đầu Detect tại P2 Stride 4). Điều này giúp thu gọn mạng, đẩy nhanh tốc độ suy luận và tối ưu hóa 100% tài nguyên biểu diễn của backbone vào tầng mịn.
+2. **Tập trung cơ chế Attention vào duy nhất P2**:
+   * Khi tích hợp các module Attention (như KVCA, CBAM, Coordinate Attention) để giải quyết lỗi phân loại (Classification), ta **chỉ nên áp dụng trên nhánh đặc trưng P2**. Việc chia sẻ Attention lên P3 là không cần thiết.
+3. **Cơ hội từ Box Consensus**:
    * Box Consensus giúp co cụm và giảm phương sai của các anchors quanh vùng biên. Khi kết hợp với WIoU, Consensus có thể giúp mô hình giữ vững khả năng tìm kiếm diện rộng của WIoU, đồng thời tinh chỉnh (refine) sai lệch kích thước tuyệt đối $2.7 - 3.2$ pixel này về dưới $1.0$ pixel, cải thiện đáng kể mAP75.
+

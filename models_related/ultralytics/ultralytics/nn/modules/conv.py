@@ -512,7 +512,7 @@ class RepConv(nn.Module):
 class ChannelAttention(nn.Module):
     """Channel-attention module for feature recalibration.
 
-    Applies attention weights to channels based on global average pooling.
+    Applies attention weights to channels from global average, max, or both descriptors.
 
     Attributes:
         pool (nn.AdaptiveAvgPool2d): Global average pooling.
@@ -523,15 +523,21 @@ class ChannelAttention(nn.Module):
         https://github.com/open-mmlab/mmdetection/tree/v3.0.0rc1/configs/rtmdet
     """
 
-    def __init__(self, channels: int) -> None:
+    def __init__(self, channels: int, descriptor: str = "avg") -> None:
         """Initialize Channel-attention module.
 
         Args:
             channels (int): Number of input channels.
+            descriptor (str): Global descriptor: ``avg``, ``max``, or ``avg_max``.
         """
         super().__init__()
+        if descriptor not in {"avg", "max", "avg_max"}:
+            raise ValueError(f"Unsupported channel descriptor: {descriptor!r}")
+        self.descriptor = descriptor
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Conv2d(channels, channels, 1, 1, 0, bias=True)
+        self.max_pool = nn.AdaptiveMaxPool2d(1) if descriptor != "avg" else None
+        self.max_fc = nn.Conv2d(channels, channels, 1, 1, 0, bias=True) if descriptor == "avg_max" else None
         self.act = nn.Sigmoid()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -543,7 +549,13 @@ class ChannelAttention(nn.Module):
         Returns:
             (torch.Tensor): Channel-attended output tensor.
         """
-        return x * self.act(self.fc(self.pool(x)))
+        average = self.fc(self.pool(x))
+        if self.descriptor == "avg":
+            gate = average
+        else:
+            maximum = self.fc(self.max_pool(x)) if self.descriptor == "max" else self.max_fc(self.max_pool(x))
+            gate = maximum if self.descriptor == "max" else average + maximum
+        return x * self.act(gate)
 
 
 class SpatialAttention(nn.Module):

@@ -371,6 +371,12 @@ class Detect(nn.Module):
             cls_feat = geom_fuse(torch.cat((cls_feat, geom_feat), dim=1))
         return cls_branch[-1](cls_feat)
 
+    def _forward_cls_branch(
+        self, level: int, cls_branch: torch.nn.Module, cls_input: torch.Tensor
+    ) -> torch.Tensor:
+        """Run one classification branch, allowing subclasses to refine task-specific intermediate features."""
+        return cls_branch(cls_input)
+
     def forward_head(
         self,
         x: list[torch.Tensor],
@@ -391,7 +397,10 @@ class Detect(nn.Module):
         if not getattr(self, "cls_geometry_fuse", False):
             boxes_per_level = [box_head[i](box_features[i]) for i in range(self.nl)]
             boxes = torch.cat([b.view(bs, 4 * self.reg_max, -1) for b in boxes_per_level], dim=-1)
-            scores = torch.cat([cls_head[i](cls_x[i]).view(bs, self.nc, -1) for i in range(self.nl)], dim=-1)
+            scores = torch.cat(
+                [self._forward_cls_branch(i, cls_head[i], cls_x[i]).view(bs, self.nc, -1) for i in range(self.nl)],
+                dim=-1,
+            )
         else:
             boxes_per_level, scores_per_level = [], []
             for i in range(self.nl):
@@ -2419,6 +2428,45 @@ class SemanticSegment(nn.Module):
         return logits
 
 
+class P2ClsContext(nn.Module):
+    """Zero-initialized multi-kernel context residual for a task-specific P2 classification feature."""
+
+    def __init__(self, channels: int, hidden: int | None = None) -> None:
+        super().__init__()
+        hidden = hidden or channels // 2
+        self.reduce = Conv(channels, hidden, 1)
+        self.dw3 = DWConv(hidden, hidden, 3)
+        self.dw5 = DWConv(hidden, hidden, 5)
+        self.fuse = Conv(hidden * 2, channels, 1)
+        from .block import CBAM
+
+        self.attn = CBAM(channels, kernel_size=3)
+        self.zero = nn.Conv2d(channels, channels, 1, bias=False)
+        nn.init.zeros_(self.zero.weight)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        reduced = self.reduce(x)
+        context = self.fuse(torch.cat((self.dw3(reduced), self.dw5(reduced)), dim=1))
+        return x + self.zero(self.attn(context))
+
+
+class P2RegLocal(nn.Module):
+    """Zero-initialized local residual refiner for the P2 regression input."""
+
+    def __init__(self, channels: int, hidden: int | None = None) -> None:
+        super().__init__()
+        hidden = hidden or channels // 2
+        self.reduce = Conv(channels, hidden, 1)
+        self.dw1 = DWConv(hidden, hidden, 3)
+        self.pw = Conv(hidden, hidden, 1)
+        self.dw2 = DWConv(hidden, hidden, 3)
+        self.zero = nn.Conv2d(hidden, channels, 1, bias=False)
+        nn.init.zeros_(self.zero.weight)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.zero(self.dw2(self.pw(self.dw1(self.reduce(x)))))
+
+
 class DetectClsAttention(Detect):
     """Detect head with class-specific attention at P2 (level 0)."""
 
@@ -2431,14 +2479,32 @@ class DetectClsAttention(Detect):
         super().__init__(*args, **kwargs)
         self.attn_type = str(attn_type or "cbam").lower()
         c_p2 = self.cv2[0][0].conv.in_channels
+        self.cls_mid = nn.Identity()
         if self.attn_type == "cbam":
             from .block import CBAM
             self.attn = CBAM(c_p2)
         elif self.attn_type == "kvca":
             from .block import KVCompressedTransformerEncoder
             self.attn = KVCompressedTransformerEncoder(c_p2, c_p2, num_heads=4, sr_ratio=8, mode="dwconv")
+        elif self.attn_type == "kvca_block":
+            from .block import KVCompressedAttention
+            self.attn = KVCompressedAttention(c_p2, c_p2, num_heads=4, sr_ratio=8, mode="group_weight")
+        elif self.attn_type == "context_mid_cbam":
+            self.attn = nn.Identity()
+            self.cls_mid = P2ClsContext(self.cv3[0][-1].in_channels)
+        elif self.attn_type == "reg_local":
+            self.attn = nn.Identity()
+            self.box_detail[0] = P2RegLocal(c_p2)
         else:
             raise ValueError(f"Unsupported attn_type: {self.attn_type}")
+
+    def _forward_cls_branch(self, level, cls_branch, cls_input):
+        if self.attn_type != "context_mid_cbam" or level != 0:
+            return cls_branch(cls_input)
+        layers = list(cls_branch.children())
+        if len(layers) != 3:
+            raise RuntimeError(f"Expected a three-stage YOLOv8 classification branch, got {len(layers)} stages")
+        return layers[2](layers[1](self.cls_mid(layers[0](cls_input))))
 
     def forward(self, x):
         """Forward pass applying attention only to classification branch of level 0 (P2)."""
@@ -2457,4 +2523,3 @@ class DetectClsAttention(Detect):
         if self.end2end:
             y = self.postprocess(y.permute(0, 2, 1))
         return y if self.export else (y, preds)
-
