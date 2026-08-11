@@ -27,6 +27,7 @@ __all__ = (
     "P2AmplitudeCalibrator",
     "AmplitudePerturbation",
     "LearnableGlobalScalar",
+    "MatchedChannelPerturbation",
 )
 
 
@@ -640,11 +641,11 @@ class AmplitudePerturbation(nn.Module):
         self.mode = mode  # "image", "channel", or "none"
         self.scale_range = scale_range
         self.chan_range = chan_range
-        
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not self.training or self.mode == "none":
             return x
-            
+
         B, C, H, W = x.shape
         if self.mode == "image":
             # Single random scalar per image
@@ -655,6 +656,53 @@ class AmplitudePerturbation(nn.Module):
             s = x.new_empty(B, C, 1, 1).uniform_(*self.chan_range)
             return x * s
         return x
+
+
+class MatchedChannelPerturbation(nn.Module):
+    """0-param channel perturbation matched to train-split GAP gate statistics."""
+
+    def __init__(self, channels=None, mu=0.4514, sigma_delta=0.05, q01=0.0, q99=1.0, eps=1e-6) -> None:
+        super().__init__()
+        self.mu = float(mu)
+        self.sigma_delta = float(sigma_delta)
+        self.q01 = float(q01)
+        self.q99 = float(q99)
+        self.eps = float(eps)
+        self.last_gate_stats = {}
+        self._logged_modes = set()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.training:
+            b, c, _, _ = x.shape
+            z = torch.randn(b, c, 1, 1, device=x.device, dtype=x.dtype)
+            z = z - z.mean(dim=1, keepdim=True)
+            z = z / (z.std(dim=1, keepdim=True, correction=0) + self.eps)
+            gate = self.mu + self.sigma_delta * z
+            gate = gate.clamp(self.q01, self.q99)
+        else:
+            gate = x.new_tensor(self.mu)
+        self.last_gate_stats = self._gate_stats(gate)
+        mode = "train" if self.training else "eval"
+        if mode not in self._logged_modes:
+            s = self.last_gate_stats
+            print(
+                f"MatchedChannelPerturbation {mode}: "
+                f"gate_mean={s['gate_mean']:.6f}, "
+                f"gate_channel_std={s['gate_channel_std']:.6f}, "
+                f"gate_min={s['gate_min']:.6f}, gate_max={s['gate_max']:.6f}"
+            )
+            self._logged_modes.add(mode)
+        return x * gate
+
+    @staticmethod
+    def _gate_stats(gate: torch.Tensor) -> dict:
+        g = gate.detach().float()
+        return {
+            "gate_mean": float(g.mean()),
+            "gate_channel_std": float(g.std(dim=1, correction=0).mean()) if g.ndim == 4 and g.shape[1] > 1 else 0.0,
+            "gate_min": float(g.min()),
+            "gate_max": float(g.max()),
+        }
 
 
 class SpatialAttention(nn.Module):

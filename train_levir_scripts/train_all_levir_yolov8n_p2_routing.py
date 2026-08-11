@@ -210,11 +210,12 @@ def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[s
     for split in ("val", "test"):
         result = YOLO(run_dir / "weights/best.pt").val(
             data=str(data_yaml), split=split, imgsz=args.imgsz, batch=args.batch_size,
-            device=args.device, workers=args.workers, plots=False,
+            device=args.device, workers=args.workers, plots=False, iou=0.5,
             project=str(run_dir / "evaluation"), name=split, exist_ok=True,
         )
         metrics.update({f"{split}/{key}": float(value) for key, value in result.results_dict.items()})
         metrics[f"{split}/metrics/mAP75(B)"] = float(result.box.map75)
+    metrics["nms_iou"] = 0.5
     output.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return metrics
 
