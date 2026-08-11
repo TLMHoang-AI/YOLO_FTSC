@@ -919,6 +919,8 @@ class v8DetectionLoss:
         if self.dgfe_spatial_target_mode not in {"iou", "edge_error"}:
             raise ValueError("dgfe_spatial_target_mode must be 'iou' or 'edge_error'.")
         self.dgfe_edge_error_norm = max(float(getattr(h, "dgfe_edge_error_norm", 0.25)), 1e-9)
+        self.p2_detail_rec_gain = float(getattr(h, "p2_detail_rec_gain", 0.0))
+        self.p2_detail_metrics = {}
         self.rank_gain = float(getattr(h, "rank_loss", 0.0))
         self.rank_tau = float(getattr(h, "rank_tau", 0.25))
         self.rank_iou_margin = float(getattr(h, "rank_iou_margin", 0.10))
@@ -1375,6 +1377,39 @@ class v8DetectionLoss:
         factor = self.dgfe_spatial_warmup_start + (1.0 - self.dgfe_spatial_warmup_start) * t
         return self.dgfe_spatial_gain * factor
 
+    @staticmethod
+    def _p2_detail_aux_list(preds: dict[str, Any]) -> list[dict[str, torch.Tensor]]:
+        aux = preds.get("p2_detail_aux")
+        if aux is None:
+            return []
+        return aux if isinstance(aux, list) else [aux]
+
+    def _p2_detail_reconstruction_loss(self, preds: dict[str, Any]) -> torch.Tensor:
+        aux_list = self._p2_detail_aux_list(preds)
+        if not aux_list:
+            return preds["boxes"].sum() * 0.0
+
+        losses = []
+        mask_fraction = []
+        for aux in aux_list:
+            pred, target, mask = aux.get("detail_pred"), aux.get("detail_target"), aux.get("detail_mask")
+            if pred is None or target is None or mask is None:
+                continue
+            mask = mask.to(device=pred.device, dtype=pred.dtype)
+            if mask.shape[-2:] != pred.shape[-2:]:
+                mask = F.interpolate(mask, size=pred.shape[-2:], mode="nearest")
+            mask = mask.expand_as(pred)
+            denom = mask.sum().clamp_min(1.0)
+            target = target.to(device=pred.device, dtype=pred.dtype)
+            losses.append(F.smooth_l1_loss(pred * mask, target * mask, reduction="sum") / denom)
+            mask_fraction.append(mask[:, :1].mean().detach())
+        raw = torch.stack(losses).mean() if losses else preds["boxes"].sum() * 0.0
+        self.p2_detail_metrics = {
+            "p2_detail_raw_loss": float(raw.detach().item()),
+            "p2_detail_mask_fraction": float(torch.stack(mask_fraction).mean().item()) if mask_fraction else 0.0,
+        }
+        return raw
+
     def get_assigned_targets_and_loss(self, preds: dict[str, torch.Tensor], batch: dict[str, Any]) -> tuple:
         """Calculate the sum of the loss for box, cls and dfl multiplied by batch size and return foreground mask and
         target indices.
@@ -1388,9 +1423,10 @@ class v8DetectionLoss:
             + int(self.box_consensus_gain > 0)
             + int(self.psd_enabled)
             + int(self.dgfe_rec_gain > 0)
-            + int(self.dgfe_spatial_gain > 0),
+            + int(self.dgfe_spatial_gain > 0)
+            + int(self.p2_detail_rec_gain > 0),
             device=self.device,
-        )  # box, cls, dfl[, boundary][, loc_quality][, quality][, rank][, psd][, dgfe_rec][, dgfe_spatial]
+        )  # box, cls, dfl[, boundary][, loc_quality][, quality][, rank][, psd][, dgfe_rec][, dgfe_spatial][, p2_detail]
         pred_distri, pred_scores = (
             preds["boxes"].permute(0, 2, 1).contiguous(),
             preds["scores"].permute(0, 2, 1).contiguous(),
@@ -2000,6 +2036,10 @@ class v8DetectionLoss:
                 assigned_iou, pred_bboxes, target_bboxes_scaled, target_gt_idx, fg_mask, mask_gt
             )
             loss[dgfe_idx] = self._dgfe_spatial_loss(preds, gt_bboxes, mask_gt, imgsz, q_by_gt) * self._dgfe_spatial_gain()
+            dgfe_idx += 1
+        if self.p2_detail_rec_gain > 0:
+            loss[dgfe_idx] = self._p2_detail_reconstruction_loss(preds) * self.p2_detail_rec_gain
+            self.p2_detail_metrics["p2_detail_applied_loss"] = float(loss[dgfe_idx].detach().item())
         return (
             (fg_mask, target_gt_idx, target_bboxes, anchor_points, stride_tensor),
             loss,

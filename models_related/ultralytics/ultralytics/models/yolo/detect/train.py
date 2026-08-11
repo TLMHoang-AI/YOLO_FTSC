@@ -87,6 +87,8 @@ class DetectionTrainer(BaseTrainer):
             names += ("dgfe_rec_loss",)
         if float(getattr(self.args, "dgfe_spatial_gain", 0.0)) > 0:
             names += ("dgfe_spatial_loss",)
+        if float(getattr(self.args, "p2_detail_rec_gain", 0.0)) > 0:
+            names += ("p2_detail_loss",)
         return names
 
     def build_dataset(self, img_path: str, mode: str = "train", batch: int | None = None):

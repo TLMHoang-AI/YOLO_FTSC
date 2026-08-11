@@ -107,6 +107,31 @@ class BaseTransform:
         return labels
 
 
+class RandomHFAttenuation:
+    """Randomly attenuate image high-frequency residual without touching labels."""
+
+    def __init__(self, p: float = 0.0, min_alpha: float = 0.0, max_alpha: float = 1.0, blur_kernel: int = 5, mask_grid: int = 16):
+        self.p = float(p)
+        self.min_alpha = float(min_alpha)
+        self.max_alpha = float(max_alpha)
+        self.blur_kernel = max(int(blur_kernel) | 1, 3)
+        self.mask_grid = max(int(mask_grid), 1)
+
+    def __call__(self, labels: dict[str, Any]) -> dict[str, Any]:
+        if self.p <= 0.0 or random.random() >= self.p:
+            return labels
+        img = labels["img"]
+        if img.ndim != 3:
+            return labels
+        h, w = img.shape[:2]
+        low = cv2.blur(img, (self.blur_kernel, self.blur_kernel)).astype(np.float32)
+        src = img.astype(np.float32)
+        alpha = np.random.uniform(self.min_alpha, self.max_alpha, (self.mask_grid, self.mask_grid)).astype(np.float32)
+        alpha = cv2.resize(alpha, (w, h), interpolation=cv2.INTER_LINEAR)[..., None]
+        labels["img"] = np.clip(low + alpha * (src - low), 0, 255).astype(img.dtype)
+        return labels
+
+
 class Compose:
     """A class for composing multiple image transformations.
 
@@ -2994,6 +3019,13 @@ def v8_transforms(dataset, imgsz: int, hyp: IterableSimpleNamespace, stretch: bo
             RandomHSV(hgain=hyp.hsv_h, sgain=hyp.hsv_s, vgain=hyp.hsv_v),
             RandomFlip(direction="vertical", p=hyp.flipud, flip_idx=flip_idx),
             RandomFlip(direction="horizontal", p=hyp.fliplr, flip_idx=flip_idx),
+            RandomHFAttenuation(
+                p=getattr(hyp, "hf_atten_prob", 0.0),
+                min_alpha=getattr(hyp, "hf_atten_min_alpha", 0.0),
+                max_alpha=getattr(hyp, "hf_atten_max_alpha", 1.0),
+                blur_kernel=getattr(hyp, "hf_atten_blur_kernel", 5),
+                mask_grid=getattr(hyp, "hf_atten_mask_grid", 16),
+            ),
         ]
     )  # transforms
 

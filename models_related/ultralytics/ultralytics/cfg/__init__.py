@@ -180,6 +180,7 @@ CFG_FLOAT_KEYS = frozenset(
         "dgfe_tiny_area",
         "dgfe_neg_gain",
         "dgfe_edge_error_norm",
+        "p2_detail_rec_gain",
         "quality_gain",
         "quality_neg_gain",
         "quality_pos_iou_thr",
@@ -225,6 +226,9 @@ CFG_FRACTION_KEYS = frozenset(
         "flipud",
         "fliplr",
         "bgr",
+        "hf_atten_prob",
+        "hf_atten_min_alpha",
+        "hf_atten_max_alpha",
         "mosaic",
         "mixup",
         "cutmix",
@@ -281,6 +285,8 @@ CFG_INT_KEYS = frozenset(
         "positive_support_fill_kernel",
         "positive_support_warmup_start",
         "positive_support_warmup_end",
+        "hf_atten_blur_kernel",
+        "hf_atten_mask_grid",
     }
 )
 CFG_BOOL_KEYS = frozenset(

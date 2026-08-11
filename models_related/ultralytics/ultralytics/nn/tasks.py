@@ -89,6 +89,7 @@ from ultralytics.nn.modules import (
     ChannelKVCompressedAttention,
     LRPCHead,
     LocalDetailRepC2f,
+    MaskedP2DetailReconstruction,
     P1FusionLocalDetail,
     P1GER,
     P1PlainFusion,
@@ -223,6 +224,17 @@ class BaseModel(torch.nn.Module):
             x[1]["dgfe_aux"] = dgfe_aux
         return x
 
+    @staticmethod
+    def _attach_p2_detail_aux(x, p2_detail_aux):
+        """Attach collected masked P2 detail auxiliary tensors to raw Detect predictions."""
+        if not p2_detail_aux:
+            return x
+        if isinstance(x, dict):
+            x["p2_detail_aux"] = p2_detail_aux
+        elif isinstance(x, tuple) and len(x) > 1 and isinstance(x[1], dict):
+            x[1]["p2_detail_aux"] = p2_detail_aux
+        return x
+
     def _predict_once(self, x, profile=False, visualize=False, embed=None):
         """Perform a forward pass through the network.
 
@@ -236,18 +248,22 @@ class BaseModel(torch.nn.Module):
             (torch.Tensor): The last output of the model.
         """
         img0 = x
-        y, dt, embeddings, dgfe_aux = [], [], [], []  # outputs
+        y, dt, embeddings, dgfe_aux, p2_detail_aux = [], [], [], [], []  # outputs
         embed = frozenset(embed) if embed is not None else {-1}
         max_idx = max(embed)
         for m in self.model:
             if m.f != -1:  # if not from previous layer
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
-            if profile and not isinstance(m, FeatureDGFE):
+            if profile and not isinstance(m, (FeatureDGFE, MaskedP2DetailReconstruction)):
                 self._profile_one_layer(m, x, dt)
             if isinstance(m, FeatureDGFE):
                 x = m(x, img0)
                 if m.last_aux is not None:
                     dgfe_aux.append(m.last_aux)
+            elif isinstance(m, MaskedP2DetailReconstruction):
+                x = m(x)
+                if m.last_aux is not None:
+                    p2_detail_aux.append(m.last_aux)
             else:
                 x = m(x)  # run
             y.append(x if m.i in self.save else None)  # save output
@@ -257,7 +273,7 @@ class BaseModel(torch.nn.Module):
                 embeddings.append(torch.nn.functional.adaptive_avg_pool2d(x, (1, 1)).squeeze(-1).squeeze(-1))  # flatten
                 if m.i == max_idx:
                     return torch.unbind(torch.cat(embeddings, 1), dim=0)
-        return self._attach_dgfe_aux(x, dgfe_aux)
+        return self._attach_p2_detail_aux(self._attach_dgfe_aux(x, dgfe_aux), p2_detail_aux)
 
     def _predict_once_full_y(self, x):
         """Like _predict_once but also returns the save-filtered y-list for partial forward caching.
@@ -267,7 +283,7 @@ class BaseModel(torch.nn.Module):
                 output of self.model[i] when i is in self.save, else None.
         """
         img0 = x
-        y, dgfe_aux = [], []
+        y, dgfe_aux, p2_detail_aux = [], [], []
         for m in self.model:
             if m.f != -1:
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]
@@ -275,10 +291,14 @@ class BaseModel(torch.nn.Module):
                 x = m(x, img0)
                 if m.last_aux is not None:
                     dgfe_aux.append(m.last_aux)
+            elif isinstance(m, MaskedP2DetailReconstruction):
+                x = m(x)
+                if m.last_aux is not None:
+                    p2_detail_aux.append(m.last_aux)
             else:
                 x = m(x)
             y.append(x if m.i in self.save else None)
-        return self._attach_dgfe_aux(x, dgfe_aux), y
+        return self._attach_p2_detail_aux(self._attach_dgfe_aux(x, dgfe_aux), p2_detail_aux), y
 
     def _predict_perturbed_partial(self, api, img0) -> torch.Tensor:
         """Run the perturbed forward pass only from api.layer_idx onward.
@@ -304,7 +324,7 @@ class BaseModel(torch.nn.Module):
         y = list(api._cached_clean_y)  # shallow copy; length == len(self.model)
         x = api._clean_input  # clean input to the API layer (identical to clean pass)
 
-        dgfe_aux = []
+        dgfe_aux, p2_detail_aux = [], []
         for m in self.model:
             if m.i < api.layer_idx:
                 continue  # skip backbone and early neck — already in y
@@ -319,11 +339,15 @@ class BaseModel(torch.nn.Module):
                     x = m(x, img0)
                     if m.last_aux is not None:
                         dgfe_aux.append(m.last_aux)
+                elif isinstance(m, MaskedP2DetailReconstruction):
+                    x = m(x)
+                    if m.last_aux is not None:
+                        p2_detail_aux.append(m.last_aux)
                 else:
                     x = m(x)
             if m.i in self.save:
                 y[m.i] = x  # overwrite with freshly computed output
-        return self._attach_dgfe_aux(x, dgfe_aux)
+        return self._attach_p2_detail_aux(self._attach_dgfe_aux(x, dgfe_aux), p2_detail_aux)
 
     def _predict_augment(self, x):
         """Perform augmentations on input image x and return augmented inference."""
@@ -2315,7 +2339,9 @@ def parse_model(d, ch, verbose=True):
         elif m is ASFAttention:
             c2 = ch[f]
             args = [c2, *args]
-        elif m in frozenset({AdversarialPerturbationInjection, BoundaryFeatureBlock, DBSS, DualIrreducibilityHIT, FeatureDGFE}):
+        elif m in frozenset(
+            {AdversarialPerturbationInjection, BoundaryFeatureBlock, DBSS, DualIrreducibilityHIT, FeatureDGFE, MaskedP2DetailReconstruction}
+        ):
             c2 = ch[f]
             args = [c2, *args]
         elif m is ConflictFineReconstruction:

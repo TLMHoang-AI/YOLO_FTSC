@@ -53,6 +53,7 @@ __all__ = (
     "EnSimAMEdgeRepC2f",
     "FeatureDGFE",
     "GCTS",
+    "MaskedP2DetailReconstruction",
     "C3CBAM",
     "C3Ghost",
     "C3k2",
@@ -863,6 +864,36 @@ class FeatureDGFE(nn.Module):
             else None
         )
         return out
+
+
+class MaskedP2DetailReconstruction(nn.Module):
+    """Train-only masked local-detail reconstruction for P2 features."""
+
+    def __init__(self, c1: int, mask_prob: float = 0.35, pool_kernel: int = 3, hidden_ratio: float = 0.5) -> None:
+        super().__init__()
+        hidden = max(int(c1 * float(hidden_ratio)), 8)
+        self.mask_prob = float(mask_prob)
+        self.pool_kernel = max(int(pool_kernel) | 1, 3)
+        self.reconstruct = nn.Sequential(
+            nn.Conv2d(c1, hidden, 1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(hidden, c1, 3, padding=1, bias=False),
+        )
+        self.last_aux: dict[str, torch.Tensor] | None = None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.training or self.mask_prob <= 0.0:
+            self.last_aux = None
+            return x
+        detail = x - F.avg_pool2d(x, self.pool_kernel, stride=1, padding=self.pool_kernel // 2)
+        mask = (torch.rand((x.shape[0], 1, *x.shape[-2:]), device=x.device) < self.mask_prob).to(dtype=x.dtype)
+        masked = x - mask * detail
+        self.last_aux = {
+            "detail_pred": self.reconstruct(masked),
+            "detail_target": detail.detach(),
+            "detail_mask": mask,
+        }
+        return masked
 
 
 class MS_Scharr_EnSimAM(nn.Module):

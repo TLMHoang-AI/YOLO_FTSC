@@ -142,6 +142,7 @@ dgfe_neg_pos_ratio: 3 # (int) EXPERIMENTAL SR-DGFE hard-negative background samp
 dgfe_neg_gain: 0.25 # (float) EXPERIMENTAL SR-DGFE hard-negative loss gain
 dgfe_spatial_target_mode: iou # (str) EXPERIMENTAL SR-DGFE spatial target mode: iou or edge_error
 dgfe_edge_error_norm: 0.25 # (float) EXPERIMENTAL side error fraction that saturates edge_error DGFE targets
+p2_detail_rec_gain: 0.0 # (float) EXPERIMENTAL masked P2 local-detail reconstruction loss gain
 quality_head: false # (bool) EXPERIMENTAL predict IoU quality per anchor for score calibration
 quality_loss: bce # (str) EXPERIMENTAL quality-head loss: bce, bce_balanced, or l1
 quality_gain: 0.5 # (float) EXPERIMENTAL quality-head loss gain for balanced BCE
@@ -218,6 +219,11 @@ perspective: 0.0 # (float) perspective fraction (0–0.001 typical)
 flipud: 0.0 # (float) vertical flip probability
 fliplr: 0.5 # (float) horizontal flip probability
 bgr: 0.0 # (float) RGB↔BGR channel swap probability
+hf_atten_prob: 0.0 # (float) EXPERIMENTAL random high-frequency attenuation probability
+hf_atten_min_alpha: 0.0 # (float) EXPERIMENTAL minimum retained high-frequency residual
+hf_atten_max_alpha: 1.0 # (float) EXPERIMENTAL maximum retained high-frequency residual
+hf_atten_blur_kernel: 5 # (int) EXPERIMENTAL odd blur kernel for high-frequency residual
+hf_atten_mask_grid: 16 # (int) EXPERIMENTAL random alpha grid size before upsampling
 mosaic: 1.0 # (float) mosaic augmentation probability
 mixup: 0.0 # (float) MixUp augmentation probability
 cutmix: 0.0 # (float) CutMix augmentation probability
