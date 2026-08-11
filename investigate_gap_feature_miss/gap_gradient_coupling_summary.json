@@ -1,0 +1,60 @@
+{
+  "checkpoint": "hf_gap/runs/gap/seed_42/weights/best.pt",
+  "variant": "gap",
+  "seed": 42,
+  "split": "test",
+  "layer": "model.model[19] ChannelAttention(avg), P2 pre-Detect",
+  "loss_type": "classification",
+  "images": 788,
+  "max_images": 0,
+  "device": "cuda",
+  "forward_max_abs_diff_max": 0.0,
+  "indirect_over_full": {
+    "p25": 0.024056103988032096,
+    "median": 0.04013559737995789,
+    "p75": 0.05862058911520206
+  },
+  "cos_full_detach": {
+    "p25": 0.9982819557189941,
+    "median": 0.9991944134235382,
+    "p75": 0.9997106790542603
+  },
+  "indirect_object_bg_ratio": {
+    "p25": 0.9999993888465382,
+    "median": 1.0000000669440412,
+    "p75": 1.00000075065542
+  },
+  "correlations": {
+    "gate_mean_vs_low_conf_fn": {
+      "pearson": -0.06353307301042165,
+      "spearman": -0.13023851521265642,
+      "n": 788
+    },
+    "gate_mean_vs_median_positive_conf": {
+      "pearson": 0.16903947729784374,
+      "spearman": 0.24941740154103292,
+      "n": 340
+    },
+    "gate_std_vs_low_conf_fn": {
+      "pearson": -0.09443365924111227,
+      "spearman": -0.06477919101251793,
+      "n": 788
+    },
+    "gate_std_vs_median_positive_conf": {
+      "pearson": -0.05408873361412259,
+      "spearman": -0.028971958336704524,
+      "n": 340
+    },
+    "p2_rms_vs_low_conf_fn": {
+      "pearson": 0.04850734145327833,
+      "spearman": 0.08591517026160597,
+      "n": 788
+    },
+    "p2_rms_vs_median_positive_conf": {
+      "pearson": -0.004286117777275063,
+      "spearman": -0.09357204901528257,
+      "n": 340
+    }
+  },
+  "interpretation": "mixed_or_small_gradient_coupling"
+}
