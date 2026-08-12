@@ -28,6 +28,7 @@ __all__ = (
     "AmplitudePerturbation",
     "LearnableGlobalScalar",
     "MatchedChannelPerturbation",
+    "P2FeatureProbe",
 )
 
 
@@ -703,6 +704,45 @@ class MatchedChannelPerturbation(nn.Module):
             "gate_min": float(g.min()),
             "gate_max": float(g.max()),
         }
+
+
+class P2FeatureProbe(nn.Module):
+    """Tiny identity-initialized P2 feature probes before Detect."""
+
+    def __init__(self, channels=None, mode="context", eps=1e-6) -> None:
+        super().__init__()
+        if mode not in {"context", "residual", "energy", "mean_center", "std_norm", "location_rms", "global_add"}:
+            raise ValueError(f"Unsupported P2FeatureProbe mode: {mode!r}")
+        self.mode = mode
+        self.eps = eps
+        self.gamma = nn.Parameter(torch.zeros(1))
+        self.context = nn.Conv2d(channels, channels, 1, bias=False) if mode == "context" else None
+        self.global_add = nn.Conv2d(channels, channels, 1, bias=False) if mode == "global_add" else None
+        if self.context is not None:
+            nn.init.zeros_(self.context.weight)
+        if self.global_add is not None:
+            nn.init.zeros_(self.global_add.weight)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.mode == "context":
+            delta = self.context(torch.nn.functional.avg_pool2d(x, 3, stride=1, padding=1))
+        elif self.mode == "residual":
+            delta = x - torch.nn.functional.avg_pool2d(x, 3, stride=1, padding=1)
+        elif self.mode == "energy":
+            rms = torch.sqrt(x.square().mean(dim=1, keepdim=True) + self.eps)
+            delta = x / rms
+        elif self.mode == "mean_center":
+            delta = -x.mean(dim=(2, 3), keepdim=True)
+        elif self.mode == "std_norm":
+            mean = x.mean(dim=(2, 3), keepdim=True)
+            std = x.std(dim=(2, 3), keepdim=True, correction=0)
+            delta = (x - mean) / (std + self.eps)
+        elif self.mode == "location_rms":
+            rms = torch.sqrt(x.square().mean(dim=1, keepdim=True) + self.eps)
+            delta = x / rms
+        else:
+            delta = self.global_add(torch.nn.functional.adaptive_avg_pool2d(x, 1))
+        return x + self.gamma.to(dtype=x.dtype) * delta
 
 
 class SpatialAttention(nn.Module):
