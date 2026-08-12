@@ -38,6 +38,16 @@ def ensure_checkpoint() -> None:
     )
 
 
+def resolve_split_root(dataset_root: Path) -> Path:
+    direct = dataset_root / "labels"
+    nested = dataset_root / "levir_ship_yolo_seed42" / "labels"
+    if direct.exists():
+        return dataset_root
+    if nested.exists():
+        return dataset_root / "levir_ship_yolo_seed42"
+    raise FileNotFoundError(f"no YOLO labels dir under {dataset_root}")
+
+
 def labels(split_root: Path, split: str, limit: int) -> list[dict]:
     out = []
     for label_path in sorted((split_root / f"labels/{split}").glob("*.txt")):
@@ -186,7 +196,7 @@ def write_outputs(rows_by_split: dict[str, list[dict]], summary: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset-root", type=Path, default=ROOT / "datasets/levir_ship_yolo_seed42")
+    parser.add_argument("--dataset-root", type=Path, default=ROOT / "datasets")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--splits", nargs="+", default=["train", "test"])
     parser.add_argument("--max-images", type=int, default=int(os.environ.get("GAP_CHANNEL_GRAD_MAX_IMAGES", "0")))
@@ -205,8 +215,9 @@ def main() -> None:
     if not isinstance(attn, ChannelAttention):
         raise TypeError(f"expected layer 19 ChannelAttention, got {type(attn).__name__}")
     rows_by_split, summary = {}, {}
+    split_root = resolve_split_root(args.dataset_root)
     for split in args.splits:
-        rows, split_summary = run_split(model, attn, args.dataset_root, split, args, device)
+        rows, split_summary = run_split(model, attn, split_root, split, args, device)
         rows_by_split[split] = rows
         split_summary["easy_channels"] = args.easy_channels
         summary[split] = split_summary
