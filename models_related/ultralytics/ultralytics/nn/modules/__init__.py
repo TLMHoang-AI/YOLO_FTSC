@@ -121,6 +121,7 @@ from .conv import (
     RepConv,
     SpatialAttention,
 )
+from .ftsc import FTSCFeatureCalibrator
 from .head import (
     OBB,
     OBB26,
@@ -230,6 +231,7 @@ __all__ = (
     "HVDecoupledDetect",
     "HVDecoupledRegression",
     "Focus",
+    "FTSCFeatureCalibrator",
     "GhostBottleneck",
     "GhostConv",
     "HGBlock",
