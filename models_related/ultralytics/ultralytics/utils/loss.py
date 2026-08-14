@@ -362,17 +362,22 @@ class BboxLoss(nn.Module):
         imgsz: torch.Tensor,
         stride: torch.Tensor,
         quality_weights: torch.Tensor | None = None,
+        box_weights: torch.Tensor | None = None,
+        dfl_weights: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute IoU and DFL losses for bounding boxes."""
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
         if quality_weights is not None:
             weight = weight * quality_weights.to(device=weight.device, dtype=weight.dtype).view(-1, 1)
+        iou_weight = weight
+        if box_weights is not None:
+            iou_weight = iou_weight * box_weights.to(device=weight.device, dtype=weight.dtype).view(-1, 1)
         if self.wise_iou is None:
             iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
-            loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+            loss_iou = ((1.0 - iou) * iou_weight).sum() / target_scores_sum
         else:
             iou_loss, _ = self.wise_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])
-            loss_iou = (iou_loss.unsqueeze(-1) * weight).sum() / target_scores_sum
+            loss_iou = (iou_loss.unsqueeze(-1) * iou_weight).sum() / target_scores_sum
 
         # DFL loss
         if self.dfl_loss:
@@ -403,7 +408,10 @@ class BboxLoss(nn.Module):
                     loss_dfl[~positive_is_p2] = self.dfl_loss(
                         positive_pred[~positive_is_p2].flatten(0, 1), positive_target[~positive_is_p2]
                     )
-            loss_dfl = loss_dfl * weight
+            dfl_weight = weight
+            if dfl_weights is not None:
+                dfl_weight = dfl_weight * dfl_weights.to(device=weight.device, dtype=weight.dtype).view(-1, 1)
+            loss_dfl = loss_dfl * dfl_weight
             loss_dfl = loss_dfl.sum() / target_scores_sum
         else:
             target_ltrb = bbox2dist(anchor_points, target_bboxes)
@@ -414,8 +422,12 @@ class BboxLoss(nn.Module):
             pred_dist = pred_dist * stride
             pred_dist[..., 0::2] /= imgsz[1]
             pred_dist[..., 1::2] /= imgsz[0]
+            dfl_weight = weight
+            if dfl_weights is not None:
+                dfl_weight = dfl_weight * dfl_weights.to(device=weight.device, dtype=weight.dtype).view(-1, 1)
             loss_dfl = (
-                F.l1_loss(pred_dist[fg_mask], target_ltrb[fg_mask], reduction="none").mean(-1, keepdim=True) * weight
+                F.l1_loss(pred_dist[fg_mask], target_ltrb[fg_mask], reduction="none").mean(-1, keepdim=True)
+                * dfl_weight
             )
             loss_dfl = loss_dfl.sum() / target_scores_sum
 
@@ -812,6 +824,8 @@ class v8DetectionLoss:
         self.model = model
 
         m = model.model[-1]  # Detect() module
+        self.ftsc_calibrator = getattr(m, "ftsc_calibrator", None)
+        self.ftsc_metrics: dict[str, float] = {}
         self.bce = nn.BCEWithLogitsLoss(reduction="none")
         self.vfl = (
             VarifocalLoss(
@@ -939,6 +953,14 @@ class v8DetectionLoss:
         self.loc_assign_max_stride = float(getattr(h, "loc_assign_max_stride", 8.0))
         self.loc_assign_center_radius = float(getattr(h, "loc_assign_center_radius", 2.5))
         self.loc_assign_weight = float(getattr(h, "loc_assign_weight", 0.5))
+        if self.ftsc_calibrator is not None and self.loc_assign:
+            raise ValueError("Anchor-free FTSC is assignment-preserving and is incompatible with loc_assign.")
+        if (
+            self.ftsc_calibrator is not None
+            and "dfl_distribution" in self.ftsc_calibrator.evidence_names
+            and getattr(m, "p2_dfl_bins", getattr(m, "p3_dfl_bins", None)) is not None
+        ):
+            raise ValueError("FTSC DFL-distribution evidence currently requires uniform DFL bins.")
         self.detect_head = m
         self.box_consensus_gain = float(getattr(h, "box_consensus_gain", 0.0))
         self.box_consensus_warmup_start = int(getattr(h, "box_consensus_warmup_start", 5))
@@ -965,6 +987,20 @@ class v8DetectionLoss:
         self.dfl_residual = bool(getattr(m, "dfl_residual", False))
         self.dfl_residual_scale = float(getattr(m, "dfl_residual_scale", getattr(h, "dfl_residual_scale", 0.25)))
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
+
+    @staticmethod
+    def _ftsc_correlation(left: torch.Tensor, right: torch.Tensor) -> float:
+        """Return a finite detached Pearson correlation for FTSC diagnostics."""
+        if left.numel() < 2 or right.numel() != left.numel():
+            return 0.0
+        left = left.detach().float().flatten()
+        right = right.detach().float().flatten()
+        left = left - left.mean()
+        right = right - right.mean()
+        denominator = left.square().sum().sqrt() * right.square().sum().sqrt()
+        if float(denominator.item()) <= 1e-12:
+            return 0.0
+        return float((left * right).sum().div(denominator).item())
 
     def preprocess(self, targets: torch.Tensor, batch_size: int, scale_tensor: torch.Tensor) -> torch.Tensor:
         """Preprocess targets by converting to tensor format and scaling coordinates."""
@@ -1547,12 +1583,74 @@ class v8DetectionLoss:
                         total_alt_supports_found += topk_num
 
         target_scores_sum = max(target_scores.sum(), 1)
+        ftsc_weights = None
+        self.ftsc_metrics = {}
+        if self.ftsc_calibrator is not None:
+            ftsc_weights = self.ftsc_calibrator(
+                anchor_points * stride_tensor,
+                target_bboxes,
+                target_gt_idx,
+                fg_mask,
+                pred_distri,
+                epoch=self.epoch,
+            )
+            self.ftsc_metrics = dict(self.ftsc_calibrator.last_metrics)
+            flat_stride = stride_tensor.squeeze(-1)
+            for level_index, level_stride in enumerate(self.stride.tolist(), start=2):
+                level_mask = flat_stride == float(level_stride)
+                self.ftsc_metrics[f"ftsc_positive_count_p{level_index}"] = float(
+                    fg_mask[:, level_mask].sum().item()
+                )
+            if fg_mask.any():
+                positive_scores = target_scores.sum(-1)[fg_mask]
+                positive_boxes = target_bboxes[fg_mask]
+                positive_area = (
+                    (positive_boxes[:, 2] - positive_boxes[:, 0]).clamp_min(0)
+                    * (positive_boxes[:, 3] - positive_boxes[:, 1]).clamp_min(0)
+                )
+                cls_ftsc_weight = ftsc_weights["cls"]
+                self.ftsc_metrics["ftsc_corr_weight_target_score"] = self._ftsc_correlation(
+                    cls_ftsc_weight, positive_scores
+                )
+                self.ftsc_metrics["ftsc_corr_weight_gt_area"] = self._ftsc_correlation(
+                    cls_ftsc_weight, positive_area
+                )
+                batch_ids = torch.arange(batch_size, device=self.device).view(-1, 1).expand_as(fg_mask)[fg_mask]
+                group_ids = batch_ids * fg_mask.shape[1] + target_gt_idx[fg_mask].long()
+                _, group_counts = group_ids.unique(return_counts=True)
+                group_weight_sum = cls_ftsc_weight.new_zeros(batch_size * fg_mask.shape[1]).scatter_add_(
+                    0, group_ids, cls_ftsc_weight
+                )
+                group_count_dense = cls_ftsc_weight.new_zeros(batch_size * fg_mask.shape[1]).scatter_add_(
+                    0, group_ids, torch.ones_like(cls_ftsc_weight)
+                )
+                group_weight_means = group_weight_sum[group_count_dense > 0] / group_count_dense[
+                    group_count_dense > 0
+                ]
+                self.ftsc_metrics["ftsc_mean_positives_per_gt"] = float(group_counts.float().mean().item())
+                self.ftsc_metrics["ftsc_single_positive_gt_fraction"] = float(
+                    (group_counts == 1).float().mean().item()
+                )
+                self.ftsc_metrics["ftsc_per_gt_weight_mean"] = float(group_weight_means.float().mean().item())
+                self.ftsc_metrics["ftsc_per_gt_weight_mean_std"] = float(
+                    group_weight_means.float().std(unbiased=False).item()
+                )
         cls_target_scores = target_scores
         cls_target_scores_sum = target_scores_sum
         assigned_iou = None
         # Use the same coordinate scale as bbox loss. If target_bboxes has already been divided by stride_tensor,
         # do not divide again.
         target_bboxes_scaled = target_bboxes / stride_tensor
+        if ftsc_weights is not None and fg_mask.any():
+            realized_iou = bbox_iou(
+                pred_bboxes.detach()[fg_mask],
+                target_bboxes_scaled[fg_mask],
+                xywh=False,
+                CIoU=False,
+            ).squeeze(-1).clamp(0)
+            self.ftsc_metrics["ftsc_corr_weight_realized_iou"] = self._ftsc_correlation(
+                ftsc_weights["cls"], realized_iou
+            )
         loc_target_bboxes, loc_target_scores, loc_fg_mask = self.build_localization_targets(
             anchor_points,
             stride_tensor,
@@ -1609,6 +1707,17 @@ class v8DetectionLoss:
                         fg_indices = torch.nonzero(fg_b).squeeze(-1)
                         classes_b = target_scores[b, fg_b].argmax(-1).long()
                         cls_weights[b, fg_indices, classes_b] = w_g
+
+        if ftsc_weights is not None and fg_mask.any():
+            dense_ftsc_cls = pred_scores.new_ones(fg_mask.shape)
+            dense_ftsc_cls[fg_mask] = ftsc_weights["cls"].to(dtype=pred_scores.dtype)
+            # Only target-class positive BCE/VFL elements are calibrated. Background
+            # anchors and off-class elements at a positive anchor remain at identity.
+            cls_weights = cls_weights * torch.where(
+                target_scores > 0,
+                dense_ftsc_cls.unsqueeze(-1),
+                torch.ones_like(cls_weights),
+            )
 
         if self.vfl is not None:
             if assigned_iou is not None:
@@ -1696,6 +1805,8 @@ class v8DetectionLoss:
                 imgsz,
                 stride_tensor,
                 quality_weights,
+                ftsc_weights["box"] if ftsc_weights is not None else None,
+                ftsc_weights["dfl"] if ftsc_weights is not None else None,
             )
             if self.bbox_loss.last_p2_conflict is not None:
                 h2, w2 = preds["feats"][0].shape[-2:]
@@ -1707,6 +1818,10 @@ class v8DetectionLoss:
         loss[0] *= self.hyp.box  # box gain
         loss[1] *= self.hyp.cls  # cls gain
         loss[2] *= self.hyp.dfl  # dfl gain
+        if ftsc_weights is not None:
+            ftsc_regularization = ftsc_weights["regularization"]
+            loss[1] = loss[1] + ftsc_regularization
+            self.ftsc_metrics["ftsc_strength_regularization"] = float(ftsc_regularization.detach().item())
         if self.boundary_loss is not None:
             # EXPERIMENTAL: add feature-space boundary separation only during training loss computation.
             loss[3] = self.boundary_loss(preds["feats"], gt_bboxes, mask_gt, self.stride) * self.boundary_gain

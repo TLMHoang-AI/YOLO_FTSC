@@ -121,7 +121,7 @@ from .conv import (
     RepConv,
     SpatialAttention,
 )
-from .ftsc import FTSCFeatureCalibrator
+from .ftsc import AnchorFreeFTSCCalibrator, DFLDistributionEvidence, FTSCFeatureCalibrator, PositionGaussianEvidence
 from .head import (
     OBB,
     OBB26,
@@ -231,6 +231,8 @@ __all__ = (
     "HVDecoupledDetect",
     "HVDecoupledRegression",
     "Focus",
+    "AnchorFreeFTSCCalibrator",
+    "DFLDistributionEvidence",
     "FTSCFeatureCalibrator",
     "GhostBottleneck",
     "GhostConv",
@@ -253,6 +255,7 @@ __all__ = (
     "P1GER",
     "P1PlainFusion",
     "P1DRR",
+    "PositionGaussianEvidence",
     "M3NATFuse",
     "NATBlock",
     "MLPBlock",

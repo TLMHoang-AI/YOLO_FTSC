@@ -686,6 +686,7 @@ class BaseModel(torch.nn.Module):
                 clear_boundary_context()
         loss, items = self.criterion(preds, batch)
         diagnostics = {}
+        diagnostics.update(getattr(self.criterion, "ftsc_metrics", {}))
         diagnostics.update(getattr(self.criterion, "positive_confidence_rescue_metrics", {}))
         diagnostics.update(getattr(self.criterion, "consensus_metrics", {}))
         diagnostics.update(getattr(self.criterion, "psd_metrics", {}))
@@ -2184,6 +2185,7 @@ def parse_model(d, ch, verbose=True):
     box_detail_gate = d.get("box_detail_gate", True)
     p2_offset_regression = d.get("p2_offset_regression", False)
     p1_reg_injection = d.get("p1_reg_injection", False)
+    ftsc = d.get("ftsc", None)
     depth, width, kpt_shape = (d.get(x, 1.0) for x in ("depth_multiple", "width_multiple", "kpt_shape"))
     scale = d.get("scale")
     if scales:
@@ -2454,6 +2456,8 @@ def parse_model(d, ch, verbose=True):
                             p1_reg_injection,
                         ]
                     )
+                    if m is Detect:
+                        args.append(ftsc)
             if m is Segment or m is YOLOESegment or m is Segment26 or m is YOLOESegment26:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
             if m in {

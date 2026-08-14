@@ -17,6 +17,7 @@ from ultralytics.utils.torch_utils import TORCH_1_11, fuse_conv_and_bn, smart_in
 
 from .block import DFL, SAVPE, BNContrastiveHead, ContrastiveHead, Proto, Proto26, RealNVP, Residual, SwiGLUFFN
 from .conv import Conv, DWConv
+from .ftsc import AnchorFreeFTSCCalibrator
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 
@@ -180,10 +181,14 @@ class Detect(nn.Module):
         box_detail_gate: bool = True,
         p2_offset_regression: bool = False,
         p1_reg_injection: bool = False,
+        ftsc: dict | None = None,
     ):
         """Initialize the YOLO detection layer with specified number of classes and channels."""
         super().__init__()
         self.nc = nc  # number of classes
+        self.ftsc_calibrator = (
+            AnchorFreeFTSCCalibrator(ftsc, reg_max) if ftsc and bool(ftsc.get("enabled", True)) else None
+        )
         self.p1_reg_injection = bool(p1_reg_injection)
         if self.p1_reg_injection:
             self.nl = len(ch) - 1
