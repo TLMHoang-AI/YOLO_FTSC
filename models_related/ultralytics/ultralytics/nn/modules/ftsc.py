@@ -100,6 +100,7 @@ class AnchorFreeFTSCCalibrator(nn.Module):
     """
 
     SUPPORTED_EVIDENCE = {"position_gaussian", "dfl_distribution"}
+    TASK_NAMES = ("cls", "box", "dfl")
 
     def __init__(self, config: dict, reg_max: int) -> None:
         super().__init__()
@@ -128,6 +129,8 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         self.dfl_apply_cls = bool(config.get("dfl_apply_cls", True))
         self.dfl_apply_box = bool(config.get("dfl_apply_box", False))
         self.dfl_apply_dfl = bool(config.get("dfl_apply_dfl", False))
+        self.position_task_specific_strength = bool(config.get("position_task_specific_strength", False))
+        self.dfl_shuffle_within_gt = bool(config.get("dfl_shuffle_within_gt", False))
         self.strength_max = float(config.get("strength_max", 2.0))
         self.strength_init = float(config.get("strength_init", 1.0))
         self.strength_reg_weight = float(config.get("strength_reg_weight", 1e-4))
@@ -135,6 +138,33 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             raise ValueError("FTSC strength_init must lie strictly between zero and strength_max.")
         if self.strength_reg_weight < 0:
             raise ValueError("FTSC strength_reg_weight must be non-negative.")
+        if self.position_task_specific_strength and "position_gaussian" not in self.evidence_names:
+            raise ValueError("Task-specific Position strength requires position_gaussian evidence.")
+        if self.position_task_specific_strength and self.policy != "f5":
+            raise ValueError("Task-specific Position strength requires the learnable F5 policy.")
+        if self.dfl_shuffle_within_gt and "dfl_distribution" not in self.evidence_names:
+            raise ValueError("Within-GT DFL shuffle requires dfl_distribution evidence.")
+        if self.dfl_shuffle_within_gt and not bool(config.get("dfl_detach", True)):
+            raise ValueError("Within-GT DFL shuffle requires detached DFL evidence.")
+
+        self.position_tasks = (
+            tuple(
+                task
+                for task, enabled in zip(self.TASK_NAMES, (self.apply_cls, self.apply_box, self.apply_dfl))
+                if enabled
+            )
+            if "position_gaussian" in self.evidence_names
+            else ()
+        )
+        if self.position_task_specific_strength and not self.position_tasks:
+            raise ValueError("Task-specific Position strength requires at least one enabled Position task.")
+
+        if self.dfl_shuffle_within_gt:
+            configured_seed = config.get("dfl_shuffle_seed")
+            shuffle_seed = (torch.initial_seed() if configured_seed is None else int(configured_seed)) % (2**63 - 1)
+            self.register_buffer("dfl_shuffle_seed", torch.tensor(shuffle_seed, dtype=torch.long))
+            self.register_buffer("dfl_shuffle_step", torch.tensor(0, dtype=torch.long))
+        self._last_dfl_shuffle_metrics: dict[str, float] = {}
 
         providers = {}
         if "position_gaussian" in self.evidence_names:
@@ -153,14 +183,51 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             probability = self.strength_init / self.strength_max
             initial_logit = math.log(probability / (1.0 - probability))
             for name in self.evidence_names:
-                self.strength_logits[name] = nn.Parameter(torch.tensor(initial_logit, dtype=torch.float32))
+                for key in self.strength_keys(name):
+                    self.strength_logits[key] = nn.Parameter(torch.tensor(initial_logit, dtype=torch.float32))
         self.last_metrics: dict[str, float] = {}
 
-    def strength(self, name: str, reference: torch.Tensor) -> torch.Tensor:
+    def strength_keys(self, name: str) -> tuple[str, ...]:
+        """Return parameter keys owned by one evidence provider."""
+        if name == "position_gaussian" and self.position_task_specific_strength:
+            return tuple(f"{name}_{task}" for task in self.position_tasks)
+        return (name,)
+
+    def strength(self, name: str, reference: torch.Tensor, task: str | None = None) -> torch.Tensor:
         """Return fixed E4 strength or bounded learnable F5 strength."""
         if self.policy == "e4":
             return reference.new_tensor(self.strength_init)
-        return torch.sigmoid(self.strength_logits[name]).to(reference) * self.strength_max
+        if name == "position_gaussian" and self.position_task_specific_strength:
+            if task not in self.position_tasks:
+                raise ValueError(
+                    f"Position strength requires one of the enabled tasks {self.position_tasks}, got {task!r}."
+                )
+            key = f"{name}_{task}"
+        else:
+            if task is not None:
+                raise ValueError(f"Shared {name} strength does not accept task={task!r}.")
+            key = name
+        return torch.sigmoid(self.strength_logits[key]).to(reference) * self.strength_max
+
+    def _strength_regularization(self, reference: torch.Tensor) -> torch.Tensor:
+        """Return matched F5 regularization, averaging task-specific Position terms."""
+        regularization = reference.sum() * 0.0
+        if self.policy != "f5" or not self.strength_reg_weight:
+            return regularization
+
+        provider_terms = []
+        for name in self.evidence_names:
+            if name == "position_gaussian" and self.position_task_specific_strength:
+                task_terms = torch.stack(
+                    [
+                        (self.strength(name, reference, task=task) - self.strength_init).square()
+                        for task in self.position_tasks
+                    ]
+                )
+                provider_terms.append(task_terms.mean())
+            else:
+                provider_terms.append((self.strength(name, reference) - self.strength_init).square())
+        return self.strength_reg_weight * torch.stack(provider_terms).sum()
 
     def residual_fraction(self, epoch: int) -> float:
         """Return the F5 identity-to-full-gate schedule for the current zero-based epoch."""
@@ -171,6 +238,13 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         return min(1.0, (epoch - self.warmup_epochs + 1) / self.ramp_epochs)
 
     @staticmethod
+    def _positive_group_ids(fg_mask: torch.Tensor, target_gt_idx: torch.Tensor) -> tuple[torch.Tensor, int]:
+        """Return collision-free image/GT group IDs in positive flatten order."""
+        batch_size, num_anchors = fg_mask.shape
+        batch_ids = torch.arange(batch_size, device=fg_mask.device).view(-1, 1).expand_as(fg_mask)[fg_mask]
+        return batch_ids * num_anchors + target_gt_idx[fg_mask].long(), batch_size * num_anchors
+
+    @staticmethod
     def _center_per_gt(
         values: torch.Tensor,
         fg_mask: torch.Tensor,
@@ -179,10 +253,7 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         """Center log-evidence independently inside each image/GT positive group."""
         if not values.numel():
             return values
-        batch_size, num_anchors = fg_mask.shape
-        batch_ids = torch.arange(batch_size, device=fg_mask.device).view(-1, 1).expand_as(fg_mask)[fg_mask]
-        group_ids = batch_ids * num_anchors + target_gt_idx[fg_mask].long()
-        group_count = batch_size * num_anchors
+        group_ids, group_count = AnchorFreeFTSCCalibrator._positive_group_ids(fg_mask, target_gt_idx)
         sums = values.new_zeros(group_count).scatter_add_(0, group_ids, values)
         counts = values.new_zeros(group_count).scatter_add_(0, group_ids, torch.ones_like(values))
         return values - sums[group_ids] / counts[group_ids].clamp_min(1.0)
@@ -196,14 +267,55 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         """Normalize the arithmetic mean weight of every image/GT group to one."""
         if not values.numel():
             return values
-        batch_size, num_anchors = fg_mask.shape
-        batch_ids = torch.arange(batch_size, device=fg_mask.device).view(-1, 1).expand_as(fg_mask)[fg_mask]
-        group_ids = batch_ids * num_anchors + target_gt_idx[fg_mask].long()
-        group_count = batch_size * num_anchors
+        group_ids, group_count = AnchorFreeFTSCCalibrator._positive_group_ids(fg_mask, target_gt_idx)
         sums = values.new_zeros(group_count).scatter_add_(0, group_ids, values)
         counts = values.new_zeros(group_count).scatter_add_(0, group_ids, torch.ones_like(values))
         means = sums / counts.clamp_min(1.0)
         return values / means[group_ids].clamp_min(1e-9)
+
+    def _shuffle_dfl_per_gt(
+        self,
+        values: torch.Tensor,
+        fg_mask: torch.Tensor,
+        target_gt_idx: torch.Tensor,
+        epoch: int,
+    ) -> torch.Tensor:
+        """Apply a vectorized deterministic random derangement inside every non-singleton GT group."""
+        if not values.numel():
+            return values
+        group_ids, _ = self._positive_group_ids(fg_mask, target_gt_idx)
+        step = int(self.dfl_shuffle_step.item())
+        base_seed = int(self.dfl_shuffle_seed.item())
+        seed = (base_seed + (step + 1) * 1_000_003 + (int(epoch) + 1) * 9_176) % (2**63 - 1)
+        generator = torch.Generator(device=values.device)
+        generator.manual_seed(seed)
+
+        # First randomize positive indices, then use a stable group sort so that
+        # every group's internal ordering stays random without a Python loop.
+        random_order = torch.randperm(values.numel(), generator=generator, device=values.device)
+        group_order = torch.argsort(group_ids[random_order], stable=True)
+        order = random_order[group_order]
+        ordered_groups = group_ids[order]
+        positions = torch.arange(values.numel(), device=values.device)
+        is_first = torch.ones_like(positions, dtype=torch.bool)
+        is_first[1:] = ordered_groups[1:] != ordered_groups[:-1]
+        is_last = torch.ones_like(positions, dtype=torch.bool)
+        is_last[:-1] = ordered_groups[:-1] != ordered_groups[1:]
+        group_starts = torch.cummax(torch.where(is_first, positions, 0), dim=0).values
+        source_positions = torch.where(is_last, group_starts, positions + 1)
+        source_indices = order[source_positions]
+        shuffled = values.clone()
+        shuffled[order] = values[source_indices]
+        moved = int((source_indices != order).sum().item())
+        with torch.no_grad():
+            self.dfl_shuffle_step.add_(1)
+        total = max(int(values.numel()), 1)
+        self._last_dfl_shuffle_metrics = {
+            "ftsc_dfl_shuffle_eligible_fraction": moved / total,
+            "ftsc_dfl_shuffle_moved_fraction": moved / total,
+            "ftsc_dfl_shuffle_step": float(step),
+        }
+        return shuffled
 
     def _gate(
         self,
@@ -253,6 +365,15 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             empty = pred_distri.new_empty(0)
             zero = pred_distri.sum() * 0.0
             self.last_metrics = {"ftsc_positive_count": 0.0, "ftsc_rho": self.residual_fraction(epoch)}
+            if self.dfl_shuffle_within_gt:
+                self.last_metrics.update(
+                    {
+                        "ftsc_dfl_shuffle_within_gt": 1.0,
+                        "ftsc_dfl_shuffle_eligible_fraction": 0.0,
+                        "ftsc_dfl_shuffle_moved_fraction": 0.0,
+                        "ftsc_dfl_shuffle_step": float(self.dfl_shuffle_step.item()),
+                    }
+                )
             return {"cls": empty, "box": empty, "dfl": empty, "regularization": zero}
 
         centered = {}
@@ -263,6 +384,8 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             )
         if "dfl_distribution" in self.providers:
             distribution = self.providers["dfl_distribution"](pred_distri, fg_mask)
+            if self.dfl_shuffle_within_gt:
+                distribution = self._shuffle_dfl_per_gt(distribution, fg_mask, target_gt_idx, epoch)
             centered["dfl_distribution"] = (
                 self._center_per_gt(distribution, fg_mask, target_gt_idx) if self.per_gt_norm else distribution
             )
@@ -271,15 +394,12 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         zero = torch.zeros_like(reference)
         task_logs = {"cls": zero.clone(), "box": zero.clone(), "dfl": zero.clone()}
         for name, values in centered.items():
-            contribution = self.strength(name, values) * values
             if name == "position_gaussian":
-                if self.apply_cls:
-                    task_logs["cls"] = task_logs["cls"] + contribution
-                if self.apply_box:
-                    task_logs["box"] = task_logs["box"] + contribution
-                if self.apply_dfl:
-                    task_logs["dfl"] = task_logs["dfl"] + contribution
+                for task in self.position_tasks:
+                    strength_task = task if self.position_task_specific_strength else None
+                    task_logs[task] = task_logs[task] + self.strength(name, values, task=strength_task) * values
             else:
+                contribution = self.strength(name, values) * values
                 if self.dfl_apply_cls:
                     task_logs["cls"] = task_logs["cls"] + contribution
                 if self.dfl_apply_box:
@@ -291,11 +411,7 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         for task, values in task_logs.items():
             weights[task] = self._gate(values, fg_mask, target_gt_idx, epoch)
 
-        regularization = reference.sum() * 0.0
-        if self.policy == "f5" and self.strength_reg_weight:
-            regularization = self.strength_reg_weight * sum(
-                (self.strength(name, reference) - self.strength_init).square() for name in self.evidence_names
-            )
+        regularization = self._strength_regularization(reference)
 
         metrics = {
             "ftsc_positive_count": float(positive_count),
@@ -304,7 +420,15 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         }
         for name, values in centered.items():
             metrics.update(self._stats(f"ftsc_{name}", values))
-            metrics[f"ftsc_strength_{name}"] = float(self.strength(name, reference).detach().item())
+            if name == "position_gaussian" and self.position_task_specific_strength:
+                task_strengths = []
+                for task in self.position_tasks:
+                    task_strength = self.strength(name, reference, task=task).detach()
+                    task_strengths.append(task_strength)
+                    metrics[f"ftsc_strength_{name}_{task}"] = float(task_strength.item())
+                metrics[f"ftsc_strength_{name}"] = float(torch.stack(task_strengths).mean().item())
+            else:
+                metrics[f"ftsc_strength_{name}"] = float(self.strength(name, reference).detach().item())
         for task, values in weights.items():
             metrics.update(self._stats(f"ftsc_weight_{task}", values))
             metrics[f"ftsc_{task}_clamp_low_fraction"] = float(
@@ -318,6 +442,10 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         if distribution_provider is not None:
             metrics.update(self._stats("ftsc_dfl_entropy", distribution_provider.last_entropy))
             metrics.update(self._stats("ftsc_dfl_variance", distribution_provider.last_variance))
+        metrics["ftsc_position_task_specific_strength"] = float(self.position_task_specific_strength)
+        metrics["ftsc_dfl_shuffle_within_gt"] = float(self.dfl_shuffle_within_gt)
+        if self.dfl_shuffle_within_gt:
+            metrics.update(self._last_dfl_shuffle_metrics)
         self.last_metrics = metrics
         return {**weights, "regularization": regularization}
 

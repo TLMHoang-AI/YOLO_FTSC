@@ -25,8 +25,18 @@ VARIANTS = {
     "ftsc_af_y2_f5_position": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_af_y2_f5_position.yaml",
     "ftsc_af_y3_f5_position_cls": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_af_y3_f5_position_cls.yaml",
     "ftsc_af_y4_f5_position_dflcls": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_af_y4_f5_position_dflcls.yaml",
+    "ftsc_af_v11_a1_dflcls_only": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_af_v11_a1_dflcls_only.yaml",
+    "ftsc_af_v11_a2_position_task_strengths": CONFIG_ROOT
+    / "yolov8n_p2_levir_ftsc_af_v11_a2_position_task_strengths.yaml",
+    "ftsc_af_v11_a3_dflcls_shuffled_within_gt": CONFIG_ROOT
+    / "yolov8n_p2_levir_ftsc_af_v11_a3_dflcls_shuffled_within_gt.yaml",
 }
-SCREEN_VARIANTS = tuple(list(VARIANTS)[:3])
+V11_VARIANTS = (
+    "ftsc_af_v11_a1_dflcls_only",
+    "ftsc_af_v11_a2_position_task_strengths",
+    "ftsc_af_v11_a3_dflcls_shuffled_within_gt",
+)
+SCREEN_VARIANTS = V11_VARIANTS
 
 workflow.EXPERIMENT = EXPERIMENT_SLUG
 workflow.HF_REPO = HF_REPO
@@ -56,6 +66,29 @@ def model_for(variant: str, pretrained: str):
         raise ValueError(f"{variant}: cls-only control unexpectedly calibrates localization losses")
     if variant.endswith("position_dflcls") and "dfl_distribution" not in calibrator.evidence_names:
         raise ValueError(f"{variant}: detached DFL evidence was not constructed")
+    if variant == "ftsc_af_v11_a1_dflcls_only":
+        if calibrator.evidence_names != ("dfl_distribution",):
+            raise ValueError(f"{variant}: expected DFL-only evidence, got {calibrator.evidence_names}")
+        if calibrator.position_tasks:
+            raise ValueError(f"{variant}: Position routing must be disabled when its provider is removed")
+        if not calibrator.dfl_apply_cls or calibrator.dfl_apply_box or calibrator.dfl_apply_dfl:
+            raise ValueError(f"{variant}: expected detached DFL evidence routed to classification only")
+    elif variant == "ftsc_af_v11_a2_position_task_strengths":
+        expected_keys = {
+            "position_gaussian_cls",
+            "position_gaussian_box",
+            "position_gaussian_dfl",
+            "dfl_distribution",
+        }
+        if calibrator.evidence_names != ("position_gaussian", "dfl_distribution"):
+            raise ValueError(f"{variant}: expected the unchanged Y4 evidence bank")
+        if not calibrator.position_task_specific_strength or set(calibrator.strength_logits) != expected_keys:
+            raise ValueError(f"{variant}: expected task-specific Position strengths {sorted(expected_keys)}")
+    elif variant == "ftsc_af_v11_a3_dflcls_shuffled_within_gt":
+        if calibrator.evidence_names != ("position_gaussian", "dfl_distribution"):
+            raise ValueError(f"{variant}: expected the unchanged Y4 evidence bank")
+        if not calibrator.dfl_shuffle_within_gt or not calibrator.providers["dfl_distribution"].detach:
+            raise ValueError(f"{variant}: expected detached within-GT DFL shuffle")
     return model
 
 
@@ -105,10 +138,19 @@ def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[s
                 "ftsc/apply_cls": float(calibrator.apply_cls),
                 "ftsc/apply_box": float(calibrator.apply_box),
                 "ftsc/apply_dfl": float(calibrator.apply_dfl),
+                "ftsc/dfl_apply_cls": float(calibrator.dfl_apply_cls),
+                "ftsc/dfl_apply_box": float(calibrator.dfl_apply_box),
+                "ftsc/dfl_apply_dfl": float(calibrator.dfl_apply_dfl),
+                "ftsc/position_task_specific_strength": float(calibrator.position_task_specific_strength),
+                "ftsc/dfl_shuffle_within_gt": float(calibrator.dfl_shuffle_within_gt),
                 "ftsc/warmup_epochs": float(calibrator.warmup_epochs),
                 "ftsc/ramp_epochs": float(calibrator.ramp_epochs),
+                "ftsc/strength_reg_weight": calibrator.strength_reg_weight,
             }
         )
+        if calibrator.dfl_shuffle_within_gt:
+            metrics["ftsc/dfl_shuffle_seed"] = int(calibrator.dfl_shuffle_seed.detach().cpu().item())
+            metrics["ftsc/final_dfl_shuffle_step"] = int(calibrator.dfl_shuffle_step.detach().cpu().item())
         if "position_gaussian" in calibrator.providers:
             metrics["ftsc/position_alpha"] = calibrator.providers["position_gaussian"].alpha
         if "dfl_distribution" in calibrator.providers:
@@ -116,12 +158,20 @@ def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[s
             metrics["ftsc/dfl_entropy_tau"] = provider.entropy_tau
             metrics["ftsc/dfl_variance_tau"] = provider.variance_tau
             metrics["ftsc/dfl_detach"] = float(provider.detach)
-        for name in calibrator.evidence_names:
-            metrics[f"ftsc/final_strength_{name}"] = (
-                calibrator.strength_init
-                if calibrator.policy == "e4"
-                else float((calibrator.strength_max * calibrator.strength_logits[name].sigmoid()).detach().cpu().item())
-            )
+        if calibrator.policy == "e4":
+            for name in calibrator.evidence_names:
+                metrics[f"ftsc/final_strength_{name}"] = calibrator.strength_init
+        else:
+            final_strengths = {}
+            for key, logit in calibrator.strength_logits.items():
+                value = float((calibrator.strength_max * logit.sigmoid()).detach().cpu().item())
+                final_strengths[key] = value
+                metrics[f"ftsc/final_strength_{key}"] = value
+            position_keys = [key for key in final_strengths if key.startswith("position_gaussian_")]
+            if position_keys:
+                metrics["ftsc/final_strength_position_gaussian"] = sum(
+                    final_strengths[key] for key in position_keys
+                ) / len(position_keys)
     output.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return metrics
 
