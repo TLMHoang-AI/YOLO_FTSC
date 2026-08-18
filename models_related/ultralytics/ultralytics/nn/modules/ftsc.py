@@ -18,8 +18,93 @@ __all__ = (
     "AnchorFreeFTSCCalibrator",
     "DFLDistributionEvidence",
     "FTSCFeatureCalibrator",
+    "HierarchicalBackgroundSmoothing",
     "PositionGaussianEvidence",
 )
+
+
+class HierarchicalBackgroundSmoothing(nn.Module):
+    """SET-style adaptive smoothing for the GT-masked background of one FPN level.
+
+    This module implements Eqs. (1)--(4) of Sun et al., *SET: Spectral
+    Enhancement for Tiny Object Detection* (CVPR 2025). It is owned by the
+    Detect head but is called only by the auxiliary training path.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        stride: int,
+        reduction: int = 4,
+        kernel_size: int | None = None,
+    ) -> None:
+        super().__init__()
+        if channels <= 0:
+            raise ValueError("HBS channels must be positive.")
+        if stride <= 0:
+            raise ValueError("HBS stride must be positive.")
+        if reduction <= 0:
+            raise ValueError("HBS channel reduction must be positive.")
+        if kernel_size is None:
+            kernel_size = math.ceil(math.log2(stride) / 2) * 2 + 1
+        if kernel_size <= 0 or kernel_size % 2 == 0:
+            raise ValueError("HBS kernel_size must be a positive odd integer.")
+
+        hidden = max(channels // reduction, 1)
+        padding = kernel_size // 2
+        self.channels = int(channels)
+        self.stride = int(stride)
+        self.reduction = int(reduction)
+        self.kernel_size = int(kernel_size)
+        self.reduce = nn.Conv2d(channels, hidden, kernel_size, padding=padding)
+        self.expand = nn.Conv2d(hidden, channels, kernel_size, padding=padding)
+
+    @staticmethod
+    def foreground_mask(
+        feature: torch.Tensor,
+        batch_idx: torch.Tensor | None,
+        bboxes: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Rasterize normalized xywh GT boxes as a union mask at feature resolution."""
+        mask = feature.new_zeros((feature.shape[0], 1, feature.shape[2], feature.shape[3]))
+        if batch_idx is None or bboxes is None or bboxes.numel() == 0:
+            return mask
+
+        indices = batch_idx.detach().to(device=feature.device, dtype=torch.long).view(-1)
+        boxes = bboxes.detach().to(device=feature.device, dtype=torch.float32).view(-1, 4)
+        if indices.numel() != boxes.shape[0]:
+            raise ValueError("HBS batch_idx and bboxes must contain the same number of labels.")
+
+        height, width = feature.shape[-2:]
+        for image_index, box in zip(indices.tolist(), boxes, strict=False):
+            if image_index < 0 or image_index >= feature.shape[0]:
+                raise ValueError(f"HBS batch index {image_index} is outside batch size {feature.shape[0]}.")
+            xc, yc, box_width, box_height = box.tolist()
+            left = max(0.0, min(1.0, xc - box_width / 2))
+            top = max(0.0, min(1.0, yc - box_height / 2))
+            right = max(0.0, min(1.0, xc + box_width / 2))
+            bottom = max(0.0, min(1.0, yc + box_height / 2))
+            if right <= left or bottom <= top:
+                continue
+            x1 = max(0, min(width - 1, math.floor(left * width)))
+            y1 = max(0, min(height - 1, math.floor(top * height)))
+            x2 = max(x1 + 1, min(width, math.ceil(right * width)))
+            y2 = max(y1 + 1, min(height, math.ceil(bottom * height)))
+            mask[image_index, :, y1:y2, x1:x2] = 1
+        return mask
+
+    def forward(
+        self,
+        feature: torch.Tensor,
+        batch_idx: torch.Tensor | None,
+        bboxes: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return Eq. (2) HBS-enhanced features and their foreground mask."""
+        mask = self.foreground_mask(feature, batch_idx, bboxes)
+        foreground = feature * mask
+        background = feature * (1 - mask)
+        smoothed_background = F.relu(self.expand(F.relu(self.reduce(background)))) + background
+        return foreground + smoothed_background, mask
 
 
 class PositionGaussianEvidence(nn.Module):

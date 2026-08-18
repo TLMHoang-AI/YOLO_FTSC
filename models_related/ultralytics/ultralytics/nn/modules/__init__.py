@@ -121,7 +121,13 @@ from .conv import (
     RepConv,
     SpatialAttention,
 )
-from .ftsc import AnchorFreeFTSCCalibrator, DFLDistributionEvidence, FTSCFeatureCalibrator, PositionGaussianEvidence
+from .ftsc import (
+    AnchorFreeFTSCCalibrator,
+    DFLDistributionEvidence,
+    FTSCFeatureCalibrator,
+    HierarchicalBackgroundSmoothing,
+    PositionGaussianEvidence,
+)
 from .head import (
     OBB,
     OBB26,
@@ -174,6 +180,7 @@ __all__ = (
     "DBSS",
     "DualIrreducibilityHIT",
     "GCTS",
+    "HierarchicalBackgroundSmoothing",
     "ELAN1",
     "MLP",
     "OBB",

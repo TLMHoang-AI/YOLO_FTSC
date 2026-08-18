@@ -17,7 +17,7 @@ from ultralytics.utils.torch_utils import TORCH_1_11, fuse_conv_and_bn, smart_in
 
 from .block import DFL, SAVPE, BNContrastiveHead, ContrastiveHead, Proto, Proto26, RealNVP, Residual, SwiGLUFFN
 from .conv import Conv, DWConv
-from .ftsc import AnchorFreeFTSCCalibrator
+from .ftsc import AnchorFreeFTSCCalibrator, HierarchicalBackgroundSmoothing
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 
@@ -182,6 +182,7 @@ class Detect(nn.Module):
         p2_offset_regression: bool = False,
         p1_reg_injection: bool = False,
         ftsc: dict | None = None,
+        hbs: dict | None = None,
     ):
         """Initialize the YOLO detection layer with specified number of classes and channels."""
         super().__init__()
@@ -203,6 +204,28 @@ class Detect(nn.Module):
         else:
             self.nl = len(ch)
             ch_detect = ch
+
+        hbs = dict(hbs or {})
+        self.hbs_enabled = bool(hbs.get("enabled", False))
+        self.hbs_auxiliary_weight = float(hbs.get("auxiliary_weight", 1.0))
+        if self.hbs_auxiliary_weight < 0:
+            raise ValueError("HBS auxiliary_weight must be non-negative.")
+        configured_strides = tuple(int(value) for value in hbs.get("strides", ()))
+        if self.hbs_enabled and len(configured_strides) != self.nl:
+            raise ValueError(
+                f"HBS requires one configured stride per Detect level; got {configured_strides} for {self.nl} levels."
+            )
+        reduction = int(hbs.get("reduction", 4))
+        self.hbs_smoothers = (
+            nn.ModuleList(
+                HierarchicalBackgroundSmoothing(channel, stride, reduction)
+                for channel, stride in zip(ch_detect, configured_strides, strict=False)
+            )
+            if self.hbs_enabled
+            else nn.ModuleList()
+        )
+        self.last_hbs_metrics: dict[str, float] = {}
+        self.hbs_auxiliary_calls = 0
             
         self.reg_max = reg_max  # DFL channels
         self.no = nc + self.reg_max * 4  # number of outputs per anchor
@@ -469,6 +492,70 @@ class Detect(nn.Module):
         if self.end2end:
             y = self.postprocess(y.permute(0, 2, 1))
         return y if self.export else (y, preds)
+
+    @staticmethod
+    def _hbs_high_frequency_proxy(feature: torch.Tensor, background_mask: torch.Tensor) -> torch.Tensor:
+        """Return background local-detail magnitude as a cheap non-spectral diagnostic proxy."""
+        detail = (feature - F.avg_pool2d(feature, kernel_size=3, stride=1, padding=1)).abs()
+        denominator = background_mask.sum() * feature.shape[1]
+        return (detail * background_mask).sum() / denominator.clamp_min(1)
+
+    def hbs_auxiliary_predictions(
+        self,
+        features: list[torch.Tensor],
+        batch: dict[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+        """Run the shared one-to-many head on HBS-enhanced P2--Pn features during training only."""
+        if not self.training:
+            raise RuntimeError("HBS auxiliary predictions are training-only.")
+        if not self.hbs_enabled or not self.hbs_smoothers:
+            raise RuntimeError("HBS auxiliary predictions requested while HBS is disabled.")
+        if len(features) != self.nl:
+            raise ValueError(f"HBS expected {self.nl} feature levels, got {len(features)}.")
+
+        enhanced, metrics = [], {}
+        foreground_fractions, delta_ratios, hf_ratios = [], [], []
+        for level, (smoother, feature) in enumerate(zip(self.hbs_smoothers, features, strict=True), start=2):
+            output, foreground_mask = smoother(feature, batch.get("batch_idx"), batch.get("bboxes"))
+            background_mask = 1 - foreground_mask
+            with torch.no_grad():
+                foreground_fraction = foreground_mask.mean()
+                background_energy = (feature.detach() * background_mask).square().mean().sqrt()
+                delta_energy = ((output.detach() - feature.detach()) * background_mask).square().mean().sqrt()
+                before_hf = self._hbs_high_frequency_proxy(feature.detach(), background_mask)
+                after_hf = self._hbs_high_frequency_proxy(output.detach(), background_mask)
+                delta_ratio = delta_energy / background_energy.clamp_min(1e-9)
+                hf_ratio = after_hf / before_hf.clamp_min(1e-9)
+            metrics.update(
+                {
+                    f"hbs_p{level}_foreground_fraction": float(foreground_fraction.item()),
+                    f"hbs_p{level}_background_delta_ratio": float(delta_ratio.item()),
+                    f"hbs_p{level}_hf_proxy_ratio": float(hf_ratio.item()),
+                    f"hbs_p{level}_kernel_size": float(smoother.kernel_size),
+                }
+            )
+            foreground_fractions.append(foreground_fraction)
+            delta_ratios.append(delta_ratio)
+            hf_ratios.append(hf_ratio)
+            enhanced.append(output)
+
+        metrics.update(
+            {
+                "hbs_foreground_fraction": float(torch.stack(foreground_fractions).mean().item()),
+                "hbs_background_delta_ratio": float(torch.stack(delta_ratios).mean().item()),
+                "hbs_hf_proxy_ratio": float(torch.stack(hf_ratios).mean().item()),
+                "hbs_auxiliary_weight": self.hbs_auxiliary_weight,
+            }
+        )
+        self.last_hbs_metrics = metrics
+        self.hbs_auxiliary_calls += 1
+        return self.forward_head(enhanced, **self.one2many)
+
+    def strip_hbs(self) -> None:
+        """Remove train-only HBS parameters after checkpoint loading for an inference-only model."""
+        self.hbs_smoothers = nn.ModuleList()
+        self.hbs_enabled = False
+        self.last_hbs_metrics = {}
 
     def _inference(
         self, x: dict[str, torch.Tensor], return_quality_debug: bool = False

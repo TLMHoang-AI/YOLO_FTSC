@@ -675,6 +675,11 @@ class BaseModel(torch.nn.Module):
         if getattr(self, "criterion", None) is None:
             self.criterion = self.init_criterion()
 
+        head = self.model[-1]
+        hbs_enabled = bool(getattr(head, "hbs_enabled", False))
+        if hbs_enabled and self._api_modules():
+            raise RuntimeError("HBS and API cannot be enabled in the same ablation case.")
+
         if preds is None:
             api_loss = self._api_adversarial_loss(batch)
             if api_loss is not None:
@@ -685,8 +690,39 @@ class BaseModel(torch.nn.Module):
             finally:
                 clear_boundary_context()
         loss, items = self.criterion(preds, batch)
+        hbs_metrics = {}
+        if hbs_enabled and self.training and torch.is_grad_enabled():
+            if isinstance(preds, dict) and "one2many" in preds:
+                raise NotImplementedError("HBS auxiliary training is not implemented for end-to-end Detect heads.")
+            if not isinstance(preds, dict) or "feats" not in preds:
+                raise TypeError("HBS auxiliary training requires Detect predictions containing FPN features.")
+            auxiliary_preds = head.hbs_auxiliary_predictions(preds["feats"], batch)
+            if getattr(self, "_hbs_auxiliary_criterion", None) is None:
+                self._hbs_auxiliary_criterion = v8DetectionLoss(self, enable_ftsc=False)
+            self._hbs_auxiliary_criterion.epoch = getattr(self.criterion, "epoch", 0)
+            if self.criterion.last_assignment is None:
+                raise RuntimeError("Clean TAL assignment was not captured for the HBS auxiliary loss.")
+            self._hbs_auxiliary_criterion.assignment_override = self.criterion.last_assignment
+            auxiliary_loss, auxiliary_items = self._hbs_auxiliary_criterion(auxiliary_preds, batch)
+            if loss.numel() < 3 or auxiliary_loss.numel() < 3:
+                raise RuntimeError("HBS requires box, classification, and DFL loss components.")
+            weight = head.hbs_auxiliary_weight
+            loss = loss.clone()
+            items = items.clone()
+            loss[:3] = loss[:3] + weight * auxiliary_loss[:3]
+            items[:3] = items[:3] + weight * auxiliary_items[:3].detach()
+            head.last_hbs_metrics.update(
+                {
+                    "hbs_aux_box_loss": float(auxiliary_items[0].detach().item()),
+                    "hbs_aux_cls_loss": float(auxiliary_items[1].detach().item()),
+                    "hbs_aux_dfl_loss": float(auxiliary_items[2].detach().item()),
+                    "hbs_clean_assignment_reused": 1.0,
+                }
+            )
+            hbs_metrics = dict(head.last_hbs_metrics)
         diagnostics = {}
         diagnostics.update(getattr(self.criterion, "ftsc_metrics", {}))
+        diagnostics.update(hbs_metrics)
         diagnostics.update(getattr(self.criterion, "positive_confidence_rescue_metrics", {}))
         diagnostics.update(getattr(self.criterion, "consensus_metrics", {}))
         diagnostics.update(getattr(self.criterion, "psd_metrics", {}))
@@ -2186,6 +2222,7 @@ def parse_model(d, ch, verbose=True):
     p2_offset_regression = d.get("p2_offset_regression", False)
     p1_reg_injection = d.get("p1_reg_injection", False)
     ftsc = d.get("ftsc", None)
+    hbs = d.get("hbs", None)
     depth, width, kpt_shape = (d.get(x, 1.0) for x in ("depth_multiple", "width_multiple", "kpt_shape"))
     scale = d.get("scale")
     if scales:
@@ -2457,7 +2494,7 @@ def parse_model(d, ch, verbose=True):
                         ]
                     )
                     if m is Detect:
-                        args.append(ftsc)
+                        args.extend([ftsc, hbs])
             if m is Segment or m is YOLOESegment or m is Segment26 or m is YOLOESegment26:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
             if m in {

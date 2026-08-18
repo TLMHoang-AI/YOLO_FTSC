@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 import torch
 
-from ultralytics.nn.modules import AnchorFreeFTSCCalibrator, PositionGaussianEvidence
+from ultralytics.nn.modules import (
+    AnchorFreeFTSCCalibrator,
+    HierarchicalBackgroundSmoothing,
+    PositionGaussianEvidence,
+)
 from ultralytics.nn.tasks import DetectionModel
 from ultralytics.utils import IterableSimpleNamespace
 from ultralytics.utils.loss import BboxLoss
@@ -300,3 +304,113 @@ def test_f5_warmup_loss_is_exactly_baseline_identity():
     assert torch.equal(f5_loss, baseline_loss)
     assert torch.equal(f5_items, baseline_items)
     assert f5.criterion.ftsc_metrics["ftsc_rho"] == 0.0
+
+
+def test_hbs_mask_rasterizes_gt_union_and_handles_empty_images():
+    feature = torch.randn(2, 8, 8, 8)
+    batch_idx = torch.tensor([0.0, 0.0])
+    boxes = torch.tensor([[0.5, 0.5, 0.5, 0.5], [0.125, 0.125, 0.25, 0.25]])
+    mask = HierarchicalBackgroundSmoothing.foreground_mask(feature, batch_idx, boxes)
+    assert mask.shape == (2, 1, 8, 8)
+    assert torch.equal(mask[0, 0, 2:6, 2:6], torch.ones(4, 4))
+    assert torch.equal(mask[0, 0, :2, :2], torch.ones(2, 2))
+    assert mask[1].sum() == 0
+    empty = HierarchicalBackgroundSmoothing.foreground_mask(
+        feature, torch.empty(0), torch.empty(0, 4)
+    )
+    assert torch.equal(empty, torch.zeros_like(empty))
+    smoother = HierarchicalBackgroundSmoothing(8, stride=4)
+    empty_output, empty_forward_mask = smoother(feature, torch.empty(0), torch.empty(0, 4))
+    assert torch.equal(empty_forward_mask, empty)
+    assert empty_output.shape == feature.shape and torch.isfinite(empty_output).all()
+
+
+def test_hbs_implements_set_kernel_schedule_and_backpropagates():
+    smoothers = [HierarchicalBackgroundSmoothing(8, stride, reduction=4) for stride in (4, 8, 16, 32)]
+    assert [module.kernel_size for module in smoothers] == [3, 5, 5, 7]
+    feature = torch.randn(1, 8, 12, 12, requires_grad=True)
+    output, mask = smoothers[0](
+        feature,
+        torch.tensor([0.0]),
+        torch.tensor([[0.5, 0.5, 0.25, 0.25]]),
+    )
+    assert output.shape == feature.shape and mask.shape == (1, 1, 12, 12)
+    output.square().mean().backward()
+    assert feature.grad is not None and torch.isfinite(feature.grad).all()
+    assert smoothers[0].reduce.weight.grad is not None
+    assert smoothers[0].expand.weight.grad is not None
+
+
+@pytest.mark.parametrize(
+    ("config_name", "expected_ftsc", "expected_hbs"),
+    [
+        ("yolov8n_p2_levir_ftsc_y0_baseline.yaml", False, False),
+        ("yolov8n_p2_levir_ftsc_af_y4_f5_position_dflcls.yaml", True, False),
+        ("yolov8n_p2_levir_ftsc_v2s_a2_y0_hbs.yaml", False, True),
+        ("yolov8n_p2_levir_ftsc_v2s_a3_y4_hbs.yaml", True, True),
+    ],
+)
+def test_v2s_factorial_yaml_has_only_the_requested_factors(config_name, expected_ftsc, expected_hbs):
+    config = Path(__file__).resolve().parents[2] / "models_config/yolov8/levir" / config_name
+    model = DetectionModel(config, verbose=False)
+    head = model.model[-1]
+    assert (head.ftsc_calibrator is not None) is expected_ftsc
+    assert head.hbs_enabled is expected_hbs
+    if expected_hbs:
+        assert [module.kernel_size for module in head.hbs_smoothers] == [3, 5, 5, 7]
+        assert all(module.reduction == 4 for module in head.hbs_smoothers)
+        parameter_ids = {id(parameter) for parameter in model.parameters()}
+        assert id(head.hbs_smoothers[0].reduce.weight) in parameter_ids
+
+
+def test_hbs_auxiliary_loss_uses_plain_detection_criterion_and_receives_gradients():
+    config = (
+        Path(__file__).resolve().parents[2]
+        / "models_config/yolov8/levir/yolov8n_p2_levir_ftsc_v2s_a3_y4_hbs.yaml"
+    )
+    model = DetectionModel(config, verbose=False)
+    model.args = IterableSimpleNamespace(**model.args)
+    model.train()
+    batch = {
+        "img": torch.rand(1, 3, 64, 64),
+        "batch_idx": torch.tensor([0.0]),
+        "cls": torch.tensor([[0.0]]),
+        "bboxes": torch.tensor([[0.5, 0.5, 0.25, 0.25]]),
+    }
+    loss, items = model(batch)
+    loss.sum().backward()
+    head = model.model[-1]
+    assert items.numel() >= 3 and torch.isfinite(items).all()
+    assert head.hbs_auxiliary_calls == 1
+    assert model._hbs_auxiliary_criterion.ftsc_calibrator is None
+    assert all(
+        torch.equal(clean, auxiliary)
+        for clean, auxiliary in zip(
+            model.criterion.last_assignment,
+            model._hbs_auxiliary_criterion.last_assignment,
+            strict=True,
+        )
+    )
+    assert head.hbs_smoothers[0].reduce.weight.grad is not None
+    assert head.hbs_smoothers[0].expand.weight.grad is not None
+    assert {"hbs_aux_box_loss", "hbs_aux_cls_loss", "hbs_aux_dfl_loss"} <= set(model.mechanism_metrics)
+
+
+def test_hbs_is_not_executed_by_inference_and_can_be_stripped_exactly():
+    config = (
+        Path(__file__).resolve().parents[2]
+        / "models_config/yolov8/levir/yolov8n_p2_levir_ftsc_v2s_a2_y0_hbs.yaml"
+    )
+    model = DetectionModel(config, verbose=False).eval()
+    head = model.model[-1]
+    image = torch.rand(1, 3, 64, 64)
+    with torch.no_grad():
+        before = model(image)[0]
+    assert head.hbs_auxiliary_calls == 0
+    hbs_parameters = sum(parameter.numel() for module in head.hbs_smoothers for parameter in module.parameters())
+    assert hbs_parameters > 0
+    head.strip_hbs()
+    with torch.no_grad():
+        after = model(image)[0]
+    assert torch.equal(after, before)
+    assert not head.hbs_enabled and len(head.hbs_smoothers) == 0

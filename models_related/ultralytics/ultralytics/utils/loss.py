@@ -816,15 +816,22 @@ class v8DetectionLoss:
     """Criterion class for computing training losses for YOLOv8 object detection."""
 
     def __init__(
-        self, model: torch.nn.Module, tal_topk: int = 10, tal_topk2: int | None = None
+        self,
+        model: torch.nn.Module,
+        tal_topk: int = 10,
+        tal_topk2: int | None = None,
+        enable_ftsc: bool = True,
     ):  # model must be de-paralleled
         """Initialize v8DetectionLoss with model parameters and task-aligned assignment settings."""
         device = next(model.parameters()).device  # get model device
         h = model.args  # hyperparameters
         self.model = model
+        self.assignment_override: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None = None
+        self.last_assignment: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None = None
 
         m = model.model[-1]  # Detect() module
-        self.ftsc_calibrator = getattr(m, "ftsc_calibrator", None)
+        self.capture_assignment = bool(getattr(m, "hbs_enabled", False))
+        self.ftsc_calibrator = getattr(m, "ftsc_calibrator", None) if enable_ftsc else None
         self.ftsc_metrics: dict[str, float] = {}
         self.bce = nn.BCEWithLogitsLoss(reduction="none")
         self.vfl = (
@@ -1484,15 +1491,31 @@ class v8DetectionLoss:
         # Pboxes
         pred_bboxes = self.bbox_decode(anchor_points, pred_distri, pred_residual, stride_tensor)  # xyxy
 
-        _, target_bboxes, target_scores, fg_mask, target_gt_idx = self.assigner(
-            pred_scores.detach().sigmoid(),
-            (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
-            anchor_points * stride_tensor,
-            gt_labels,
-            gt_bboxes,
-            mask_gt,
-        )
+        if self.assignment_override is None:
+            _, target_bboxes, target_scores, fg_mask, target_gt_idx = self.assigner(
+                pred_scores.detach().sigmoid(),
+                (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
+                anchor_points * stride_tensor,
+                gt_labels,
+                gt_bboxes,
+                mask_gt,
+            )
+        else:
+            target_bboxes, target_scores, fg_mask, target_gt_idx = self.assignment_override
+            self.assignment_override = None
+            expected_shape = pred_scores.shape[:2]
+            if target_bboxes.shape[:2] != expected_shape or target_scores.shape[:2] != expected_shape:
+                raise ValueError("Reused TAL assignment does not match the auxiliary prediction shape.")
+            target_bboxes = target_bboxes.to(device=self.device, dtype=gt_bboxes.dtype)
+            target_scores = target_scores.to(device=self.device, dtype=pred_scores.dtype)
+            fg_mask = fg_mask.to(device=self.device)
+            target_gt_idx = target_gt_idx.to(device=self.device)
         fg_mask = fg_mask.bool()
+        self.last_assignment = (
+            tuple(value.detach().clone() for value in (target_bboxes, target_scores, fg_mask, target_gt_idx))
+            if self.capture_assignment
+            else None
+        )
         n_p2 = math.prod(preds["feats"][0].shape[2:])
         self.dbss_assignment_context = {
             "p2_fg_mask": fg_mask[:, :n_p2].detach(),
