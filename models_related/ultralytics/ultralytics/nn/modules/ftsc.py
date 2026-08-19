@@ -216,6 +216,11 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         self.dfl_apply_dfl = bool(config.get("dfl_apply_dfl", False))
         self.position_task_specific_strength = bool(config.get("position_task_specific_strength", False))
         self.dfl_shuffle_within_gt = bool(config.get("dfl_shuffle_within_gt", False))
+        self.gt_mass_rebalance_cls = bool(config.get("gt_mass_rebalance_cls", False))
+        self.gt_mass_power = float(config.get("gt_mass_power", 0.5))
+        self.gt_mass_min_factor = float(config.get("gt_mass_min_factor", 0.75))
+        self.gt_mass_max_factor = float(config.get("gt_mass_max_factor", 1.25))
+        self.gt_mass_shuffle = bool(config.get("gt_mass_shuffle", False))
         self.strength_max = float(config.get("strength_max", 2.0))
         self.strength_init = float(config.get("strength_init", 1.0))
         self.strength_reg_weight = float(config.get("strength_reg_weight", 1e-4))
@@ -231,6 +236,12 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             raise ValueError("Within-GT DFL shuffle requires dfl_distribution evidence.")
         if self.dfl_shuffle_within_gt and not bool(config.get("dfl_detach", True)):
             raise ValueError("Within-GT DFL shuffle requires detached DFL evidence.")
+        if self.gt_mass_power < 0:
+            raise ValueError("FTSC GT-mass power must be non-negative.")
+        if not 0 < self.gt_mass_min_factor <= 1.0 <= self.gt_mass_max_factor:
+            raise ValueError("FTSC GT-mass factors must satisfy 0 < min <= 1 <= max.")
+        if self.gt_mass_shuffle and not self.gt_mass_rebalance_cls:
+            raise ValueError("FTSC GT-mass shuffle requires gt_mass_rebalance_cls=true.")
 
         self.position_tasks = (
             tuple(
@@ -250,6 +261,12 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             self.register_buffer("dfl_shuffle_seed", torch.tensor(shuffle_seed, dtype=torch.long))
             self.register_buffer("dfl_shuffle_step", torch.tensor(0, dtype=torch.long))
         self._last_dfl_shuffle_metrics: dict[str, float] = {}
+        if self.gt_mass_shuffle:
+            configured_seed = config.get("gt_mass_shuffle_seed")
+            shuffle_seed = (torch.initial_seed() if configured_seed is None else int(configured_seed)) % (2**63 - 1)
+            self.register_buffer("gt_mass_shuffle_seed", torch.tensor(shuffle_seed, dtype=torch.long))
+            self.register_buffer("gt_mass_shuffle_step", torch.tensor(0, dtype=torch.long))
+        self._last_gt_mass_metrics: dict[str, float] = {}
 
         providers = {}
         if "position_gaussian" in self.evidence_names:
@@ -402,6 +419,65 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         }
         return shuffled
 
+    def _gt_mass_factors(
+        self,
+        fg_mask: torch.Tensor,
+        target_gt_idx: torch.Tensor,
+        reference: torch.Tensor,
+        epoch: int,
+    ) -> torch.Tensor:
+        """Return positive-only cls factors that moderately rebalance TAL support across GT groups.
+
+        This is deliberately loss-only: it cannot create positives for an
+        unassigned GT.  The inverse-support factor is bounded, normalized to
+        mean one over all positives in the mini-batch, and enters through the
+        same F5 residual schedule as the evidence gate.
+        """
+        group_ids, group_count = self._positive_group_ids(fg_mask, target_gt_idx)
+        counts = reference.new_zeros(group_count).scatter_add_(0, group_ids, torch.ones_like(reference))
+        active_group_ids = torch.nonzero(counts > 0, as_tuple=False).flatten()
+        group_sizes = counts[active_group_ids]
+        mean_support = group_sizes.mean()
+        group_factors = (mean_support / group_sizes.clamp_min(1.0)).pow(self.gt_mass_power)
+        group_factors = group_factors.clamp(self.gt_mass_min_factor, self.gt_mass_max_factor)
+
+        moved_groups = 0
+        shuffle_step = 0
+        if self.gt_mass_shuffle and group_factors.numel() > 1:
+            shuffle_step = int(self.gt_mass_shuffle_step.item())
+            base_seed = int(self.gt_mass_shuffle_seed.item())
+            seed = (base_seed + (shuffle_step + 1) * 1_000_003 + (int(epoch) + 1) * 9_176) % (2**63 - 1)
+            generator = torch.Generator(device=reference.device)
+            generator.manual_seed(seed)
+            order = torch.randperm(group_factors.numel(), generator=generator, device=reference.device)
+            source = order.roll(1)
+            shuffled = group_factors.clone()
+            shuffled[order] = group_factors[source]
+            group_factors = shuffled
+            moved_groups = int(group_factors.numel())
+            with torch.no_grad():
+                self.gt_mass_shuffle_step.add_(1)
+
+        factor_lookup = reference.new_ones(group_count)
+        factor_lookup[active_group_ids] = group_factors
+        positive_factors = factor_lookup[group_ids]
+        positive_factors = positive_factors / positive_factors.mean().clamp_min(1e-9)
+        rho = self.residual_fraction(epoch)
+        scheduled_factors = 1.0 + rho * (positive_factors - 1.0)
+
+        singleton_fraction = (group_sizes == 1).float().mean()
+        self._last_gt_mass_metrics = {
+            "ftsc_gt_group_count": float(group_sizes.numel()),
+            "ftsc_mean_positives_per_gt": float(mean_support.detach().item()),
+            "ftsc_single_positive_gt_fraction": float(singleton_fraction.detach().item()),
+            "ftsc_gt_mass_shuffle": float(self.gt_mass_shuffle),
+            "ftsc_gt_mass_shuffle_group_fraction": moved_groups / max(int(group_sizes.numel()), 1),
+            "ftsc_gt_mass_shuffle_step": float(shuffle_step),
+        }
+        self._last_gt_mass_metrics.update(self._stats("ftsc_gt_mass_factor_raw", positive_factors))
+        self._last_gt_mass_metrics.update(self._stats("ftsc_gt_mass_factor_scheduled", scheduled_factors))
+        return scheduled_factors
+
     def _gate(
         self,
         log_gate: torch.Tensor,
@@ -459,6 +535,15 @@ class AnchorFreeFTSCCalibrator(nn.Module):
                         "ftsc_dfl_shuffle_step": float(self.dfl_shuffle_step.item()),
                     }
                 )
+            self.last_metrics.update(
+                {
+                    "ftsc_gt_group_count": 0.0,
+                    "ftsc_mean_positives_per_gt": 0.0,
+                    "ftsc_single_positive_gt_fraction": 0.0,
+                    "ftsc_gt_mass_rebalance_cls": float(self.gt_mass_rebalance_cls),
+                    "ftsc_gt_mass_shuffle": float(self.gt_mass_shuffle),
+                }
+            )
             return {"cls": empty, "box": empty, "dfl": empty, "regularization": zero}
 
         centered = {}
@@ -496,6 +581,13 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         for task, values in task_logs.items():
             weights[task] = self._gate(values, fg_mask, target_gt_idx, epoch)
 
+        # This branch changes only positive target-class loss mass. It does not
+        # alter TAL assignment, negative/off-class weights, box, or DFL losses.
+        if self.gt_mass_rebalance_cls:
+            weights["cls"] = weights["cls"] * self._gt_mass_factors(
+                fg_mask, target_gt_idx, reference, epoch
+            )
+
         regularization = self._strength_regularization(reference)
 
         metrics = {
@@ -529,8 +621,23 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             metrics.update(self._stats("ftsc_dfl_variance", distribution_provider.last_variance))
         metrics["ftsc_position_task_specific_strength"] = float(self.position_task_specific_strength)
         metrics["ftsc_dfl_shuffle_within_gt"] = float(self.dfl_shuffle_within_gt)
+        metrics["ftsc_gt_mass_rebalance_cls"] = float(self.gt_mass_rebalance_cls)
         if self.dfl_shuffle_within_gt:
             metrics.update(self._last_dfl_shuffle_metrics)
+        if self.gt_mass_rebalance_cls:
+            metrics.update(self._last_gt_mass_metrics)
+        else:
+            group_ids, group_count = self._positive_group_ids(fg_mask, target_gt_idx)
+            counts = reference.new_zeros(group_count).scatter_add_(0, group_ids, torch.ones_like(reference))
+            active_counts = counts[counts > 0]
+            metrics.update(
+                {
+                    "ftsc_gt_group_count": float(active_counts.numel()),
+                    "ftsc_mean_positives_per_gt": float(active_counts.mean().item()),
+                    "ftsc_single_positive_gt_fraction": float((active_counts == 1).float().mean().item()),
+                    "ftsc_gt_mass_shuffle": 0.0,
+                }
+            )
         self.last_metrics = metrics
         return {**weights, "regularization": regularization}
 

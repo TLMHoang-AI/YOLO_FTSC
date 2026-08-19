@@ -30,13 +30,26 @@ VARIANTS = {
     / "yolov8n_p2_levir_ftsc_af_v11_a2_position_task_strengths.yaml",
     "ftsc_af_v11_a3_dflcls_shuffled_within_gt": CONFIG_ROOT
     / "yolov8n_p2_levir_ftsc_af_v11_a3_dflcls_shuffled_within_gt.yaml",
+    # M0 intentionally reuses the exact canonical Y4 YAML. Its purpose is a
+    # fresh matched control with the new positives-per-GT diagnostics enabled.
+    "ftsc_v2_exp_m0_y4_support_audit": CONFIG_ROOT
+    / "yolov8n_p2_levir_ftsc_af_y4_f5_position_dflcls.yaml",
+    "ftsc_v2_exp_s1_gt_mass_rebalance_cls": CONFIG_ROOT
+    / "yolov8n_p2_levir_ftsc_v2_exp_s1_gt_mass_rebalance_cls.yaml",
+    "ftsc_v2_exp_s2_gt_mass_rebalance_cls_shuffled": CONFIG_ROOT
+    / "yolov8n_p2_levir_ftsc_v2_exp_s2_gt_mass_rebalance_cls_shuffled.yaml",
 }
 V11_VARIANTS = (
     "ftsc_af_v11_a1_dflcls_only",
     "ftsc_af_v11_a2_position_task_strengths",
     "ftsc_af_v11_a3_dflcls_shuffled_within_gt",
 )
-SCREEN_VARIANTS = V11_VARIANTS
+V2_SUPPORT_VARIANTS = (
+    "ftsc_v2_exp_m0_y4_support_audit",
+    "ftsc_v2_exp_s1_gt_mass_rebalance_cls",
+    "ftsc_v2_exp_s2_gt_mass_rebalance_cls_shuffled",
+)
+SCREEN_VARIANTS = V2_SUPPORT_VARIANTS
 
 workflow.EXPERIMENT = EXPERIMENT_SLUG
 workflow.HF_REPO = HF_REPO
@@ -89,6 +102,15 @@ def model_for(variant: str, pretrained: str):
             raise ValueError(f"{variant}: expected the unchanged Y4 evidence bank")
         if not calibrator.dfl_shuffle_within_gt or not calibrator.providers["dfl_distribution"].detach:
             raise ValueError(f"{variant}: expected detached within-GT DFL shuffle")
+    elif variant == "ftsc_v2_exp_m0_y4_support_audit":
+        if calibrator.gt_mass_rebalance_cls or calibrator.gt_mass_shuffle:
+            raise ValueError(f"{variant}: matched Y4 control must not rebalance GT loss mass")
+    elif variant == "ftsc_v2_exp_s1_gt_mass_rebalance_cls":
+        if not calibrator.gt_mass_rebalance_cls or calibrator.gt_mass_shuffle:
+            raise ValueError(f"{variant}: expected ordered GT-mass cls rebalance only")
+    elif variant == "ftsc_v2_exp_s2_gt_mass_rebalance_cls_shuffled":
+        if not calibrator.gt_mass_rebalance_cls or not calibrator.gt_mass_shuffle:
+            raise ValueError(f"{variant}: expected shuffled GT-mass cls null control")
     return model
 
 
@@ -143,6 +165,11 @@ def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[s
                 "ftsc/dfl_apply_dfl": float(calibrator.dfl_apply_dfl),
                 "ftsc/position_task_specific_strength": float(calibrator.position_task_specific_strength),
                 "ftsc/dfl_shuffle_within_gt": float(calibrator.dfl_shuffle_within_gt),
+                "ftsc/gt_mass_rebalance_cls": float(calibrator.gt_mass_rebalance_cls),
+                "ftsc/gt_mass_power": calibrator.gt_mass_power,
+                "ftsc/gt_mass_min_factor": calibrator.gt_mass_min_factor,
+                "ftsc/gt_mass_max_factor": calibrator.gt_mass_max_factor,
+                "ftsc/gt_mass_shuffle": float(calibrator.gt_mass_shuffle),
                 "ftsc/warmup_epochs": float(calibrator.warmup_epochs),
                 "ftsc/ramp_epochs": float(calibrator.ramp_epochs),
                 "ftsc/strength_reg_weight": calibrator.strength_reg_weight,
@@ -151,6 +178,11 @@ def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[s
         if calibrator.dfl_shuffle_within_gt:
             metrics["ftsc/dfl_shuffle_seed"] = int(calibrator.dfl_shuffle_seed.detach().cpu().item())
             metrics["ftsc/final_dfl_shuffle_step"] = int(calibrator.dfl_shuffle_step.detach().cpu().item())
+        if calibrator.gt_mass_shuffle:
+            metrics["ftsc/gt_mass_shuffle_seed"] = int(calibrator.gt_mass_shuffle_seed.detach().cpu().item())
+            metrics["ftsc/final_gt_mass_shuffle_step"] = int(
+                calibrator.gt_mass_shuffle_step.detach().cpu().item()
+            )
         if "position_gaussian" in calibrator.providers:
             metrics["ftsc/position_alpha"] = calibrator.providers["position_gaussian"].alpha
         if "dfl_distribution" in calibrator.providers:

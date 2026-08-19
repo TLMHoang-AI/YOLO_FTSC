@@ -199,6 +199,91 @@ def test_within_gt_dfl_shuffle_rejects_non_detached_evidence():
         )
 
 
+def test_gt_mass_rebalance_is_cls_only_bounded_and_warmup_safe():
+    inputs = _toy_assignment()  # GT support counts are two and one.
+    common = {
+        "policy": "f5",
+        "evidence": ["position_gaussian", "dfl_distribution"],
+        "position_alpha": 1.0,
+        "dfl_detach": True,
+        "dfl_apply_cls": True,
+        "dfl_apply_box": False,
+        "dfl_apply_dfl": False,
+        "warmup_epochs": 5,
+        "ramp_epochs": 1,
+        "per_gt_norm": True,
+    }
+    baseline = AnchorFreeFTSCCalibrator(common, reg_max=16)
+    rebalance = AnchorFreeFTSCCalibrator(
+        {
+            **common,
+            "gt_mass_rebalance_cls": True,
+            "gt_mass_power": 0.5,
+            "gt_mass_min_factor": 0.75,
+            "gt_mass_max_factor": 1.25,
+        },
+        reg_max=16,
+    )
+    rebalance.load_state_dict(baseline.state_dict(), strict=False)
+
+    baseline_warmup = baseline(*inputs, epoch=4)
+    rebalance_warmup = rebalance(*inputs, epoch=4)
+    assert torch.equal(rebalance_warmup["cls"], baseline_warmup["cls"])
+    assert torch.equal(rebalance_warmup["box"], baseline_warmup["box"])
+    assert torch.equal(rebalance_warmup["dfl"], baseline_warmup["dfl"])
+
+    baseline_full = baseline(*inputs, epoch=5)
+    rebalance_full = rebalance(*inputs, epoch=5)
+    assert torch.equal(rebalance_full["box"], baseline_full["box"])
+    assert torch.equal(rebalance_full["dfl"], baseline_full["dfl"])
+    support_factor = rebalance_full["cls"] / baseline_full["cls"]
+    assert float(support_factor.mean()) == pytest.approx(1.0, abs=1e-6)
+    assert float(support_factor[2]) > float(support_factor[:2].mean())
+    assert support_factor.min() > 0
+    assert rebalance.last_metrics["ftsc_gt_group_count"] == 2.0
+    assert rebalance.last_metrics["ftsc_mean_positives_per_gt"] == pytest.approx(1.5)
+    assert rebalance.last_metrics["ftsc_single_positive_gt_fraction"] == pytest.approx(0.5)
+
+
+def test_gt_mass_shuffle_is_deterministic_resumable_null_control():
+    inputs = _toy_assignment()
+    config = {
+        "policy": "f5",
+        "evidence": ["position_gaussian"],
+        "position_alpha": 1.0,
+        "warmup_epochs": 0,
+        "ramp_epochs": 1,
+        "gt_mass_rebalance_cls": True,
+        "gt_mass_shuffle": True,
+        "gt_mass_shuffle_seed": 123,
+    }
+    first = AnchorFreeFTSCCalibrator(config, reg_max=16)
+    first_output = first(*inputs, epoch=0)
+    assert int(first.gt_mass_shuffle_step.item()) == 1
+    assert first.last_metrics["ftsc_gt_mass_shuffle_group_fraction"] == 1.0
+    assert {"gt_mass_shuffle_seed", "gt_mass_shuffle_step"} <= set(first.state_dict())
+
+    repeated = AnchorFreeFTSCCalibrator(config, reg_max=16)
+    repeated_output = repeated(*inputs, epoch=0)
+    assert torch.equal(repeated_output["cls"], first_output["cls"])
+
+    saved_state = {key: value.clone() for key, value in first.state_dict().items()}
+    expected_next = first(*inputs, epoch=1)
+    resumed = AnchorFreeFTSCCalibrator({**config, "gt_mass_shuffle_seed": 999}, reg_max=16)
+    resumed.load_state_dict(saved_state)
+    resumed_next = resumed(*inputs, epoch=1)
+    assert torch.equal(resumed_next["cls"], expected_next["cls"])
+    assert int(resumed.gt_mass_shuffle_step.item()) == 2
+
+
+def test_gt_mass_shuffle_requires_rebalance_branch():
+    with pytest.raises(ValueError, match="requires gt_mass_rebalance_cls=true"):
+        AnchorFreeFTSCCalibrator(
+            {"policy": "f5", "evidence": ["position_gaussian"], "gt_mass_shuffle": True},
+            reg_max=16,
+        )
+
+
 def test_bbox_loss_accepts_independent_box_and_dfl_weights():
     criterion = BboxLoss(reg_max=1)
     pred_dist = torch.tensor([[[0.25, 0.25, 0.25, 0.25]]])
@@ -280,6 +365,28 @@ def test_v11_yaml_builds_expected_ablation(
     assert calibrator.dfl_shuffle_within_gt is shuffle
     if config_name.endswith("a1_dflcls_only.yaml"):
         assert calibrator.position_tasks == ()
+
+
+@pytest.mark.parametrize(
+    ("config_name", "rebalance", "shuffle"),
+    [
+        ("yolov8n_p2_levir_ftsc_af_y4_f5_position_dflcls.yaml", False, False),
+        ("yolov8n_p2_levir_ftsc_v2_exp_s1_gt_mass_rebalance_cls.yaml", True, False),
+        ("yolov8n_p2_levir_ftsc_v2_exp_s2_gt_mass_rebalance_cls_shuffled.yaml", True, True),
+    ],
+)
+def test_v2_gt_mass_yaml_has_one_requested_factor_and_no_extra_parameters(config_name, rebalance, shuffle):
+    config_root = Path(__file__).resolve().parents[2] / "models_config/yolov8/levir"
+    control = DetectionModel(config_root / "yolov8n_p2_levir_ftsc_af_y4_f5_position_dflcls.yaml", verbose=False)
+    model = DetectionModel(config_root / config_name, verbose=False)
+    calibrator = model.model[-1].ftsc_calibrator
+    assert calibrator is not None and calibrator.policy == "f5"
+    assert calibrator.evidence_names == ("position_gaussian", "dfl_distribution")
+    assert calibrator.gt_mass_rebalance_cls is rebalance
+    assert calibrator.gt_mass_shuffle is shuffle
+    assert sum(parameter.numel() for parameter in model.parameters()) == sum(
+        parameter.numel() for parameter in control.parameters()
+    )
 
 
 def test_f5_warmup_loss_is_exactly_baseline_identity():
