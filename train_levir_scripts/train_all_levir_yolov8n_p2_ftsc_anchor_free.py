@@ -78,7 +78,7 @@ def model_for(variant: str, pretrained: str):
     if variant in {"ftsc_af_y0_baseline", "ftsc_r3_ghmc"}:
         if calibrator is not None:
             raise ValueError(f"{variant}: expected no FTSC calibrator")
-        if variant == "ftsc_r3_ghmc" and not bool(getattr(model.args, "ghm_cls", False)):
+        if variant == "ftsc_r3_ghmc" and not bool(getattr(head, "ghm_enabled", False)):
             raise ValueError(f"{variant}: expected GHM-C classification objective")
         return model
 
@@ -229,7 +229,10 @@ def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[s
         metrics["quality/box_features"] = float(getattr(trained_model.model.model[-1], "quality_box_features", False))
     else:
         head = trained_model.model.model[-1]
-        metrics["ghm/enabled"] = float(bool(getattr(trained_model.model.args, "ghm_cls", False)))
+        metrics["ghm/enabled"] = float(bool(getattr(head, "ghm_enabled", False)))
+        if getattr(head, "ghm_enabled", False):
+            metrics["ghm/bins"] = float(head.ghm_config.get("bins", 10))
+            metrics["ghm/momentum"] = float(head.ghm_config.get("momentum", 0.75))
         metrics["quality/enabled"] = float(getattr(head, "quality_head", False))
     output.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return metrics

@@ -2223,6 +2223,7 @@ def parse_model(d, ch, verbose=True):
     p1_reg_injection = d.get("p1_reg_injection", False)
     ftsc = d.get("ftsc", None)
     hbs = d.get("hbs", None)
+    ghm = d.get("ghm", None)
     depth, width, kpt_shape = (d.get(x, 1.0) for x in ("depth_multiple", "width_multiple", "kpt_shape"))
     scale = d.get("scale")
     if scales:
@@ -2494,7 +2495,7 @@ def parse_model(d, ch, verbose=True):
                         ]
                     )
                     if m is Detect:
-                        args.extend([ftsc, hbs])
+                        args.extend([ftsc, hbs, ghm])
             if m is Segment or m is YOLOESegment or m is Segment26 or m is YOLOESegment26:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
             if m in {

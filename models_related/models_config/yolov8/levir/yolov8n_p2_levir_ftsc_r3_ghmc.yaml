@@ -1,9 +1,10 @@
 # R3: GHM-C classification-loss replacement. FTSC positive reweighting is off.
 ftsc:
   enabled: false
-ghm_cls: true
-ghm_bins: 10
-ghm_momentum: 0.75
+ghm:
+  enabled: true
+  bins: 10
+  momentum: 0.75
 nc: 1
 p2_offset_regression: false
 scale: n

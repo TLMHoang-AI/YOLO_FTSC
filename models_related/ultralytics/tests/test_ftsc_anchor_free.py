@@ -62,6 +62,18 @@ def test_ghmc_is_finite_and_rebalances_dense_gradient_bins():
     assert criterion.acc_sum.sum() == pytest.approx(float(logits.numel()))
 
 
+def test_r3_ghmc_yaml_routes_config_to_detect_not_model_args():
+    config = (
+        Path(__file__).resolve().parents[2]
+        / "models_config/yolov8/levir/yolov8n_p2_levir_ftsc_r3_ghmc.yaml"
+    )
+    model = DetectionModel(config, verbose=False)
+    head = model.model[-1]
+    assert head.ftsc_calibrator is None
+    assert head.ghm_enabled is True
+    assert head.ghm_config == {"enabled": True, "bins": 10, "momentum": 0.75}
+
+
 def test_e4_centers_each_gt_and_single_positive_is_identity():
     inputs = _toy_assignment()
     calibrator = AnchorFreeFTSCCalibrator(

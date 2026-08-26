@@ -874,11 +874,12 @@ class v8DetectionLoss:
             if bool(getattr(h, "vfl", False))
             else None
         )
-        self.ghm_cls = bool(getattr(h, "ghm_cls", False))
+        ghm = dict(getattr(m, "ghm_config", {}))
+        self.ghm_cls = bool(ghm.get("enabled", False))
         self.ghm_cls_loss = (
             GHMCClassificationLoss(
-                bins=int(getattr(h, "ghm_bins", 10)),
-                momentum=float(getattr(h, "ghm_momentum", 0.75)),
+                bins=int(ghm.get("bins", 10)),
+                momentum=float(ghm.get("momentum", 0.75)),
             ).to(device)
             if self.ghm_cls
             else None

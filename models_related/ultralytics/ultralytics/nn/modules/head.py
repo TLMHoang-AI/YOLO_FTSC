@@ -183,6 +183,7 @@ class Detect(nn.Module):
         p1_reg_injection: bool = False,
         ftsc: dict | None = None,
         hbs: dict | None = None,
+        ghm: dict | None = None,
     ):
         """Initialize the YOLO detection layer with specified number of classes and channels."""
         super().__init__()
@@ -190,6 +191,8 @@ class Detect(nn.Module):
         self.ftsc_calibrator = (
             AnchorFreeFTSCCalibrator(ftsc, reg_max) if ftsc and bool(ftsc.get("enabled", True)) else None
         )
+        self.ghm_config = dict(ghm or {})
+        self.ghm_enabled = bool(self.ghm_config.get("enabled", False))
         self.p1_reg_injection = bool(p1_reg_injection)
         if self.p1_reg_injection:
             self.nl = len(ch) - 1
