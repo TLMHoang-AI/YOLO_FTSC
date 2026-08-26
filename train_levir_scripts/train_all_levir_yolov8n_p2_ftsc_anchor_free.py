@@ -38,6 +38,9 @@ VARIANTS = {
     / "yolov8n_p2_levir_ftsc_v2_exp_s1_gt_mass_rebalance_cls.yaml",
     "ftsc_v2_exp_s2_gt_mass_rebalance_cls_shuffled": CONFIG_ROOT
     / "yolov8n_p2_levir_ftsc_v2_exp_s2_gt_mass_rebalance_cls_shuffled.yaml",
+    "ftsc_r1_fcos_centerness": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_r1_fcos_centerness.yaml",
+    "ftsc_r2_dgqp_lqe": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_r2_dgqp_lqe.yaml",
+    "ftsc_r3_ghmc": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_r3_ghmc.yaml",
 }
 V11_VARIANTS = (
     "ftsc_af_v11_a1_dflcls_only",
@@ -49,7 +52,12 @@ V2_SUPPORT_VARIANTS = (
     "ftsc_v2_exp_s1_gt_mass_rebalance_cls",
     "ftsc_v2_exp_s2_gt_mass_rebalance_cls_shuffled",
 )
-SCREEN_VARIANTS = V2_SUPPORT_VARIANTS
+PAPER_REPLACEMENT_VARIANTS = (
+    "ftsc_r1_fcos_centerness",
+    "ftsc_r2_dgqp_lqe",
+    "ftsc_r3_ghmc",
+)
+SCREEN_VARIANTS = PAPER_REPLACEMENT_VARIANTS
 
 workflow.EXPERIMENT = EXPERIMENT_SLUG
 workflow.HF_REPO = HF_REPO
@@ -67,9 +75,11 @@ def model_for(variant: str, pretrained: str):
     if not isinstance(head, Detect) or head.stride.tolist() != [4.0, 8.0, 16.0, 32.0]:
         raise ValueError(f"{variant}: expected P2-P5 Detect strides, got {type(head).__name__} {head.stride}")
     calibrator = head.ftsc_calibrator
-    if variant == "ftsc_af_y0_baseline":
+    if variant in {"ftsc_af_y0_baseline", "ftsc_r3_ghmc"}:
         if calibrator is not None:
-            raise ValueError(f"{variant}: baseline unexpectedly owns an FTSC calibrator")
+            raise ValueError(f"{variant}: expected no FTSC calibrator")
+        if variant == "ftsc_r3_ghmc" and not bool(getattr(model.args, "ghm_cls", False)):
+            raise ValueError(f"{variant}: expected GHM-C classification objective")
         return model
 
     expected_policy = "e4" if "_e4_" in variant else "f5"
@@ -111,6 +121,16 @@ def model_for(variant: str, pretrained: str):
     elif variant == "ftsc_v2_exp_s2_gt_mass_rebalance_cls_shuffled":
         if not calibrator.gt_mass_rebalance_cls or not calibrator.gt_mass_shuffle:
             raise ValueError(f"{variant}: expected shuffled GT-mass cls null control")
+    elif variant == "ftsc_r1_fcos_centerness":
+        if calibrator.evidence_names != ("fcos_centerness", "dfl_distribution"):
+            raise ValueError(f"{variant}: expected FCOS centerness + detached DFL evidence")
+        if "position_gaussian" in calibrator.providers:
+            raise ValueError(f"{variant}: Gaussian Position provider must be absent")
+    elif variant == "ftsc_r2_dgqp_lqe":
+        if calibrator.evidence_names != ("position_gaussian",):
+            raise ValueError(f"{variant}: expected Position-only F5 evidence bank")
+        if not getattr(head, "quality_head", False) or not getattr(head, "quality_box_features", False):
+            raise ValueError(f"{variant}: expected DGQP-style distribution-guided quality head")
     return model
 
 
@@ -154,6 +174,7 @@ def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[s
             {
                 "ftsc/policy_f5": float(calibrator.policy == "f5"),
                 "ftsc/evidence_position": float("position_gaussian" in calibrator.evidence_names),
+                "ftsc/evidence_fcos_centerness": float("fcos_centerness" in calibrator.evidence_names),
                 "ftsc/evidence_dfl_distribution": float("dfl_distribution" in calibrator.evidence_names),
                 "ftsc/log_clip": calibrator.log_clip,
                 "ftsc/per_gt_norm": float(calibrator.per_gt_norm),
@@ -204,6 +225,12 @@ def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[s
                 metrics["ftsc/final_strength_position_gaussian"] = sum(
                     final_strengths[key] for key in position_keys
                 ) / len(position_keys)
+        metrics["quality/enabled"] = float(getattr(trained_model.model.model[-1], "quality_head", False))
+        metrics["quality/box_features"] = float(getattr(trained_model.model.model[-1], "quality_box_features", False))
+    else:
+        head = trained_model.model.model[-1]
+        metrics["ghm/enabled"] = float(bool(getattr(trained_model.model.args, "ghm_cls", False)))
+        metrics["quality/enabled"] = float(getattr(head, "quality_head", False))
     output.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return metrics
 

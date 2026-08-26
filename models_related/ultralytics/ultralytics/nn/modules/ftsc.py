@@ -17,6 +17,7 @@ import torch.nn.functional as F
 __all__ = (
     "AnchorFreeFTSCCalibrator",
     "DFLDistributionEvidence",
+    "FCOSCenternessEvidence",
     "FTSCFeatureCalibrator",
     "HierarchicalBackgroundSmoothing",
     "PositionGaussianEvidence",
@@ -132,6 +133,35 @@ class PositionGaussianEvidence(nn.Module):
         return -0.5 * normalized_offset.square().sum(-1)
 
 
+class FCOSCenternessEvidence(nn.Module):
+    """Return log FCOS centerness for TAL positives without adding an FCOS head.
+
+    This is a post-assignment FTSC adaptation of FCOS Eq. (3), not an FCOS
+    reproduction: the target-derived score is centered per GT and used only by
+    the training-time F5 calibrator.
+    """
+
+    def __init__(self, eps: float = 1e-9) -> None:
+        super().__init__()
+        self.eps = float(eps)
+
+    def forward(
+        self,
+        anchor_points_px: torch.Tensor,
+        target_bboxes_px: torch.Tensor,
+        fg_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        points = anchor_points_px.unsqueeze(0).expand(target_bboxes_px.shape[0], -1, -1)[fg_mask]
+        boxes = target_bboxes_px[fg_mask]
+        left_top = (points - boxes[:, :2]).clamp_min(0.0)
+        right_bottom = (boxes[:, 2:] - points).clamp_min(0.0)
+        left, top = left_top.unbind(-1)
+        right, bottom = right_bottom.unbind(-1)
+        horizontal = torch.minimum(left, right) / torch.maximum(left, right).clamp_min(self.eps)
+        vertical = torch.minimum(top, bottom) / torch.maximum(top, bottom).clamp_min(self.eps)
+        return 0.5 * (horizontal.clamp_min(self.eps).log() + vertical.clamp_min(self.eps).log())
+
+
 class DFLDistributionEvidence(nn.Module):
     """Return detached log-reliability from entropy/variance of positive DFL distributions."""
 
@@ -184,7 +214,8 @@ class AnchorFreeFTSCCalibrator(nn.Module):
     after TAL assignment and therefore adds no inference-time work.
     """
 
-    SUPPORTED_EVIDENCE = {"position_gaussian", "dfl_distribution"}
+    SUPPORTED_EVIDENCE = {"position_gaussian", "fcos_centerness", "dfl_distribution"}
+    POSITION_EVIDENCE = {"position_gaussian", "fcos_centerness"}
     TASK_NAMES = ("cls", "box", "dfl")
 
     def __init__(self, config: dict, reg_max: int) -> None:
@@ -201,6 +232,8 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             raise ValueError(f"Unsupported FTSC evidence: {sorted(unknown)}")
         if not self.evidence_names:
             raise ValueError("FTSC requires at least one evidence provider.")
+        if len(set(self.evidence_names) & self.POSITION_EVIDENCE) > 1:
+            raise ValueError("FTSC accepts exactly one Position/centrality evidence provider per experiment.")
 
         self.log_clip = float(config.get("log_clip", 0.35))
         if self.log_clip <= 0:
@@ -228,8 +261,8 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             raise ValueError("FTSC strength_init must lie strictly between zero and strength_max.")
         if self.strength_reg_weight < 0:
             raise ValueError("FTSC strength_reg_weight must be non-negative.")
-        if self.position_task_specific_strength and "position_gaussian" not in self.evidence_names:
-            raise ValueError("Task-specific Position strength requires position_gaussian evidence.")
+        if self.position_task_specific_strength and not (set(self.evidence_names) & self.POSITION_EVIDENCE):
+            raise ValueError("Task-specific Position strength requires a Position/centrality evidence provider.")
         if self.position_task_specific_strength and self.policy != "f5":
             raise ValueError("Task-specific Position strength requires the learnable F5 policy.")
         if self.dfl_shuffle_within_gt and "dfl_distribution" not in self.evidence_names:
@@ -249,7 +282,7 @@ class AnchorFreeFTSCCalibrator(nn.Module):
                 for task, enabled in zip(self.TASK_NAMES, (self.apply_cls, self.apply_box, self.apply_dfl))
                 if enabled
             )
-            if "position_gaussian" in self.evidence_names
+            if set(self.evidence_names) & self.POSITION_EVIDENCE
             else ()
         )
         if self.position_task_specific_strength and not self.position_tasks:
@@ -271,6 +304,8 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         providers = {}
         if "position_gaussian" in self.evidence_names:
             providers["position_gaussian"] = PositionGaussianEvidence(float(config.get("position_alpha", 6.0)))
+        if "fcos_centerness" in self.evidence_names:
+            providers["fcos_centerness"] = FCOSCenternessEvidence()
         if "dfl_distribution" in self.evidence_names:
             providers["dfl_distribution"] = DFLDistributionEvidence(
                 reg_max=reg_max,
@@ -291,7 +326,7 @@ class AnchorFreeFTSCCalibrator(nn.Module):
 
     def strength_keys(self, name: str) -> tuple[str, ...]:
         """Return parameter keys owned by one evidence provider."""
-        if name == "position_gaussian" and self.position_task_specific_strength:
+        if name in self.POSITION_EVIDENCE and self.position_task_specific_strength:
             return tuple(f"{name}_{task}" for task in self.position_tasks)
         return (name,)
 
@@ -299,7 +334,7 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         """Return fixed E4 strength or bounded learnable F5 strength."""
         if self.policy == "e4":
             return reference.new_tensor(self.strength_init)
-        if name == "position_gaussian" and self.position_task_specific_strength:
+        if name in self.POSITION_EVIDENCE and self.position_task_specific_strength:
             if task not in self.position_tasks:
                 raise ValueError(
                     f"Position strength requires one of the enabled tasks {self.position_tasks}, got {task!r}."
@@ -319,7 +354,7 @@ class AnchorFreeFTSCCalibrator(nn.Module):
 
         provider_terms = []
         for name in self.evidence_names:
-            if name == "position_gaussian" and self.position_task_specific_strength:
+            if name in self.POSITION_EVIDENCE and self.position_task_specific_strength:
                 task_terms = torch.stack(
                     [
                         (self.strength(name, reference, task=task) - self.strength_init).square()
@@ -552,6 +587,11 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             centered["position_gaussian"] = (
                 self._center_per_gt(position, fg_mask, target_gt_idx) if self.per_gt_norm else position
             )
+        if "fcos_centerness" in self.providers:
+            centerness = self.providers["fcos_centerness"](anchor_points_px, target_bboxes_px, fg_mask)
+            centered["fcos_centerness"] = (
+                self._center_per_gt(centerness, fg_mask, target_gt_idx) if self.per_gt_norm else centerness
+            )
         if "dfl_distribution" in self.providers:
             distribution = self.providers["dfl_distribution"](pred_distri, fg_mask)
             if self.dfl_shuffle_within_gt:
@@ -564,7 +604,7 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         zero = torch.zeros_like(reference)
         task_logs = {"cls": zero.clone(), "box": zero.clone(), "dfl": zero.clone()}
         for name, values in centered.items():
-            if name == "position_gaussian":
+            if name in self.POSITION_EVIDENCE:
                 for task in self.position_tasks:
                     strength_task = task if self.position_task_specific_strength else None
                     task_logs[task] = task_logs[task] + self.strength(name, values, task=strength_task) * values
@@ -597,7 +637,7 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         }
         for name, values in centered.items():
             metrics.update(self._stats(f"ftsc_{name}", values))
-            if name == "position_gaussian" and self.position_task_specific_strength:
+            if name in self.POSITION_EVIDENCE and self.position_task_specific_strength:
                 task_strengths = []
                 for task in self.position_tasks:
                     task_strength = self.strength(name, reference, task=task).detach()

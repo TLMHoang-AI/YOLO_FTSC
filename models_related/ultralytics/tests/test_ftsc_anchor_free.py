@@ -7,12 +7,13 @@ import torch
 
 from ultralytics.nn.modules import (
     AnchorFreeFTSCCalibrator,
+    FCOSCenternessEvidence,
     HierarchicalBackgroundSmoothing,
     PositionGaussianEvidence,
 )
 from ultralytics.nn.tasks import DetectionModel
 from ultralytics.utils import IterableSimpleNamespace
-from ultralytics.utils.loss import BboxLoss
+from ultralytics.utils.loss import BboxLoss, GHMCClassificationLoss
 
 
 def _toy_assignment():
@@ -33,6 +34,32 @@ def test_position_gaussian_returns_log_evidence_for_positives_only():
     assert float(evidence[0]) == pytest.approx(0.0)
     assert evidence[1] < evidence[0]
     assert float(evidence[2]) == pytest.approx(0.0)
+
+
+def test_fcos_centerness_is_center_high_edge_low_and_per_gt_safe():
+    anchor_points, target_bboxes, target_gt_idx, fg_mask, pred_distri = _toy_assignment()
+    evidence = FCOSCenternessEvidence()(anchor_points, target_bboxes, fg_mask)
+    assert evidence.shape == (3,)
+    assert float(evidence[0]) == pytest.approx(0.0)
+    assert evidence[1] < evidence[0]
+    assert float(evidence[2]) == pytest.approx(0.0)
+    calibrator = AnchorFreeFTSCCalibrator(
+        {"policy": "e4", "evidence": ["fcos_centerness"], "per_gt_norm": True}, reg_max=16
+    )
+    weights = calibrator(anchor_points, target_bboxes, target_gt_idx, fg_mask, pred_distri)
+    assert float(weights["cls"][:2].mean()) == pytest.approx(1.0, abs=1e-6)
+    assert float(weights["cls"][2]) == pytest.approx(1.0)
+
+
+def test_ghmc_is_finite_and_rebalances_dense_gradient_bins():
+    criterion = GHMCClassificationLoss(bins=4, momentum=0.0)
+    logits = torch.tensor([[[8.0], [0.0], [-8.0], [-1.0]]], requires_grad=True)
+    targets = torch.tensor([[[1.0], [1.0], [0.0], [0.0]]])
+    loss = criterion(logits, targets)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert torch.isfinite(logits.grad).all()
+    assert criterion.acc_sum.sum() == pytest.approx(float(logits.numel()))
 
 
 def test_e4_centers_each_gt_and_single_positive_is_identity():

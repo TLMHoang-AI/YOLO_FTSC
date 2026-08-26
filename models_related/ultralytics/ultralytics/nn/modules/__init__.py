@@ -124,6 +124,7 @@ from .conv import (
 from .ftsc import (
     AnchorFreeFTSCCalibrator,
     DFLDistributionEvidence,
+    FCOSCenternessEvidence,
     FTSCFeatureCalibrator,
     HierarchicalBackgroundSmoothing,
     PositionGaussianEvidence,
@@ -240,6 +241,7 @@ __all__ = (
     "Focus",
     "AnchorFreeFTSCCalibrator",
     "DFLDistributionEvidence",
+    "FCOSCenternessEvidence",
     "FTSCFeatureCalibrator",
     "GhostBottleneck",
     "GhostConv",

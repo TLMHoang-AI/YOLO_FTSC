@@ -162,6 +162,37 @@ class FocalLoss(nn.Module):
         return loss.mean(1).sum()
 
 
+class GHMCClassificationLoss(nn.Module):
+    """GHM-C style BCE for a dense detector (Li et al., AAAI 2019).
+
+    The harmonizing weight is computed from the detached gradient magnitude
+    ``|sigmoid(logit) - target|`` in a minibatch. This is deliberately a full
+    classification-loss alternative, including negatives; it is not combined
+    with FTSC positive evidence weights.
+    """
+
+    def __init__(self, bins: int = 10, momentum: float = 0.75) -> None:
+        super().__init__()
+        if bins < 2:
+            raise ValueError("GHM-C requires at least two gradient bins.")
+        if not 0.0 <= momentum < 1.0:
+            raise ValueError("GHM-C momentum must lie in [0, 1).")
+        self.bins = int(bins)
+        self.momentum = float(momentum)
+        self.register_buffer("acc_sum", torch.zeros(self.bins), persistent=True)
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        with torch.no_grad():
+            grad = (logits.sigmoid() - targets).abs()
+            bin_index = (grad * self.bins).long().clamp_max(self.bins - 1)
+            counts = torch.bincount(bin_index.reshape(-1), minlength=self.bins).to(dtype=logits.dtype)
+            self.acc_sum.mul_(self.momentum).add_(counts.to(self.acc_sum), alpha=1.0 - self.momentum)
+            effective_counts = torch.where(self.acc_sum > 0, self.acc_sum, counts.to(self.acc_sum)).clamp_min(1.0)
+            weights = logits.numel() / effective_counts[bin_index]
+            weights = weights / weights.mean().clamp_min(1e-9)
+        return (F.binary_cross_entropy_with_logits(logits, targets, reduction="none") * weights).mean(1).sum()
+
+
 class DFLoss(nn.Module):
     """Criterion class for computing Distribution Focal Loss (DFL)."""
 
@@ -843,6 +874,21 @@ class v8DetectionLoss:
             if bool(getattr(h, "vfl", False))
             else None
         )
+        self.ghm_cls = bool(getattr(h, "ghm_cls", False))
+        self.ghm_cls_loss = (
+            GHMCClassificationLoss(
+                bins=int(getattr(h, "ghm_bins", 10)),
+                momentum=float(getattr(h, "ghm_momentum", 0.75)),
+            ).to(device)
+            if self.ghm_cls
+            else None
+        )
+        if self.ghm_cls and self.vfl is not None:
+            raise ValueError("GHM-C and Varifocal Loss are mutually exclusive classification objectives.")
+        if self.ghm_cls and bool(getattr(h, "cls_iou_target", False)):
+            raise ValueError("GHM-C uses standard TAL targets; disable cls_iou_target.")
+        if self.ghm_cls and self.ftsc_calibrator is not None:
+            raise ValueError("GHM-C replaces FTSC positive reweighting; configure ftsc.enabled=false.")
         self.hyp = h
         self.stride = m.stride  # model strides
         self.nc = m.nc  # number of classes
@@ -1767,6 +1813,11 @@ class v8DetectionLoss:
             if self.class_weights is not None:
                 bce_loss *= self.class_weights
             loss[1] = bce_loss.sum() / cls_target_scores_sum  # BCE
+        elif self.ghm_cls_loss is not None:
+            # GHM-C is a full dense classification objective, including
+            # negatives. It owns its normalization and cannot be multiplied by
+            # FTSC's positive-only evidence weights.
+            loss[1] = self.ghm_cls_loss(pred_scores, cls_target_scores.to(dtype))
         else:
             bce_loss = self.bce(pred_scores, cls_target_scores.to(dtype))  # (bs, num_anchors, nc)
             bce_loss *= cls_weights

@@ -1,0 +1,67 @@
+# R2: DGQP-style learned localization-quality head informed by GFLv2.
+# This intentionally changes inference ranking; it is not parameter-free FTSC.
+ftsc:
+  enabled: true
+  policy: f5
+  evidence: [position_gaussian]
+  position_alpha: 6.0
+  log_clip: 0.35
+  per_gt_norm: true
+  apply_cls: true
+  apply_box: true
+  apply_dfl: true
+  warmup_epochs: 5
+  ramp_epochs: 10
+  strength_init: 1.0
+  strength_max: 2.0
+  strength_reg_weight: 1.0e-4
+quality_head: true
+quality_box_features: true
+quality_box_detach: true
+quality_loss: bce_balanced
+quality_gain: 0.5
+quality_neg_gain: 0.10
+quality_pos_iou_thr: 0.5
+quality_hard_neg_iou_thr: 0.3
+quality_hard_neg_score_thr: 0.05
+quality_target_mode: iou_power
+quality_target_power: 1.0
+quality_neg_mode: hard
+quality_score_mode: sqrt_cls_mul_q
+quality_detach_target: true
+nc: 1
+p2_offset_regression: false
+scale: n
+scales: {n: [0.33, 0.25, 1024]}
+backbone:
+  - [-1, 1, Conv, [64, 3, 2]]
+  - [-1, 1, Conv, [128, 3, 2]]
+  - [-1, 3, C2f, [128, true]]
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [-1, 6, C2f, [256, true]]
+  - [-1, 1, Conv, [512, 3, 2]]
+  - [-1, 6, C2f, [512, true]]
+  - [-1, 1, Conv, [1024, 3, 2]]
+  - [-1, 3, C2f, [1024, true]]
+  - [-1, 1, SPPF, [1024, 5]]
+head:
+  - [-1, 1, nn.Upsample, [null, 2, nearest]]
+  - [[-1, 6], 1, Concat, [1]]
+  - [-1, 3, C2f, [512]]
+  - [-1, 1, nn.Upsample, [null, 2, nearest]]
+  - [[-1, 4], 1, Concat, [1]]
+  - [-1, 3, C2f, [256]]
+  - [-1, 1, nn.Upsample, [null, 2, nearest]]
+  - [[-1, 2], 1, Concat, [1]]
+  - [-1, 3, C2f, [128]]
+  - [-1, 1, nn.Identity, []]
+  - [-1, 1, Conv, [128, 3, 2]]
+  - [[-1, 15], 1, Concat, [1]]
+  - [-1, 3, C2f, [256]]
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [[-1, 12], 1, Concat, [1]]
+  - [-1, 3, C2f, [512]]
+  - [-1, 1, Conv, [512, 3, 2]]
+  - [[-1, 9], 1, Concat, [1]]
+  - [-1, 3, C2f, [1024]]
+  - [[19, 22, 25, 28], 1, Detect, [nc]]
