@@ -181,7 +181,21 @@ class GHMCClassificationLoss(nn.Module):
         self.momentum = float(momentum)
         self.register_buffer("acc_sum", torch.zeros(self.bins), persistent=True)
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        normalizer: torch.Tensor | float,
+        class_weights: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Return GHM-weighted BCE on YOLO's native classification-loss scale.
+
+        GHM determines the *relative* contribution of dense anchors, whereas
+        ``normalizer`` preserves YOLO's ``sum(target_scores)`` normalization.
+        Without this final normalization, the vast number of background
+        anchors changes the classification-to-box/DFL loss ratio and makes an
+        R3 comparison with the standard YOLO objective invalid.
+        """
         with torch.no_grad():
             grad = (logits.sigmoid() - targets).abs()
             bin_index = (grad * self.bins).long().clamp_max(self.bins - 1)
@@ -190,7 +204,10 @@ class GHMCClassificationLoss(nn.Module):
             effective_counts = torch.where(self.acc_sum > 0, self.acc_sum, counts.to(self.acc_sum)).clamp_min(1.0)
             weights = logits.numel() / effective_counts[bin_index]
             weights = weights / weights.mean().clamp_min(1e-9)
-        return (F.binary_cross_entropy_with_logits(logits, targets, reduction="none") * weights).mean(1).sum()
+        loss = F.binary_cross_entropy_with_logits(logits, targets, reduction="none") * weights
+        if class_weights is not None:
+            loss *= class_weights
+        return loss.sum() / normalizer
 
 
 class DFLoss(nn.Module):
@@ -1816,9 +1833,15 @@ class v8DetectionLoss:
             loss[1] = bce_loss.sum() / cls_target_scores_sum  # BCE
         elif self.ghm_cls_loss is not None:
             # GHM-C is a full dense classification objective, including
-            # negatives. It owns its normalization and cannot be multiplied by
-            # FTSC's positive-only evidence weights.
-            loss[1] = self.ghm_cls_loss(pred_scores, cls_target_scores.to(dtype))
+            # negatives. It does not use FTSC's positive-only evidence
+            # weights, but it keeps YOLO's target-score normalization so the
+            # classification-loss scale remains comparable to the BCE control.
+            loss[1] = self.ghm_cls_loss(
+                pred_scores,
+                cls_target_scores.to(dtype),
+                cls_target_scores_sum,
+                self.class_weights,
+            )
         else:
             bce_loss = self.bce(pred_scores, cls_target_scores.to(dtype))  # (bs, num_anchors, nc)
             bce_loss *= cls_weights
