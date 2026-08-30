@@ -16,12 +16,83 @@ import torch.nn.functional as F
 
 __all__ = (
     "AnchorFreeFTSCCalibrator",
+    "DCFLDGMMQualityEvidence",
+    "DEIMPositiveMALLoss",
     "DFLDistributionEvidence",
+    "DFLUncertaintyMinimization",
     "FCOSCenternessEvidence",
     "FTSCFeatureCalibrator",
     "HierarchicalBackgroundSmoothing",
     "PositionGaussianEvidence",
 )
+
+
+class DEIMPositiveMALLoss(nn.Module):
+    """DEIM-inspired positive-only Matchability-Aware Loss adaptation.
+
+    Full DEIM also changes dense negative supervision and matching. This
+    adaptation deliberately does neither: it replaces only TAL positive
+    target-class BCE elements with BCE targets ``q**gamma``.
+    """
+
+    def __init__(self, gamma: float = 1.0) -> None:
+        super().__init__()
+        if gamma <= 0:
+            raise ValueError("DEIM-MAL gamma must be positive.")
+        self.gamma = float(gamma)
+
+    def forward(self, logits: torch.Tensor, quality: torch.Tensor) -> torch.Tensor:
+        """Return numerically stable per-element MAL with detached IoU quality."""
+        quality_target = quality.detach().to(device=logits.device, dtype=logits.dtype).clamp(0, 1).pow(self.gamma)
+        return F.binary_cross_entropy_with_logits(logits, quality_target, reduction="none")
+
+    def replace_dense(
+        self,
+        base_loss: torch.Tensor,
+        logits: torch.Tensor,
+        positive_target_mask: torch.Tensor,
+        quality: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Replace only positive target-class elements and preserve every other BCE element exactly."""
+        if int(positive_target_mask.sum().item()) != quality.numel():
+            raise ValueError("DEIM-MAL requires one detached IoU quality per positive target-class element.")
+        positive_loss = self(logits[positive_target_mask], quality)
+        replaced = base_loss.clone()
+        replaced[positive_target_mask] = positive_loss
+        return replaced, positive_loss
+
+
+class DFLUncertaintyMinimization(nn.Module):
+    """UGS-inspired direct entropy-minimization regularizer for positive DFL distributions.
+
+    This implements only uncertainty minimization. UGS feature perturbation and
+    uncertainty-guided refinement are intentionally omitted.
+    """
+
+    def __init__(self, reg_max: int, normalized: bool = True, eps: float = 1e-9) -> None:
+        super().__init__()
+        if reg_max <= 1:
+            raise ValueError("DFL uncertainty minimization requires reg_max > 1.")
+        self.reg_max = int(reg_max)
+        self.normalized = bool(normalized)
+        self.eps = float(eps)
+        self.last_raw_entropy: torch.Tensor | None = None
+        self.last_normalized_entropy: torch.Tensor | None = None
+
+    def forward(self, pred_distri: torch.Tensor, fg_mask: torch.Tensor) -> torch.Tensor:
+        """Return mean positive-side entropy while retaining gradient to DFL logits."""
+        logits = pred_distri[fg_mask].reshape(-1, 4, self.reg_max).float()
+        if not logits.numel():
+            self.last_raw_entropy = logits.new_empty(0)
+            self.last_normalized_entropy = logits.new_empty(0)
+            return pred_distri.sum() * 0.0
+        probabilities = logits.softmax(-1)
+        raw_entropy = -(probabilities * probabilities.clamp_min(self.eps).log()).sum(-1)
+        normalized_entropy = raw_entropy / math.log(self.reg_max)
+        self.last_raw_entropy = raw_entropy.detach()
+        self.last_normalized_entropy = normalized_entropy.detach()
+        entropy = normalized_entropy if self.normalized else raw_entropy
+        return entropy.mean()
 
 
 class HierarchicalBackgroundSmoothing(nn.Module):
@@ -206,6 +277,130 @@ class DFLDistributionEvidence(nn.Module):
         return log_evidence.to(dtype=pred_distri.dtype)
 
 
+class DCFLDGMMQualityEvidence(nn.Module):
+    """DCFL-inspired per-GT DGMM relative-quality evidence provider.
+
+    DCFL's candidate expansion and coarse assignment are intentionally omitted.
+    For the already-selected TAL positives, this parameter-free provider builds
+    ``PT = 0.5 * (assigned-class probability + realized IoU)`` from detached
+    predictions. It estimates two modes with a single vectorized moment fit,
+    then returns a bounded high-vs-low log likelihood. Canonical FTSC performs
+    the subsequent per-GT centering and F5 gating.
+    """
+
+    def __init__(
+        self,
+        min_group_size: int = 4,
+        min_variance: float = 1e-4,
+        evidence_clip: float = 3.0,
+        eps: float = 1e-9,
+    ) -> None:
+        super().__init__()
+        if min_group_size < 2:
+            raise ValueError("DCFL-DGMM min_group_size must be at least two.")
+        if min_variance <= 0 or evidence_clip <= 0:
+            raise ValueError("DCFL-DGMM variance and evidence clip must be positive.")
+        self.min_group_size = int(min_group_size)
+        self.min_variance = float(min_variance)
+        self.evidence_clip = float(evidence_clip)
+        self.eps = float(eps)
+        self.last_pt: torch.Tensor | None = None
+        self.last_raw_evidence: torch.Tensor | None = None
+        self.last_metrics: dict[str, float] = {}
+
+    @staticmethod
+    def _stats(prefix: str, values: torch.Tensor) -> dict[str, float]:
+        values = values.detach().float()
+        if not values.numel():
+            return {f"{prefix}_{suffix}": 0.0 for suffix in ("mean", "std", "min", "max")}
+        return {
+            f"{prefix}_mean": float(values.mean().item()),
+            f"{prefix}_std": float(values.std(unbiased=False).item()),
+            f"{prefix}_min": float(values.min().item()),
+            f"{prefix}_max": float(values.max().item()),
+        }
+
+    def forward(
+        self,
+        classification_quality: torch.Tensor,
+        localization_quality: torch.Tensor,
+        group_ids: torch.Tensor,
+        group_count: int,
+    ) -> torch.Tensor:
+        """Return detached bounded raw quality evidence for canonical FTSC centering."""
+        if classification_quality.numel() != localization_quality.numel():
+            raise ValueError("DCFL-DGMM quality inputs and group IDs must have matching lengths.")
+        if classification_quality.numel() != group_ids.numel():
+            raise ValueError("DCFL-DGMM requires one group ID per positive quality value.")
+        with torch.no_grad():
+            pt = 0.5 * (
+                classification_quality.detach().float().clamp(0, 1)
+                + localization_quality.detach().float().clamp(0, 1)
+            )
+            if not pt.numel():
+                self.last_pt = pt
+                self.last_raw_evidence = pt
+                self.last_metrics = {
+                    "ftsc_dcfl_dgmm_fit_fraction": 0.0,
+                    "ftsc_dcfl_fallback_fraction": 0.0,
+                }
+                return pt.to(dtype=classification_quality.dtype)
+
+            ones = torch.ones_like(pt)
+            counts = pt.new_zeros(group_count).scatter_add_(0, group_ids, ones)
+            sums = pt.new_zeros(group_count).scatter_add_(0, group_ids, pt)
+            square_sums = pt.new_zeros(group_count).scatter_add_(0, group_ids, pt.square())
+            means = sums / counts.clamp_min(1.0)
+            variances = (square_sums / counts.clamp_min(1.0) - means.square()).clamp_min(0.0)
+            active = counts > 0
+            eligible = (counts >= self.min_group_size) & (variances >= self.min_variance)
+
+            high_mask = pt > means[group_ids]
+            high = high_mask.to(pt.dtype)
+            low = 1.0 - high
+            high_counts = pt.new_zeros(group_count).scatter_add_(0, group_ids, high)
+            low_counts = counts - high_counts
+            fitted = eligible & (high_counts > 0) & (low_counts > 0)
+
+            high_sums = pt.new_zeros(group_count).scatter_add_(0, group_ids, pt * high)
+            low_sums = sums - high_sums
+            high_means = high_sums / high_counts.clamp_min(1.0)
+            low_means = low_sums / low_counts.clamp_min(1.0)
+            high_square_sums = pt.new_zeros(group_count).scatter_add_(0, group_ids, pt.square() * high)
+            low_square_sums = square_sums - high_square_sums
+            high_variances = (high_square_sums / high_counts.clamp_min(1.0) - high_means.square()).clamp_min(0.0)
+            low_variances = (low_square_sums / low_counts.clamp_min(1.0) - low_means.square()).clamp_min(0.0)
+            high_variances = torch.where(high_counts > 1, high_variances, variances).clamp_min(self.min_variance)
+            low_variances = torch.where(low_counts > 1, low_variances, variances).clamp_min(self.min_variance)
+
+            group = group_ids
+            log_high = (
+                -0.5 * ((pt - high_means[group]).square() / high_variances[group] + high_variances[group].log())
+                + (high_counts[group] / counts[group].clamp_min(1.0)).clamp_min(self.eps).log()
+            )
+            log_low = (
+                -0.5 * ((pt - low_means[group]).square() / low_variances[group] + low_variances[group].log())
+                + (low_counts[group] / counts[group].clamp_min(1.0)).clamp_min(self.eps).log()
+            )
+            dgmm_evidence = log_high - log_low
+            fallback = (pt - means[group]) / variances[group].clamp_min(self.min_variance).sqrt()
+            evidence = torch.where(fitted[group], dgmm_evidence, fallback)
+            evidence = torch.where(counts[group] > 1, evidence, torch.zeros_like(evidence))
+            evidence = torch.nan_to_num(evidence).clamp(-self.evidence_clip, self.evidence_clip)
+
+            active_count = int(active.sum().item())
+            fit_count = int(fitted.sum().item())
+            self.last_pt = pt
+            self.last_raw_evidence = evidence
+            self.last_metrics = {
+                "ftsc_dcfl_dgmm_fit_fraction": fit_count / max(active_count, 1),
+                "ftsc_dcfl_fallback_fraction": (active_count - fit_count) / max(active_count, 1),
+            }
+            self.last_metrics.update(self._stats("ftsc_dcfl_pt", pt))
+            self.last_metrics.update(self._stats("ftsc_dcfl_provider_raw", evidence))
+        return evidence.to(device=classification_quality.device, dtype=classification_quality.dtype)
+
+
 class AnchorFreeFTSCCalibrator(nn.Module):
     """Assignment-preserving supervision calibration for anchor-free YOLO detection.
 
@@ -214,8 +409,10 @@ class AnchorFreeFTSCCalibrator(nn.Module):
     after TAL assignment and therefore adds no inference-time work.
     """
 
-    SUPPORTED_EVIDENCE = {"position_gaussian", "fcos_centerness", "dfl_distribution"}
-    POSITION_EVIDENCE = {"position_gaussian", "fcos_centerness"}
+    SUPPORTED_EVIDENCE = {"position_gaussian", "fcos_centerness", "dcfl_dgmm_quality", "dfl_distribution"}
+    # Providers in this set use canonical Position-provider routing: cls + box
+    # + DFL, with the same F5 strength, centering, clipping and scheduling.
+    POSITION_EVIDENCE = {"position_gaussian", "fcos_centerness", "dcfl_dgmm_quality"}
     TASK_NAMES = ("cls", "box", "dfl")
 
     def __init__(self, config: dict, reg_max: int) -> None:
@@ -248,6 +445,24 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         self.dfl_apply_box = bool(config.get("dfl_apply_box", False))
         self.dfl_apply_dfl = bool(config.get("dfl_apply_dfl", False))
         self.position_task_specific_strength = bool(config.get("position_task_specific_strength", False))
+        self.classification_replacement = str(config.get("classification_replacement", "bce")).lower()
+        if self.classification_replacement not in {"bce", "deim_mal"}:
+            raise ValueError("FTSC classification_replacement must be 'bce' or 'deim_mal'.")
+        self.mal_gamma = float(config.get("mal_gamma", 1.0))
+        self.mal_loss = (
+            DEIMPositiveMALLoss(self.mal_gamma) if self.classification_replacement == "deim_mal" else None
+        )
+        self.um_enabled = bool(config.get("uncertainty_minimization", False))
+        self.um_lambda = float(config.get("um_lambda", 0.05))
+        self.um_normalized = bool(config.get("um_normalized", True))
+        if self.um_lambda < 0:
+            raise ValueError("UGS-UM lambda must be non-negative.")
+        if self.classification_replacement == "deim_mal" and "dfl_distribution" in self.evidence_names:
+            raise ValueError("DEIM-MAL replaces the DFL-to-classification evidence provider; remove it from evidence.")
+        if self.um_enabled and "dfl_distribution" in self.evidence_names:
+            raise ValueError("UGS-UM replaces the DFL-to-classification evidence provider; remove it from evidence.")
+        if self.um_enabled and self.classification_replacement != "bce":
+            raise ValueError("Paper-replacement ablations must not combine UGS-UM with DEIM-MAL.")
         self.dfl_shuffle_within_gt = bool(config.get("dfl_shuffle_within_gt", False))
         self.gt_mass_rebalance_cls = bool(config.get("gt_mass_rebalance_cls", False))
         self.gt_mass_power = float(config.get("gt_mass_power", 0.5))
@@ -306,6 +521,12 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             providers["position_gaussian"] = PositionGaussianEvidence(float(config.get("position_alpha", 6.0)))
         if "fcos_centerness" in self.evidence_names:
             providers["fcos_centerness"] = FCOSCenternessEvidence()
+        if "dcfl_dgmm_quality" in self.evidence_names:
+            providers["dcfl_dgmm_quality"] = DCFLDGMMQualityEvidence(
+                min_group_size=int(config.get("dcfl_min_group_size", 4)),
+                min_variance=float(config.get("dcfl_min_variance", 1e-4)),
+                evidence_clip=float(config.get("dcfl_evidence_clip", 3.0)),
+            )
         if "dfl_distribution" in self.evidence_names:
             providers["dfl_distribution"] = DFLDistributionEvidence(
                 reg_max=reg_max,
@@ -314,6 +535,9 @@ class AnchorFreeFTSCCalibrator(nn.Module):
                 detach=bool(config.get("dfl_detach", True)),
             )
         self.providers = nn.ModuleDict(providers)
+        self.um_regularizer = (
+            DFLUncertaintyMinimization(reg_max, normalized=self.um_normalized) if self.um_enabled else None
+        )
 
         self.strength_logits = nn.ParameterDict()
         if self.policy == "f5":
@@ -554,6 +778,8 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         fg_mask: torch.Tensor,
         pred_distri: torch.Tensor,
         epoch: int = 0,
+        classification_quality: torch.Tensor | None = None,
+        localization_quality: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Build positive-only classification, box and DFL weights after TAL assignment."""
         positive_count = int(fg_mask.sum().item())
@@ -579,7 +805,17 @@ class AnchorFreeFTSCCalibrator(nn.Module):
                     "ftsc_gt_mass_shuffle": float(self.gt_mass_shuffle),
                 }
             )
-            return {"cls": empty, "box": empty, "dfl": empty, "regularization": zero}
+            if self.um_enabled:
+                self.last_metrics.update(
+                    {
+                        "ftsc_um_lambda": self.um_lambda,
+                        "ftsc_um_positive_count": 0.0,
+                        "ftsc_um_side_count": 0.0,
+                        "ftsc_um_raw_loss": 0.0,
+                        "ftsc_um_weighted_loss": 0.0,
+                    }
+                )
+            return {"cls": empty, "box": empty, "dfl": empty, "regularization": zero, "um_loss": zero}
 
         centered = {}
         if "position_gaussian" in self.providers:
@@ -591,6 +827,18 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             centerness = self.providers["fcos_centerness"](anchor_points_px, target_bboxes_px, fg_mask)
             centered["fcos_centerness"] = (
                 self._center_per_gt(centerness, fg_mask, target_gt_idx) if self.per_gt_norm else centerness
+            )
+        if "dcfl_dgmm_quality" in self.providers:
+            if classification_quality is None or localization_quality is None:
+                raise ValueError("DCFL-DGMM evidence requires detached classification and localization quality.")
+            group_ids, group_count = self._positive_group_ids(fg_mask, target_gt_idx)
+            quality_evidence = self.providers["dcfl_dgmm_quality"](
+                classification_quality, localization_quality, group_ids, group_count
+            )
+            centered["dcfl_dgmm_quality"] = (
+                self._center_per_gt(quality_evidence, fg_mask, target_gt_idx)
+                if self.per_gt_norm
+                else quality_evidence
             )
         if "dfl_distribution" in self.providers:
             distribution = self.providers["dfl_distribution"](pred_distri, fg_mask)
@@ -629,6 +877,11 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             )
 
         regularization = self._strength_regularization(reference)
+        um_loss = (
+            self.um_regularizer(pred_distri, fg_mask)
+            if self.um_regularizer is not None
+            else pred_distri.sum() * 0.0
+        )
 
         metrics = {
             "ftsc_positive_count": float(positive_count),
@@ -659,6 +912,21 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         if distribution_provider is not None:
             metrics.update(self._stats("ftsc_dfl_entropy", distribution_provider.last_entropy))
             metrics.update(self._stats("ftsc_dfl_variance", distribution_provider.last_variance))
+        dcfl_provider = self.providers["dcfl_dgmm_quality"] if "dcfl_dgmm_quality" in self.providers else None
+        if dcfl_provider is not None:
+            metrics.update(dcfl_provider.last_metrics)
+        if self.um_regularizer is not None:
+            metrics.update(self._stats("ftsc_um_entropy_raw", self.um_regularizer.last_raw_entropy))
+            metrics.update(self._stats("ftsc_um_entropy_normalized", self.um_regularizer.last_normalized_entropy))
+            metrics.update(
+                {
+                    "ftsc_um_lambda": self.um_lambda,
+                    "ftsc_um_positive_count": float(positive_count),
+                    "ftsc_um_side_count": float(positive_count * 4),
+                    "ftsc_um_raw_loss": float(um_loss.detach().item()),
+                    "ftsc_um_weighted_loss": float((self.um_lambda * um_loss.detach()).item()),
+                }
+            )
         metrics["ftsc_position_task_specific_strength"] = float(self.position_task_specific_strength)
         metrics["ftsc_dfl_shuffle_within_gt"] = float(self.dfl_shuffle_within_gt)
         metrics["ftsc_gt_mass_rebalance_cls"] = float(self.gt_mass_rebalance_cls)
@@ -679,7 +947,7 @@ class AnchorFreeFTSCCalibrator(nn.Module):
                 }
             )
         self.last_metrics = metrics
-        return {**weights, "regularization": regularization}
+        return {**weights, "regularization": regularization, "um_loss": um_loss}
 
 
 class FTSCFeatureCalibrator(nn.Module):

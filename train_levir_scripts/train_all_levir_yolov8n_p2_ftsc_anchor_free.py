@@ -41,6 +41,9 @@ VARIANTS = {
     "ftsc_r1_fcos_centerness": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_r1_fcos_centerness.yaml",
     "ftsc_r2_dgqp_lqe": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_r2_dgqp_lqe.yaml",
     "ftsc_r3_ghmc": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_r3_ghmc.yaml",
+    "ftsc_r4_deim_mal": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_r4_deim_mal.yaml",
+    "ftsc_r5_dcfl_dgmm": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_r5_dcfl_dgmm.yaml",
+    "ftsc_r6_ugs_um": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_r6_ugs_um.yaml",
 }
 V11_VARIANTS = (
     "ftsc_af_v11_a1_dflcls_only",
@@ -56,6 +59,9 @@ PAPER_REPLACEMENT_VARIANTS = (
     "ftsc_r1_fcos_centerness",
     "ftsc_r2_dgqp_lqe",
     "ftsc_r3_ghmc",
+    "ftsc_r4_deim_mal",
+    "ftsc_r5_dcfl_dgmm",
+    "ftsc_r6_ugs_um",
 )
 SCREEN_VARIANTS = PAPER_REPLACEMENT_VARIANTS
 
@@ -131,6 +137,29 @@ def model_for(variant: str, pretrained: str):
             raise ValueError(f"{variant}: expected Position-only F5 evidence bank")
         if not getattr(head, "quality_head", False) or not getattr(head, "quality_box_features", False):
             raise ValueError(f"{variant}: expected DGQP-style distribution-guided quality head")
+    elif variant == "ftsc_r4_deim_mal":
+        if calibrator.evidence_names != ("position_gaussian",):
+            raise ValueError(f"{variant}: expected canonical Position provider without DFL evidence")
+        if calibrator.classification_replacement != "deim_mal" or calibrator.mal_loss is None:
+            raise ValueError(f"{variant}: expected positive-only DEIM-MAL classification replacement")
+        if getattr(head, "quality_head", False) or calibrator.um_enabled:
+            raise ValueError(f"{variant}: unexpected quality head or UGS-UM mechanism")
+    elif variant == "ftsc_r5_dcfl_dgmm":
+        if calibrator.evidence_names != ("dcfl_dgmm_quality", "dfl_distribution"):
+            raise ValueError(f"{variant}: expected DCFL-DGMM + canonical detached DFL evidence")
+        if "position_gaussian" in calibrator.providers:
+            raise ValueError(f"{variant}: Gaussian Position provider must be absent")
+        if not calibrator.providers["dfl_distribution"].detach:
+            raise ValueError(f"{variant}: canonical DFL evidence must remain detached")
+        if calibrator.classification_replacement != "bce" or calibrator.um_enabled:
+            raise ValueError(f"{variant}: unexpected classification replacement or UGS-UM mechanism")
+    elif variant == "ftsc_r6_ugs_um":
+        if calibrator.evidence_names != ("position_gaussian",):
+            raise ValueError(f"{variant}: expected canonical Position provider without DFL evidence")
+        if not calibrator.um_enabled or calibrator.um_regularizer is None or calibrator.um_lambda <= 0:
+            raise ValueError(f"{variant}: expected active positive DFL uncertainty minimization")
+        if calibrator.classification_replacement != "bce" or getattr(head, "quality_head", False):
+            raise ValueError(f"{variant}: unexpected classification replacement or quality head")
     return model
 
 
@@ -175,7 +204,13 @@ def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[s
                 "ftsc/policy_f5": float(calibrator.policy == "f5"),
                 "ftsc/evidence_position": float("position_gaussian" in calibrator.evidence_names),
                 "ftsc/evidence_fcos_centerness": float("fcos_centerness" in calibrator.evidence_names),
+                "ftsc/evidence_dcfl_dgmm_quality": float("dcfl_dgmm_quality" in calibrator.evidence_names),
                 "ftsc/evidence_dfl_distribution": float("dfl_distribution" in calibrator.evidence_names),
+                "ftsc/classification_deim_mal": float(calibrator.classification_replacement == "deim_mal"),
+                "ftsc/mal_gamma": calibrator.mal_gamma,
+                "ftsc/um_enabled": float(calibrator.um_enabled),
+                "ftsc/um_lambda": calibrator.um_lambda,
+                "ftsc/um_normalized": float(calibrator.um_normalized),
                 "ftsc/log_clip": calibrator.log_clip,
                 "ftsc/per_gt_norm": float(calibrator.per_gt_norm),
                 "ftsc/apply_cls": float(calibrator.apply_cls),
@@ -211,6 +246,15 @@ def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[s
             metrics["ftsc/dfl_entropy_tau"] = provider.entropy_tau
             metrics["ftsc/dfl_variance_tau"] = provider.variance_tau
             metrics["ftsc/dfl_detach"] = float(provider.detach)
+        if "dcfl_dgmm_quality" in calibrator.providers:
+            provider = calibrator.providers["dcfl_dgmm_quality"]
+            metrics.update(
+                {
+                    "ftsc/dcfl_min_group_size": float(provider.min_group_size),
+                    "ftsc/dcfl_min_variance": provider.min_variance,
+                    "ftsc/dcfl_evidence_clip": provider.evidence_clip,
+                }
+            )
         if calibrator.policy == "e4":
             for name in calibrator.evidence_names:
                 metrics[f"ftsc/final_strength_{name}"] = calibrator.strength_init
@@ -253,6 +297,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--patience", type=int, default=20)
+    parser.add_argument(
+        "--augmentation-policy",
+        choices=("yolo_default", "mosaic_random_perspective_only"),
+        default="yolo_default",
+        help="Keep yolo_default for matched historical comparisons; the alternate policy removes colour, flip, and mixing transforms.",
+    )
     parser.add_argument("--smoke-fraction", type=float, default=0.01)
     parser.add_argument("--no-smoke", action="store_true")
     parser.add_argument("--smoke-only", action="store_true")

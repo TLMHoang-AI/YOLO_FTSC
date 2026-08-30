@@ -907,6 +907,9 @@ class v8DetectionLoss:
             raise ValueError("GHM-C uses standard TAL targets; disable cls_iou_target.")
         if self.ghm_cls and self.ftsc_calibrator is not None:
             raise ValueError("GHM-C replaces FTSC positive reweighting; configure ftsc.enabled=false.")
+        if self.ftsc_calibrator is not None and self.ftsc_calibrator.classification_replacement == "deim_mal":
+            if self.vfl is not None or bool(getattr(h, "cls_iou_target", False)):
+                raise ValueError("DEIM-MAL requires the default TAL-BCE classification path.")
         self.hyp = h
         self.stride = m.stride  # model strides
         self.nc = m.nc  # number of classes
@@ -1670,9 +1673,27 @@ class v8DetectionLoss:
                         total_alt_supports_found += topk_num
 
         target_scores_sum = max(target_scores.sum(), 1)
+        # TAL ends above. Everything below consumes its assignment without
+        # changing target_scores, fg_mask, target_gt_idx, or positive count.
+        target_bboxes_scaled = target_bboxes / stride_tensor
+        realized_iou = None
+        if self.ftsc_calibrator is not None and fg_mask.any():
+            realized_iou = bbox_iou(
+                pred_bboxes.detach()[fg_mask],
+                target_bboxes_scaled[fg_mask],
+                xywh=False,
+                CIoU=False,
+            ).squeeze(-1).clamp(0, 1).detach()
         ftsc_weights = None
         self.ftsc_metrics = {}
         if self.ftsc_calibrator is not None:
+            classification_quality = None
+            if "dcfl_dgmm_quality" in self.ftsc_calibrator.evidence_names and fg_mask.any():
+                with torch.no_grad():
+                    positive_classes = target_scores[fg_mask].argmax(-1, keepdim=True)
+                    classification_quality = pred_scores.detach().sigmoid()[fg_mask].gather(
+                        -1, positive_classes
+                    ).squeeze(-1)
             ftsc_weights = self.ftsc_calibrator(
                 anchor_points * stride_tensor,
                 target_bboxes,
@@ -1680,6 +1701,8 @@ class v8DetectionLoss:
                 fg_mask,
                 pred_distri,
                 epoch=self.epoch,
+                classification_quality=classification_quality,
+                localization_quality=realized_iou,
             )
             self.ftsc_metrics = dict(self.ftsc_calibrator.last_metrics)
             flat_stride = stride_tensor.squeeze(-1)
@@ -1702,6 +1725,11 @@ class v8DetectionLoss:
                 self.ftsc_metrics["ftsc_corr_weight_gt_area"] = self._ftsc_correlation(
                     cls_ftsc_weight, positive_area
                 )
+                if "dcfl_dgmm_quality" in self.ftsc_calibrator.providers:
+                    dcfl_pt = self.ftsc_calibrator.providers["dcfl_dgmm_quality"].last_pt
+                    self.ftsc_metrics["ftsc_dcfl_corr_weight_pt"] = self._ftsc_correlation(
+                        cls_ftsc_weight, dcfl_pt
+                    )
                 batch_ids = torch.arange(batch_size, device=self.device).view(-1, 1).expand_as(fg_mask)[fg_mask]
                 group_ids = batch_ids * fg_mask.shape[1] + target_gt_idx[fg_mask].long()
                 _, group_counts = group_ids.unique(return_counts=True)
@@ -1725,16 +1753,7 @@ class v8DetectionLoss:
         cls_target_scores = target_scores
         cls_target_scores_sum = target_scores_sum
         assigned_iou = None
-        # Use the same coordinate scale as bbox loss. If target_bboxes has already been divided by stride_tensor,
-        # do not divide again.
-        target_bboxes_scaled = target_bboxes / stride_tensor
-        if ftsc_weights is not None and fg_mask.any():
-            realized_iou = bbox_iou(
-                pred_bboxes.detach()[fg_mask],
-                target_bboxes_scaled[fg_mask],
-                xywh=False,
-                CIoU=False,
-            ).squeeze(-1).clamp(0)
+        if ftsc_weights is not None and realized_iou is not None:
             self.ftsc_metrics["ftsc_corr_weight_realized_iou"] = self._ftsc_correlation(
                 ftsc_weights["cls"], realized_iou
             )
@@ -1844,6 +1863,39 @@ class v8DetectionLoss:
             )
         else:
             bce_loss = self.bce(pred_scores, cls_target_scores.to(dtype))  # (bs, num_anchors, nc)
+            if (
+                self.ftsc_calibrator is not None
+                and self.ftsc_calibrator.mal_loss is not None
+                and realized_iou is not None
+            ):
+                positive_target_mask = target_scores > 0
+                mal_quality = realized_iou[target_scores[fg_mask].amax(-1) > 0]
+                bce_loss, positive_mal = self.ftsc_calibrator.mal_loss.replace_dense(
+                    bce_loss,
+                    pred_scores,
+                    positive_target_mask,
+                    mal_quality,
+                )
+                positive_confidence = pred_scores[positive_target_mask].detach().sigmoid()
+                quality = mal_quality.detach().float()
+                self.ftsc_metrics.update(
+                    {
+                        "ftsc_mal_gamma": self.ftsc_calibrator.mal_gamma,
+                        "ftsc_mal_positive_count": float(positive_mal.numel()),
+                        "ftsc_mal_positive_loss_mean": (
+                            float(positive_mal.detach().float().mean().item()) if positive_mal.numel() else 0.0
+                        ),
+                        "ftsc_mal_corr_q_confidence": self._ftsc_correlation(
+                            mal_quality, positive_confidence
+                        ),
+                        "ftsc_mal_q_mean": float(quality.mean().item()) if quality.numel() else 0.0,
+                        "ftsc_mal_q_std": (
+                            float(quality.std(unbiased=False).item()) if quality.numel() else 0.0
+                        ),
+                        "ftsc_mal_q_min": float(quality.min().item()) if quality.numel() else 0.0,
+                        "ftsc_mal_q_max": float(quality.max().item()) if quality.numel() else 0.0,
+                    }
+                )
             bce_loss *= cls_weights
             if self.class_weights is not None:
                 bce_loss *= self.class_weights
@@ -1920,6 +1972,10 @@ class v8DetectionLoss:
             ftsc_regularization = ftsc_weights["regularization"]
             loss[1] = loss[1] + ftsc_regularization
             self.ftsc_metrics["ftsc_strength_regularization"] = float(ftsc_regularization.detach().item())
+            if self.ftsc_calibrator.um_enabled:
+                weighted_um = self.ftsc_calibrator.um_lambda * ftsc_weights["um_loss"]
+                loss[2] = loss[2] + weighted_um
+                self.ftsc_metrics["ftsc_um_weighted_loss"] = float(weighted_um.detach().item())
         if self.boundary_loss is not None:
             # EXPERIMENTAL: add feature-space boundary separation only during training loss computation.
             loss[3] = self.boundary_loss(preds["feats"], gt_bboxes, mask_gt, self.stride) * self.boundary_gain

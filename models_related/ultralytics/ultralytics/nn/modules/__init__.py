@@ -123,7 +123,10 @@ from .conv import (
 )
 from .ftsc import (
     AnchorFreeFTSCCalibrator,
+    DCFLDGMMQualityEvidence,
+    DEIMPositiveMALLoss,
     DFLDistributionEvidence,
+    DFLUncertaintyMinimization,
     FCOSCenternessEvidence,
     FTSCFeatureCalibrator,
     HierarchicalBackgroundSmoothing,
@@ -240,7 +243,10 @@ __all__ = (
     "HVDecoupledRegression",
     "Focus",
     "AnchorFreeFTSCCalibrator",
+    "DCFLDGMMQualityEvidence",
+    "DEIMPositiveMALLoss",
     "DFLDistributionEvidence",
+    "DFLUncertaintyMinimization",
     "FCOSCenternessEvidence",
     "FTSCFeatureCalibrator",
     "GhostBottleneck",

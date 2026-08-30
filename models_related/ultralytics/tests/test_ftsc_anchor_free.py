@@ -5,8 +5,12 @@ from pathlib import Path
 import pytest
 import torch
 
+from ultralytics.cfg import DEFAULT_CFG_DICT
 from ultralytics.nn.modules import (
     AnchorFreeFTSCCalibrator,
+    DCFLDGMMQualityEvidence,
+    DEIMPositiveMALLoss,
+    DFLUncertaintyMinimization,
     FCOSCenternessEvidence,
     HierarchicalBackgroundSmoothing,
     PositionGaussianEvidence,
@@ -139,6 +143,132 @@ def test_detached_dfl_evidence_does_not_backpropagate_into_logits():
     assert not output["cls"].requires_grad
     assert torch.equal(output["box"], torch.ones_like(output["box"]))
     assert torch.equal(output["dfl"], torch.ones_like(output["dfl"]))
+
+
+def test_r4_positive_mal_uses_detached_iou_and_preserves_nonpositive_bce():
+    mal = DEIMPositiveMALLoss(gamma=1.0)
+    high_confidence_logit = torch.logit(torch.tensor([0.9, 0.9]))
+    quality = torch.tensor([0.1, 0.9], requires_grad=True)
+    positive_loss = mal(high_confidence_logit, quality)
+    assert positive_loss[1] < positive_loss[0]
+
+    logits = torch.tensor([[[2.0, -2.0], [-1.0, 1.0]]], requires_grad=True)
+    targets = torch.tensor([[[0.7, 0.0], [0.0, 0.0]]])
+    positive_mask = targets > 0
+    base = torch.nn.functional.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+    replaced, selected = mal.replace_dense(base, logits, positive_mask, quality[:1])
+    assert torch.equal(replaced[~positive_mask], base[~positive_mask])
+    selected.sum().backward()
+    assert logits.grad is not None and torch.isfinite(logits.grad).all()
+    assert quality.grad is None
+
+
+def test_r4_mal_is_finite_at_probability_and_quality_extremes():
+    mal = DEIMPositiveMALLoss(gamma=1.0)
+    logits = torch.tensor([-50.0, -50.0, 50.0, 50.0], requires_grad=True)
+    quality = torch.tensor([0.0, 1.0, 0.0, 1.0])
+    loss = mal(logits, quality)
+    assert torch.isfinite(loss).all()
+    loss.sum().backward()
+    assert torch.isfinite(logits.grad).all()
+
+
+def test_r5_dcfl_dgmm_is_per_gt_ordered_singleton_safe_and_detached():
+    provider = DCFLDGMMQualityEvidence(min_group_size=2, min_variance=1e-6, evidence_clip=3.0)
+    cls_quality = torch.tensor([0.1, 0.9, 0.8, 0.9, 0.5], requires_grad=True)
+    loc_quality = torch.tensor([0.1, 0.9, 0.8, 0.9, 0.5], requires_grad=True)
+    group_ids = torch.tensor([0, 0, 1, 1, 2])
+    evidence = provider(cls_quality, loc_quality, group_ids, group_count=3)
+    assert evidence[1] > evidence[0]
+    assert evidence[3] > evidence[2]
+    assert evidence[1] > 0 and evidence[2] < 0  # same absolute 0.8, different object-relative role
+    assert float(evidence[4]) == pytest.approx(0.0)
+    assert not evidence.requires_grad
+    assert cls_quality.grad is None and loc_quality.grad is None
+
+
+def test_r5_dcfl_dgmm_degenerate_group_is_finite_zero_evidence():
+    provider = DCFLDGMMQualityEvidence(min_group_size=4)
+    quality = torch.full((4,), 0.5)
+    evidence = provider(quality, quality, torch.zeros(4, dtype=torch.long), group_count=1)
+    assert torch.isfinite(evidence).all()
+    assert torch.equal(evidence, torch.zeros_like(evidence))
+    assert provider.last_metrics["ftsc_dcfl_fallback_fraction"] == pytest.approx(1.0)
+
+
+def test_r5_calibrator_keeps_assignment_tensors_and_dfl_cls_provider():
+    anchor_points, target_bboxes, target_gt_idx, fg_mask, pred_distri = _toy_assignment()
+    original_mask, original_gt_idx = fg_mask.clone(), target_gt_idx.clone()
+    calibrator = AnchorFreeFTSCCalibrator(
+        {
+            "policy": "f5",
+            "evidence": ["dcfl_dgmm_quality", "dfl_distribution"],
+            "dcfl_min_group_size": 2,
+            "dfl_detach": True,
+            "dfl_apply_cls": True,
+            "dfl_apply_box": False,
+            "dfl_apply_dfl": False,
+            "warmup_epochs": 0,
+            "ramp_epochs": 1,
+        },
+        reg_max=16,
+    )
+    cls_quality = torch.tensor([0.1, 0.9, 0.5], requires_grad=True)
+    loc_quality = torch.tensor([0.2, 0.8, 0.5], requires_grad=True)
+    output = calibrator(
+        anchor_points,
+        target_bboxes,
+        target_gt_idx,
+        fg_mask,
+        pred_distri,
+        classification_quality=cls_quality,
+        localization_quality=loc_quality,
+    )
+    assert torch.equal(fg_mask, original_mask) and torch.equal(target_gt_idx, original_gt_idx)
+    assert calibrator.providers["dfl_distribution"].detach
+    assert output["cls"].shape == (3,) and torch.isfinite(output["cls"]).all()
+    assert cls_quality.grad is None and loc_quality.grad is None
+
+
+def test_r5_and_canonical_y4_produce_identical_tal_assignment_at_same_model_state():
+    config_root = Path(__file__).resolve().parents[2] / "models_config/yolov8/levir"
+    y4 = DetectionModel(config_root / "yolov8n_p2_levir_ftsc_af_y4_f5_position_dflcls.yaml", verbose=False)
+    r5 = DetectionModel(config_root / "yolov8n_p2_levir_ftsc_r5_dcfl_dgmm.yaml", verbose=False)
+    missing, unexpected = r5.load_state_dict(y4.state_dict(), strict=False)
+    assert len(missing) == 1 and missing[0].endswith("strength_logits.dcfl_dgmm_quality")
+    assert len(unexpected) == 1 and unexpected[0].endswith("strength_logits.position_gaussian")
+    for model in (y4, r5):
+        model.args = IterableSimpleNamespace(**DEFAULT_CFG_DICT)
+        model.train()
+        model.criterion = model.init_criterion()
+        model.criterion.capture_assignment = True
+    batch = {
+        "img": torch.rand(1, 3, 64, 64),
+        "batch_idx": torch.tensor([0.0]),
+        "cls": torch.tensor([[0.0]]),
+        "bboxes": torch.tensor([[0.5, 0.5, 0.25, 0.25]]),
+    }
+    y4(batch)
+    r5(batch)
+    assert all(
+        torch.equal(canonical, replacement)
+        for canonical, replacement in zip(y4.criterion.last_assignment, r5.criterion.last_assignment, strict=True)
+    )
+
+
+def test_r6_um_entropy_is_ordered_and_backpropagates_to_dfl_logits():
+    regularizer = DFLUncertaintyMinimization(reg_max=16, normalized=True)
+    fg_mask = torch.tensor([[True]])
+    uniform = torch.zeros(1, 1, 64)
+    sharp = torch.zeros(1, 1, 64)
+    sharp.view(1, 1, 4, 16)[..., 0] = 12.0
+    assert regularizer(uniform, fg_mask) > regularizer(sharp, fg_mask)
+
+    logits = torch.randn(1, 1, 64, requires_grad=True)
+    loss = regularizer(logits, fg_mask)
+    assert loss.requires_grad and torch.isfinite(loss)
+    loss.backward()
+    assert logits.grad is not None and torch.isfinite(logits.grad).all()
 
 
 def test_task_specific_position_strengths_use_matched_mean_regularization():
@@ -429,6 +559,59 @@ def test_v2_gt_mass_yaml_has_one_requested_factor_and_no_extra_parameters(config
     )
 
 
+@pytest.mark.parametrize(
+    ("config_name", "evidence"),
+    [
+        ("yolov8n_p2_levir_ftsc_r4_deim_mal.yaml", ("position_gaussian",)),
+        ("yolov8n_p2_levir_ftsc_r5_dcfl_dgmm.yaml", ("dcfl_dgmm_quality", "dfl_distribution")),
+        ("yolov8n_p2_levir_ftsc_r6_ugs_um.yaml", ("position_gaussian",)),
+    ],
+)
+def test_r4_r5_r6_yaml_builds_one_paper_replacement_only(config_name, evidence):
+    config_root = Path(__file__).resolve().parents[2] / "models_config/yolov8/levir"
+    model = DetectionModel(config_root / config_name, verbose=False)
+    head = model.model[-1]
+    calibrator = head.ftsc_calibrator
+    assert calibrator is not None and calibrator.policy == "f5"
+    assert calibrator.evidence_names == evidence
+    assert not getattr(head, "quality_head", False)
+    if "r4_" in config_name:
+        assert calibrator.classification_replacement == "deim_mal"
+        assert "dfl_distribution" not in calibrator.providers
+        assert calibrator.um_regularizer is None
+    elif "r5_" in config_name:
+        assert "position_gaussian" not in calibrator.providers
+        assert calibrator.providers["dfl_distribution"].detach
+        assert calibrator.classification_replacement == "bce" and calibrator.um_regularizer is None
+    else:
+        assert calibrator.um_enabled and calibrator.um_regularizer is not None
+        assert "dfl_distribution" not in calibrator.providers
+        assert calibrator.classification_replacement == "bce"
+
+
+def test_r6_model_total_loss_is_finite_and_um_reaches_dfl_branch():
+    config = (
+        Path(__file__).resolve().parents[2]
+        / "models_config/yolov8/levir/yolov8n_p2_levir_ftsc_r6_ugs_um.yaml"
+    )
+    model = DetectionModel(config, verbose=False)
+    model.args = IterableSimpleNamespace(**DEFAULT_CFG_DICT)
+    model.train()
+    batch = {
+        "img": torch.rand(1, 3, 64, 64),
+        "batch_idx": torch.tensor([0.0]),
+        "cls": torch.tensor([[0.0]]),
+        "bboxes": torch.tensor([[0.5, 0.5, 0.25, 0.25]]),
+    }
+    loss, items = model(batch)
+    assert torch.isfinite(loss).all() and torch.isfinite(items).all()
+    loss.sum().backward()
+    head = model.model[-1]
+    assert head.cv2[0][-1].weight.grad is not None
+    assert model.criterion.ftsc_metrics["ftsc_um_positive_count"] > 0
+    assert model.criterion.ftsc_metrics["ftsc_um_weighted_loss"] > 0
+
+
 def test_f5_warmup_loss_is_exactly_baseline_identity():
     config_root = Path(__file__).resolve().parents[2] / "models_config/yolov8/levir"
     baseline = DetectionModel(config_root / "yolov8n_p2_levir_ftsc_y0_baseline.yaml", verbose=False)
@@ -437,7 +620,7 @@ def test_f5_warmup_loss_is_exactly_baseline_identity():
     assert missing == ["model.29.ftsc_calibrator.strength_logits.position_gaussian"]
     assert not unexpected
     for model in (baseline, f5):
-        model.args = IterableSimpleNamespace(**model.args)
+        model.args = IterableSimpleNamespace(**DEFAULT_CFG_DICT)
         model.train()
     torch.manual_seed(123)
     batch = {
@@ -516,7 +699,7 @@ def test_hbs_auxiliary_loss_uses_plain_detection_criterion_and_receives_gradient
         / "models_config/yolov8/levir/yolov8n_p2_levir_ftsc_v2s_a3_y4_hbs.yaml"
     )
     model = DetectionModel(config, verbose=False)
-    model.args = IterableSimpleNamespace(**model.args)
+    model.args = IterableSimpleNamespace(**DEFAULT_CFG_DICT)
     model.train()
     batch = {
         "img": torch.rand(1, 3, 64, 64),

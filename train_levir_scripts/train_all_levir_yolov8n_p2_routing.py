@@ -139,12 +139,35 @@ def model_for(variant: str, pretrained: str):
 
 
 def train_kwargs(args: argparse.Namespace, data_yaml: Path, seed: int, amp: bool) -> dict[str, object]:
-    return {
+    kwargs: dict[str, object] = {
         "data": str(data_yaml), "epochs": args.epochs, "imgsz": args.imgsz,
         "batch": args.batch_size, "device": args.device, "workers": args.workers,
         "patience": args.patience, "seed": seed, "deterministic": True,
         "amp": amp, "plots": False,
     }
+    if getattr(args, "augmentation_policy", "yolo_default") == "mosaic_random_perspective_only":
+        # Keep YOLO's geometric RandomPerspective transform and Mosaic, but
+        # remove appearance/compositional augmentations that alter texture,
+        # colour, or object identity. `translate` and `scale` belong to
+        # RandomPerspective; they are deliberately retained.
+        kwargs.update(
+            mosaic=1.0,
+            close_mosaic=10,
+            degrees=0.0,
+            translate=0.1,
+            scale=0.5,
+            shear=0.0,
+            perspective=0.0,
+            hsv_h=0.0,
+            hsv_s=0.0,
+            hsv_v=0.0,
+            fliplr=0.0,
+            flipud=0.0,
+            mixup=0.0,
+            cutmix=0.0,
+            copy_paste=0.0,
+        )
+    return kwargs
 
 
 def smoke(variant: str, data_yaml: Path, args: argparse.Namespace, amp: bool = True) -> bool:
