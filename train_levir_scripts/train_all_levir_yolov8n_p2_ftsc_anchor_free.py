@@ -44,6 +44,8 @@ VARIANTS = {
     "ftsc_r4_deim_mal": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_r4_deim_mal.yaml",
     "ftsc_r5_dcfl_dgmm": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_r5_dcfl_dgmm.yaml",
     "ftsc_r6_ugs_um": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_r6_ugs_um.yaml",
+    "ftsc_r7_dcfl_dgmm_gt_mass": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_r7_dcfl_dgmm_gt_mass.yaml",
+    "ftsc_r8_ugs_um_quality_guard": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_r8_ugs_um_quality_guard.yaml",
 }
 V11_VARIANTS = (
     "ftsc_af_v11_a1_dflcls_only",
@@ -62,6 +64,10 @@ PAPER_REPLACEMENT_VARIANTS = (
     "ftsc_r4_deim_mal",
     "ftsc_r5_dcfl_dgmm",
     "ftsc_r6_ugs_um",
+)
+FOLLOWUP_VARIANTS = (
+    "ftsc_r7_dcfl_dgmm_gt_mass",
+    "ftsc_r8_ugs_um_quality_guard",
 )
 SCREEN_VARIANTS = PAPER_REPLACEMENT_VARIANTS
 
@@ -153,6 +159,8 @@ def model_for(variant: str, pretrained: str):
             raise ValueError(f"{variant}: canonical DFL evidence must remain detached")
         if calibrator.classification_replacement != "bce" or calibrator.um_enabled:
             raise ValueError(f"{variant}: unexpected classification replacement or UGS-UM mechanism")
+        if calibrator.gt_mass_rebalance_cls:
+            raise ValueError(f"{variant}: standalone R5 must not enable GT-mass rebalancing")
     elif variant == "ftsc_r6_ugs_um":
         if calibrator.evidence_names != ("position_gaussian",):
             raise ValueError(f"{variant}: expected canonical Position provider without DFL evidence")
@@ -160,6 +168,45 @@ def model_for(variant: str, pretrained: str):
             raise ValueError(f"{variant}: expected active positive DFL uncertainty minimization")
         if calibrator.classification_replacement != "bce" or getattr(head, "quality_head", False):
             raise ValueError(f"{variant}: unexpected classification replacement or quality head")
+        if calibrator.um_quality_guard:
+            raise ValueError(f"{variant}: standalone R6 must keep the quality guard disabled")
+    elif variant == "ftsc_r7_dcfl_dgmm_gt_mass":
+        if calibrator.evidence_names != ("dcfl_dgmm_quality", "dfl_distribution"):
+            raise ValueError(f"{variant}: expected exact R5 evidence providers")
+        if "position_gaussian" in calibrator.providers:
+            raise ValueError(f"{variant}: Gaussian Position provider must be absent")
+        dfl_provider = calibrator.providers["dfl_distribution"]
+        if not dfl_provider.detach or not calibrator.dfl_apply_cls:
+            raise ValueError(f"{variant}: DFL evidence must remain detached and classification-routed")
+        if calibrator.dfl_apply_box or calibrator.dfl_apply_dfl:
+            raise ValueError(f"{variant}: DFL evidence must not route to box/DFL loss")
+        if calibrator.classification_replacement != "bce" or calibrator.um_enabled:
+            raise ValueError(f"{variant}: expected BCE classification without UGS-UM")
+        if not calibrator.gt_mass_rebalance_cls or calibrator.gt_mass_shuffle:
+            raise ValueError(f"{variant}: expected ordered S1 GT-mass rebalancing")
+        if (
+            calibrator.gt_mass_power,
+            calibrator.gt_mass_min_factor,
+            calibrator.gt_mass_max_factor,
+        ) != (0.5, 0.75, 1.25):
+            raise ValueError(f"{variant}: expected frozen S1 power and factor bounds")
+        if getattr(head, "quality_head", False):
+            raise ValueError(f"{variant}: unexpected inference-time quality head")
+    elif variant == "ftsc_r8_ugs_um_quality_guard":
+        if calibrator.evidence_names != ("position_gaussian",):
+            raise ValueError(f"{variant}: expected Position-only FTSC evidence")
+        if "dfl_distribution" in calibrator.providers or "dcfl_dgmm_quality" in calibrator.providers:
+            raise ValueError(f"{variant}: unexpected DFL-to-cls or DCFL evidence provider")
+        if not calibrator.um_enabled or calibrator.um_regularizer is None or calibrator.um_lambda <= 0:
+            raise ValueError(f"{variant}: expected active positive DFL uncertainty minimization")
+        if not calibrator.um_quality_guard or calibrator.um_quality_gamma <= 0:
+            raise ValueError(f"{variant}: expected a positive detached-IoU quality guard")
+        if calibrator.um_lambda != 0.05 or not calibrator.um_normalized or calibrator.um_quality_gamma != 1.0:
+            raise ValueError(f"{variant}: expected frozen R6 lambda/entropy and first-test guard gamma")
+        if calibrator.classification_replacement != "bce" or getattr(head, "quality_head", False):
+            raise ValueError(f"{variant}: unexpected classification replacement or quality head")
+        if calibrator.gt_mass_rebalance_cls:
+            raise ValueError(f"{variant}: R8 must not enable GT-mass rebalancing")
     return model
 
 
@@ -211,6 +258,8 @@ def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[s
                 "ftsc/um_enabled": float(calibrator.um_enabled),
                 "ftsc/um_lambda": calibrator.um_lambda,
                 "ftsc/um_normalized": float(calibrator.um_normalized),
+                "ftsc/um_quality_guard": float(calibrator.um_quality_guard),
+                "ftsc/um_quality_gamma": calibrator.um_quality_gamma,
                 "ftsc/log_clip": calibrator.log_clip,
                 "ftsc/per_gt_norm": float(calibrator.per_gt_norm),
                 "ftsc/apply_cls": float(calibrator.apply_cls),

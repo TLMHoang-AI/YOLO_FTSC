@@ -1076,6 +1076,24 @@ class v8DetectionLoss:
             return 0.0
         return float((left * right).sum().div(denominator).item())
 
+    @staticmethod
+    def _apply_ftsc_positive_cls_weights(
+        cls_weights: torch.Tensor,
+        target_scores: torch.Tensor,
+        fg_mask: torch.Tensor,
+        positive_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        """Apply positive FTSC weights only to target-class classification elements."""
+        if positive_weights.numel() != int(fg_mask.sum().item()):
+            raise ValueError("FTSC requires one classification weight per TAL positive.")
+        dense_positive_weights = cls_weights.new_ones(fg_mask.shape)
+        dense_positive_weights[fg_mask] = positive_weights.to(dtype=cls_weights.dtype)
+        return cls_weights * torch.where(
+            target_scores > 0,
+            dense_positive_weights.unsqueeze(-1),
+            torch.ones_like(cls_weights),
+        )
+
     def preprocess(self, targets: torch.Tensor, batch_size: int, scale_tensor: torch.Tensor) -> torch.Tensor:
         """Preprocess targets by converting to tensor format and scaling coordinates."""
         nl, ne = targets.shape
@@ -1815,14 +1833,13 @@ class v8DetectionLoss:
                         cls_weights[b, fg_indices, classes_b] = w_g
 
         if ftsc_weights is not None and fg_mask.any():
-            dense_ftsc_cls = pred_scores.new_ones(fg_mask.shape)
-            dense_ftsc_cls[fg_mask] = ftsc_weights["cls"].to(dtype=pred_scores.dtype)
             # Only target-class positive BCE/VFL elements are calibrated. Background
             # anchors and off-class elements at a positive anchor remain at identity.
-            cls_weights = cls_weights * torch.where(
-                target_scores > 0,
-                dense_ftsc_cls.unsqueeze(-1),
-                torch.ones_like(cls_weights),
+            cls_weights = self._apply_ftsc_positive_cls_weights(
+                cls_weights,
+                target_scores,
+                fg_mask,
+                ftsc_weights["cls"],
             )
 
         if self.vfl is not None:

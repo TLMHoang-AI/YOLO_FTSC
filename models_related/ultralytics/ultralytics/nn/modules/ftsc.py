@@ -63,28 +63,51 @@ class DEIMPositiveMALLoss(nn.Module):
 
 
 class DFLUncertaintyMinimization(nn.Module):
-    """UGS-inspired direct entropy-minimization regularizer for positive DFL distributions.
+    """UGS-inspired direct entropy minimization with an optional FTSC quality guard.
 
     This implements only uncertainty minimization. UGS feature perturbation and
-    uncertainty-guided refinement are intentionally omitted.
+    uncertainty-guided refinement are intentionally omitted. The quality guard
+    is an FTSC adaptation and is not part of the reproduced UGS mechanism.
     """
 
-    def __init__(self, reg_max: int, normalized: bool = True, eps: float = 1e-9) -> None:
+    def __init__(
+        self,
+        reg_max: int,
+        normalized: bool = True,
+        eps: float = 1e-9,
+        quality_guard: bool = False,
+        quality_gamma: float = 1.0,
+    ) -> None:
         super().__init__()
         if reg_max <= 1:
             raise ValueError("DFL uncertainty minimization requires reg_max > 1.")
+        if quality_gamma <= 0:
+            raise ValueError("DFL uncertainty-minimization quality gamma must be positive.")
         self.reg_max = int(reg_max)
         self.normalized = bool(normalized)
+        self.quality_guard = bool(quality_guard)
+        self.quality_gamma = float(quality_gamma)
         self.eps = float(eps)
         self.last_raw_entropy: torch.Tensor | None = None
         self.last_normalized_entropy: torch.Tensor | None = None
+        self.last_positive_entropy: torch.Tensor | None = None
+        self.last_quality: torch.Tensor | None = None
+        self.last_guard: torch.Tensor | None = None
 
-    def forward(self, pred_distri: torch.Tensor, fg_mask: torch.Tensor) -> torch.Tensor:
-        """Return mean positive-side entropy while retaining gradient to DFL logits."""
+    def forward(
+        self,
+        pred_distri: torch.Tensor,
+        fg_mask: torch.Tensor,
+        localization_quality: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Return positive DFL entropy while retaining gradient only through the entropy path."""
         logits = pred_distri[fg_mask].reshape(-1, 4, self.reg_max).float()
         if not logits.numel():
             self.last_raw_entropy = logits.new_empty(0)
             self.last_normalized_entropy = logits.new_empty(0)
+            self.last_positive_entropy = logits.new_empty(0)
+            self.last_quality = logits.new_empty(0)
+            self.last_guard = logits.new_empty(0)
             return pred_distri.sum() * 0.0
         probabilities = logits.softmax(-1)
         raw_entropy = -(probabilities * probabilities.clamp_min(self.eps).log()).sum(-1)
@@ -92,7 +115,22 @@ class DFLUncertaintyMinimization(nn.Module):
         self.last_raw_entropy = raw_entropy.detach()
         self.last_normalized_entropy = normalized_entropy.detach()
         entropy = normalized_entropy if self.normalized else raw_entropy
-        return entropy.mean()
+        positive_entropy = entropy.mean(-1)
+        self.last_positive_entropy = positive_entropy.detach()
+        if not self.quality_guard:
+            self.last_quality = None
+            self.last_guard = None
+            # Preserve the exact R6 reduction when the new option is disabled.
+            return entropy.mean()
+        if localization_quality is None:
+            raise ValueError("Quality-guarded DFL uncertainty minimization requires realized IoU.")
+        if localization_quality.numel() != positive_entropy.numel():
+            raise ValueError("Quality-guarded DFL uncertainty minimization requires one IoU per positive.")
+        quality = localization_quality.detach().to(device=logits.device, dtype=positive_entropy.dtype).clamp(0, 1)
+        guard = quality.pow(self.quality_gamma)
+        self.last_quality = quality
+        self.last_guard = guard
+        return (guard * positive_entropy).sum() / guard.sum().clamp_min(self.eps)
 
 
 class HierarchicalBackgroundSmoothing(nn.Module):
@@ -455,8 +493,14 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         self.um_enabled = bool(config.get("uncertainty_minimization", False))
         self.um_lambda = float(config.get("um_lambda", 0.05))
         self.um_normalized = bool(config.get("um_normalized", True))
+        self.um_quality_guard = bool(config.get("um_quality_guard", False))
+        self.um_quality_gamma = float(config.get("um_quality_gamma", 1.0))
         if self.um_lambda < 0:
             raise ValueError("UGS-UM lambda must be non-negative.")
+        if self.um_quality_gamma <= 0:
+            raise ValueError("UGS-UM quality gamma must be positive.")
+        if self.um_quality_guard and not self.um_enabled:
+            raise ValueError("UGS-UM quality guard requires uncertainty_minimization=true.")
         if self.classification_replacement == "deim_mal" and "dfl_distribution" in self.evidence_names:
             raise ValueError("DEIM-MAL replaces the DFL-to-classification evidence provider; remove it from evidence.")
         if self.um_enabled and "dfl_distribution" in self.evidence_names:
@@ -536,7 +580,14 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             )
         self.providers = nn.ModuleDict(providers)
         self.um_regularizer = (
-            DFLUncertaintyMinimization(reg_max, normalized=self.um_normalized) if self.um_enabled else None
+            DFLUncertaintyMinimization(
+                reg_max,
+                normalized=self.um_normalized,
+                quality_guard=self.um_quality_guard,
+                quality_gamma=self.um_quality_gamma,
+            )
+            if self.um_enabled
+            else None
         )
 
         self.strength_logits = nn.ParameterDict()
@@ -697,8 +748,8 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         active_group_ids = torch.nonzero(counts > 0, as_tuple=False).flatten()
         group_sizes = counts[active_group_ids]
         mean_support = group_sizes.mean()
-        group_factors = (mean_support / group_sizes.clamp_min(1.0)).pow(self.gt_mass_power)
-        group_factors = group_factors.clamp(self.gt_mass_min_factor, self.gt_mass_max_factor)
+        unclamped_group_factors = (mean_support / group_sizes.clamp_min(1.0)).pow(self.gt_mass_power)
+        group_factors = unclamped_group_factors.clamp(self.gt_mass_min_factor, self.gt_mass_max_factor)
 
         moved_groups = 0
         shuffle_step = 0
@@ -729,10 +780,27 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             "ftsc_gt_group_count": float(group_sizes.numel()),
             "ftsc_mean_positives_per_gt": float(mean_support.detach().item()),
             "ftsc_single_positive_gt_fraction": float(singleton_fraction.detach().item()),
+            "ftsc_gt_mass_factor_clamp_min_fraction": float(
+                (unclamped_group_factors <= self.gt_mass_min_factor).float().mean().item()
+            ),
+            "ftsc_gt_mass_factor_clamp_max_fraction": float(
+                (unclamped_group_factors >= self.gt_mass_max_factor).float().mean().item()
+            ),
             "ftsc_gt_mass_shuffle": float(self.gt_mass_shuffle),
             "ftsc_gt_mass_shuffle_group_fraction": moved_groups / max(int(group_sizes.numel()), 1),
             "ftsc_gt_mass_shuffle_step": float(shuffle_step),
         }
+        support = group_sizes.detach().float()
+        factor = group_factors.detach().float()
+        support_centered = support - support.mean()
+        factor_centered = factor - factor.mean()
+        denominator = support_centered.square().sum().sqrt() * factor_centered.square().sum().sqrt()
+        self._last_gt_mass_metrics["ftsc_corr_support_count_gt_mass_factor"] = (
+            float((support_centered * factor_centered).sum().div(denominator).item())
+            if support.numel() > 1 and float(denominator.item()) > 0
+            else 0.0
+        )
+        self._last_gt_mass_metrics.update(self._stats("ftsc_gt_support_count", group_sizes))
         self._last_gt_mass_metrics.update(self._stats("ftsc_gt_mass_factor_raw", positive_factors))
         self._last_gt_mass_metrics.update(self._stats("ftsc_gt_mass_factor_scheduled", scheduled_factors))
         return scheduled_factors
@@ -809,12 +877,25 @@ class AnchorFreeFTSCCalibrator(nn.Module):
                 self.last_metrics.update(
                     {
                         "ftsc_um_lambda": self.um_lambda,
+                        "ftsc_um_quality_guard": float(self.um_quality_guard),
+                        "ftsc_um_quality_gamma": self.um_quality_gamma,
                         "ftsc_um_positive_count": 0.0,
+                        "ftsc_um_positive_dfl_count": 0.0,
                         "ftsc_um_side_count": 0.0,
                         "ftsc_um_raw_loss": 0.0,
+                        "ftsc_um_guarded_entropy_loss": 0.0,
+                        "ftsc_um_guard_mass": 0.0,
+                        "ftsc_um_guard_mean": 0.0,
+                        "ftsc_um_guard_lt_025_fraction": 0.0,
+                        "ftsc_um_guard_gt_075_fraction": 0.0,
                         "ftsc_um_weighted_loss": 0.0,
                     }
                 )
+                if self.um_quality_guard:
+                    for prefix in ("ftsc_um_quality_iou", "ftsc_um_guard"):
+                        self.last_metrics.update(
+                            {f"{prefix}_{suffix}": 0.0 for suffix in ("mean", "std", "min", "max")}
+                        )
             return {"cls": empty, "box": empty, "dfl": empty, "regularization": zero, "um_loss": zero}
 
         centered = {}
@@ -868,6 +949,7 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         weights = {}
         for task, values in task_logs.items():
             weights[task] = self._gate(values, fg_mask, target_gt_idx, epoch)
+        intra_gt_cls_weight = weights["cls"]
 
         # This branch changes only positive target-class loss mass. It does not
         # alter TAL assignment, negative/off-class weights, box, or DFL losses.
@@ -878,7 +960,7 @@ class AnchorFreeFTSCCalibrator(nn.Module):
 
         regularization = self._strength_regularization(reference)
         um_loss = (
-            self.um_regularizer(pred_distri, fg_mask)
+            self.um_regularizer(pred_distri, fg_mask, localization_quality=localization_quality)
             if self.um_regularizer is not None
             else pred_distri.sum() * 0.0
         )
@@ -907,6 +989,8 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             metrics[f"ftsc_{task}_clamp_high_fraction"] = float(
                 (task_logs[task] > self.log_clip).float().mean().item()
             )
+        metrics.update(self._stats("ftsc_intra_gt_cls_weight", intra_gt_cls_weight))
+        metrics.update(self._stats("ftsc_effective_positive_cls_multiplier", weights["cls"]))
         metrics["ftsc_positive_negative_weight_ratio"] = float(weights["cls"].detach().float().mean().item())
         distribution_provider = self.providers["dfl_distribution"] if "dfl_distribution" in self.providers else None
         if distribution_provider is not None:
@@ -921,12 +1005,29 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             metrics.update(
                 {
                     "ftsc_um_lambda": self.um_lambda,
+                    "ftsc_um_quality_guard": float(self.um_quality_guard),
+                    "ftsc_um_quality_gamma": self.um_quality_gamma,
                     "ftsc_um_positive_count": float(positive_count),
+                    "ftsc_um_positive_dfl_count": float(positive_count),
                     "ftsc_um_side_count": float(positive_count * 4),
                     "ftsc_um_raw_loss": float(um_loss.detach().item()),
+                    "ftsc_um_guarded_entropy_loss": float(um_loss.detach().item()),
                     "ftsc_um_weighted_loss": float((self.um_lambda * um_loss.detach()).item()),
                 }
             )
+            if self.um_quality_guard:
+                quality = self.um_regularizer.last_quality
+                guard = self.um_regularizer.last_guard
+                metrics.update(self._stats("ftsc_um_quality_iou", quality))
+                metrics.update(self._stats("ftsc_um_guard", guard))
+                metrics.update(
+                    {
+                        "ftsc_um_guard_mass": float(guard.sum().item()),
+                        "ftsc_um_guard_mean": float(guard.mean().item()),
+                        "ftsc_um_guard_lt_025_fraction": float((guard < 0.25).float().mean().item()),
+                        "ftsc_um_guard_gt_075_fraction": float((guard > 0.75).float().mean().item()),
+                    }
+                )
         metrics["ftsc_position_task_specific_strength"] = float(self.position_task_specific_strength)
         metrics["ftsc_dfl_shuffle_within_gt"] = float(self.dfl_shuffle_within_gt)
         metrics["ftsc_gt_mass_rebalance_cls"] = float(self.gt_mass_rebalance_cls)
