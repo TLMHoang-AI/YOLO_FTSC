@@ -27,7 +27,7 @@ from torch import nn, optim
 from ultralytics import __version__
 from ultralytics.cfg import get_cfg, get_save_dir
 from ultralytics.data.utils import check_cls_dataset, check_det_dataset, convert_ndjson_to_yolo_if_needed
-from ultralytics.nn.modules import AdversarialPerturbationInjection, clear_boundary_context, set_boundary_context
+from ultralytics.nn.modules import AdversarialPerturbationInjection, DFL, clear_boundary_context, set_boundary_context
 from ultralytics.nn.tasks import load_checkpoint
 from ultralytics.optim import MuSGD
 from ultralytics.utils import (
@@ -54,6 +54,22 @@ from ultralytics.utils.torch_utils import (
     unwrap_model,
 )
 from ultralytics.utils import DEFAULT_CFG, GIT, LOCAL_RANK, LOGGER, RANK, TQDM, YAML, clean_url, colorstr, emojis
+
+
+def fitness_from_metrics(metrics: dict, fitness_metric: str) -> float:
+    """Resolve the scalar used by best-checkpoint selection and early stopping."""
+    metric_keys = {"map50": "metrics/mAP50(B)", "map50_95": "metrics/mAP50-95(B)"}
+    if fitness_metric not in metric_keys:
+        choices = "', '".join(metric_keys)
+        raise ValueError(
+            f"'fitness_metric={fitness_metric}' is invalid. Valid 'fitness_metric' values are '{choices}'."
+        )
+    if fitness_metric == "map50_95" and "fitness" in metrics:
+        return float(metrics["fitness"])
+    key = metric_keys[fitness_metric]
+    if key not in metrics:
+        raise KeyError(f"Validation metrics do not contain '{key}', required by fitness_metric='{fitness_metric}'.")
+    return float(metrics[key])
 
 
 class BaseTrainer:
@@ -283,6 +299,35 @@ class BaseTrainer:
         )
         self._setup_scheduler()
 
+    def _freeze_layers(self, freeze_list) -> None:
+        """Freeze requested layers and fixed DFL integral projections without broad name matching."""
+        freeze_layer_names = [f"model.{x}." for x in freeze_list]
+        fixed_dfl_parameter_ids = {
+            id(parameter)
+            for module in self.model.modules()
+            if isinstance(module, DFL)
+            for parameter in module.parameters(recurse=True)
+        }
+        fixed_dfl_parameter_names = {
+            name for name, parameter in self.model.named_parameters() if id(parameter) in fixed_dfl_parameter_ids
+        }
+        self.freeze_layer_names = freeze_layer_names + sorted(fixed_dfl_parameter_names)
+        for name, parameter in self.model.named_parameters():
+            if any(layer_name in name for layer_name in freeze_layer_names) or name in fixed_dfl_parameter_names:
+                LOGGER.info(f"Freezing layer '{name}'")
+                parameter.requires_grad = False
+            elif not parameter.requires_grad and parameter.dtype.is_floating_point:
+                LOGGER.warning(
+                    f"setting 'requires_grad=True' for frozen layer '{name}'. "
+                    "See ultralytics.engine.trainer for customization of frozen layers."
+                )
+                parameter.requires_grad = True
+        if not any(parameter.requires_grad for parameter in self.model.parameters()):
+            raise RuntimeError(
+                f"'freeze={self.args.freeze}' froze the entire model with no trainable parameters left. "
+                f"Reduce 'freeze' or pass a list of specific layer indices."
+            )
+
     def _setup_train(self):
         """Configure model, optimizer, dataloaders, and training utilities before the training loop."""
         ckpt = self.setup_model()
@@ -300,25 +345,7 @@ class BaseTrainer:
             if isinstance(self.args.freeze, int)
             else []
         )
-        always_freeze_names = [".dfl"]  # always freeze these layers
-        freeze_layer_names = [f"model.{x}." for x in freeze_list] + always_freeze_names
-        self.freeze_layer_names = freeze_layer_names
-        for k, v in self.model.named_parameters():
-            # v.register_hook(lambda x: torch.nan_to_num(x))  # NaN to 0 (commented for erratic training results)
-            if any(x in k for x in freeze_layer_names):
-                LOGGER.info(f"Freezing layer '{k}'")
-                v.requires_grad = False
-            elif not v.requires_grad and v.dtype.is_floating_point:  # only floating point Tensor can require gradients
-                LOGGER.warning(
-                    f"setting 'requires_grad=True' for frozen layer '{k}'. "
-                    "See ultralytics.engine.trainer for customization of frozen layers."
-                )
-                v.requires_grad = True
-        if not any(v.requires_grad for v in self.model.parameters()):
-            raise RuntimeError(
-                f"'freeze={self.args.freeze}' froze the entire model with no trainable parameters left. "
-                f"Reduce 'freeze' or pass a list of specific layer indices."
-            )
+        self._freeze_layers(freeze_list)
 
         # Check AMP
         self.amp = torch.tensor(self.args.amp).to(self.device)  # True or False
@@ -797,7 +824,11 @@ class BaseTrainer:
         metrics = self.validator(self)
         if metrics is None:
             return None, None
-        fitness = metrics.pop("fitness", -self.loss.detach().cpu().numpy())  # use loss as fitness measure if not found
+        if self.args.fitness_metric == "map50_95" and "fitness" not in metrics:
+            fitness = -self.loss.detach().cpu().numpy()  # preserve the framework fallback for non-detection validators
+        else:
+            fitness = fitness_from_metrics(metrics, self.args.fitness_metric)
+        metrics.pop("fitness", None)
         if not self.best_fitness or self.best_fitness < fitness:
             self.best_fitness = fitness
         return metrics, fitness

@@ -18,6 +18,8 @@ from train_levir_scripts import train_all_levir_yolov8n_p2_routing as workflow
 CONFIG_ROOT = ROOT.parent / "models_related/models_config/yolov8/levir"
 EXPERIMENT_SLUG = "levir_yolov8n_p2_ftsc_anchor_free"
 HF_REPO = "duyle2408/levir-yolov8n-p2-ftsc-anchor-free"
+FITNESS_METRIC = "map50"
+PROTOCOL_VERSION = "ftsc_corrected_ap50_v1"
 
 VARIANTS = {
     "ftsc_af_y0_baseline": CONFIG_ROOT / "yolov8n_p2_levir_ftsc_y0_baseline.yaml",
@@ -210,7 +212,7 @@ def model_for(variant: str, pretrained: str):
     return model
 
 
-def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[str, float]:
+def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[str, object]:
     """Evaluate best.pt on val/test with the experiment's fixed NMS IoU."""
     output = run_dir / "evaluation_metrics.json"
     if output.is_file():
@@ -243,6 +245,10 @@ def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[s
         metrics.update({f"{split}/{key}": float(value) for key, value in result.results_dict.items()})
         metrics[f"{split}/metrics/mAP75(B)"] = float(result.box.map75)
     metrics["nms_iou"] = 0.5
+    metrics["protocol/fitness_metric"] = args.fitness_metric
+    metrics["protocol/best_checkpoint_metric"] = args.fitness_metric
+    metrics["protocol/freeze_fix_active"] = 1.0
+    metrics["protocol/version"] = PROTOCOL_VERSION
     calibrator = getattr(trained_model.model.model[-1], "ftsc_calibrator", None)
     metrics["ftsc/enabled"] = float(calibrator is not None)
     if calibrator is not None:
@@ -359,6 +365,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--hf-repo-id", default=HF_REPO)
     args = parser.parse_args(argv)
     args.runner = Path(__file__)
+    args.fitness_metric = FITNESS_METRIC
     return args
 
 

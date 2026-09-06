@@ -144,6 +144,7 @@ def train_kwargs(args: argparse.Namespace, data_yaml: Path, seed: int, amp: bool
         "batch": args.batch_size, "device": args.device, "workers": args.workers,
         "patience": args.patience, "seed": seed, "deterministic": True,
         "amp": amp, "plots": False,
+        "fitness_metric": getattr(args, "fitness_metric", "map50_95"),
     }
     if getattr(args, "augmentation_policy", "yolo_default") == "mosaic_random_perspective_only":
         # Keep YOLO's geometric RandomPerspective transform and Mosaic, but
@@ -270,7 +271,13 @@ def write_summaries(args: argparse.Namespace) -> None:
         record = {"variant": variant, "runs": len(group)}
         keys = set.intersection(*(set(row) for row in group)) - {"variant", "seed"}
         for key in sorted(keys):
-            values = [float(row[key]) for row in group]
+            raw_values = [row[key] for row in group]
+            try:
+                values = [float(value) for value in raw_values]
+            except (TypeError, ValueError):
+                if all(value == raw_values[0] for value in raw_values):
+                    record[key] = raw_values[0]
+                continue
             record[f"{key}/mean"] = statistics.fmean(values)
             record[f"{key}/std"] = statistics.stdev(values) if len(values) > 1 else 0.0
         aggregate.append(record)

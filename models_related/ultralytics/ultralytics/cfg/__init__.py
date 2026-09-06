@@ -243,6 +243,7 @@ CFG_FRACTION_KEYS = frozenset(
     }
 )
 CFG_CHOICE_KEYS = {
+    "fitness_metric": {"map50", "map50_95"},
     "nms_method": {"hard", "soft-linear", "soft-gaussian"},
     "box_voting_weight": {"score_iou", "score_iou2"},
     "cls_geometry_mode": {"add", "concat"},
