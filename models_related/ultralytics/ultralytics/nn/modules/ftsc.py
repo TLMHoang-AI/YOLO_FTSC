@@ -516,10 +516,23 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         self.strength_max = float(config.get("strength_max", 2.0))
         self.strength_init = float(config.get("strength_init", 1.0))
         self.strength_reg_weight = float(config.get("strength_reg_weight", 1e-4))
+        configured_fixed_strengths = config.get("fixed_strengths", {})
+        if not isinstance(configured_fixed_strengths, dict):
+            raise ValueError("FTSC fixed_strengths must be a mapping of evidence name to scalar value.")
+        self.fixed_strengths = {str(name).lower(): float(value) for name, value in configured_fixed_strengths.items()}
         if not 0 < self.strength_init < self.strength_max:
             raise ValueError("FTSC strength_init must lie strictly between zero and strength_max.")
         if self.strength_reg_weight < 0:
             raise ValueError("FTSC strength_reg_weight must be non-negative.")
+        unknown_fixed_strengths = set(self.fixed_strengths) - set(self.evidence_names)
+        if unknown_fixed_strengths:
+            raise ValueError(
+                f"Fixed FTSC strengths require active evidence providers: {sorted(unknown_fixed_strengths)}"
+            )
+        if self.fixed_strengths and self.policy != "f5":
+            raise ValueError("Explicit fixed FTSC strengths are only supported by the F5 policy.")
+        if any(not 0 < value <= self.strength_max for value in self.fixed_strengths.values()):
+            raise ValueError(f"Fixed FTSC strengths must satisfy 0 < value <= strength_max ({self.strength_max}).")
         if self.position_task_specific_strength and not (set(self.evidence_names) & self.POSITION_EVIDENCE):
             raise ValueError("Task-specific Position strength requires a Position/centrality evidence provider.")
         if self.position_task_specific_strength and self.policy != "f5":
@@ -595,6 +608,8 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             probability = self.strength_init / self.strength_max
             initial_logit = math.log(probability / (1.0 - probability))
             for name in self.evidence_names:
+                if name in self.fixed_strengths:
+                    continue
                 for key in self.strength_keys(name):
                     self.strength_logits[key] = nn.Parameter(torch.tensor(initial_logit, dtype=torch.float32))
         self.last_metrics: dict[str, float] = {}
@@ -609,6 +624,10 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         """Return fixed E4 strength or bounded learnable F5 strength."""
         if self.policy == "e4":
             return reference.new_tensor(self.strength_init)
+        if name in self.fixed_strengths:
+            if task is not None:
+                raise ValueError(f"Fixed shared {name} strength does not accept task={task!r}.")
+            return reference.new_tensor(self.fixed_strengths[name])
         if name in self.POSITION_EVIDENCE and self.position_task_specific_strength:
             if task not in self.position_tasks:
                 raise ValueError(
@@ -629,6 +648,8 @@ class AnchorFreeFTSCCalibrator(nn.Module):
 
         provider_terms = []
         for name in self.evidence_names:
+            if name in self.fixed_strengths:
+                continue
             if name in self.POSITION_EVIDENCE and self.position_task_specific_strength:
                 task_terms = torch.stack(
                     [
@@ -639,7 +660,11 @@ class AnchorFreeFTSCCalibrator(nn.Module):
                 provider_terms.append(task_terms.mean())
             else:
                 provider_terms.append((self.strength(name, reference) - self.strength_init).square())
-        return self.strength_reg_weight * torch.stack(provider_terms).sum()
+        return (
+            self.strength_reg_weight * torch.stack(provider_terms).sum()
+            if provider_terms
+            else regularization
+        )
 
     def residual_fraction(self, epoch: int) -> float:
         """Return the F5 identity-to-full-gate schedule for the current zero-based epoch."""
