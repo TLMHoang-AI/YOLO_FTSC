@@ -14,11 +14,38 @@ import torch.nn.functional as F
 from ultralytics.utils import LOGGER
 from ultralytics.utils.metrics import CITYSCAPES_WEIGHT, OKS_SIGMA, RLE_WEIGHT, box_iou
 from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
-from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigner, dist2bbox, dist2rbox, make_anchors
+from ultralytics.utils.tal import (
+    RotatedTaskAlignedAssigner,
+    SupportAwareTaskAlignedAssigner,
+    TaskAlignedAssigner,
+    dist2bbox,
+    dist2rbox,
+    make_anchors,
+)
 from ultralytics.utils.torch_utils import autocast
 
 from .metrics import bbox_iou, probiou
 from .tal import bbox2dist, rbox2dist
+
+
+def localization_distillation_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    positive_mask: torch.Tensor,
+    lambda_ld: float,
+) -> torch.Tensor:
+    """Detached teacher-to-student DFL distribution KL used by N3."""
+    if student_logits.shape != teacher_logits.shape:
+        raise ValueError("Localization Distillation requires equal student and teacher DFL shapes")
+    if lambda_ld < 0:
+        raise ValueError("lambda_ld must be non-negative")
+    if lambda_ld == 0 or not positive_mask.any():
+        return student_logits.sum() * 0.0
+    teacher_prob = F.softmax(teacher_logits.float(), dim=-1).detach()
+    divergence = F.kl_div(
+        F.log_softmax(student_logits.float(), dim=-1), teacher_prob, reduction="none"
+    ).sum(-1)
+    return divergence[positive_mask].mean().to(student_logits.dtype) * float(lambda_ld)
 
 
 @dataclass(frozen=True)
@@ -919,19 +946,42 @@ class v8DetectionLoss:
 
         self.use_dfl = m.reg_max > 1
 
+        self.localization_distill_enabled = bool(getattr(h, "localization_distill", False))
+        self.localization_distill_lambda = float(getattr(h, "localization_distill_lambda", 0.1))
+        self.localization_distill_teacher = getattr(model, "_ftsc_localization_teacher", None)
+        if self.localization_distill_enabled and self.localization_distill_teacher is None:
+            raise ValueError("localization_distill requires an explicit frozen teacher attached by the runner")
+        if self.localization_distill_enabled and self.localization_distill_lambda < 0:
+            raise ValueError("localization_distill_lambda must be non-negative")
+        if self.localization_distill_teacher is not None:
+            self.localization_distill_teacher.to(device)
+            self.localization_distill_teacher.eval()
+            for parameter in self.localization_distill_teacher.parameters():
+                parameter.requires_grad_(False)
+        self.localization_distill_metrics: dict[str, float] = {}
+
         # Class weights for handling imbalanced datasets
         self.class_weights = getattr(model, "class_weights", None)
         if self.class_weights is not None:
             self.class_weights = self.class_weights.to(device).view(1, 1, -1)
 
-        self.assigner = TaskAlignedAssigner(
-            topk=int(getattr(h, "tal_topk", tal_topk)),
-            num_classes=self.nc,
-            alpha=float(getattr(h, "tal_alpha", 0.5)),
-            beta=float(getattr(h, "tal_beta", 6.0)),
-            stride=self.stride.tolist(),
-            topk2=tal_topk2,
+        assigner_kwargs = {
+            "topk": int(getattr(h, "tal_topk", tal_topk)),
+            "num_classes": self.nc,
+            "alpha": float(getattr(h, "tal_alpha", 0.5)),
+            "beta": float(getattr(h, "tal_beta", 6.0)),
+            "stride": self.stride.tolist(),
+            "topk2": tal_topk2,
+        }
+        self.assigner = (
+            SupportAwareTaskAlignedAssigner(
+                **assigner_kwargs,
+                support_topk=int(getattr(h, "support_assignment_topk", 5)),
+            )
+            if bool(getattr(h, "support_assignment", False))
+            else TaskAlignedAssigner(**assigner_kwargs)
         )
+        self.support_assignment_metrics: dict[str, float] = {}
         self.bbox_loss = BboxLoss(
             m.reg_max,
             iou_loss=getattr(h, "bbox_iou_loss", "ciou"),
@@ -1595,6 +1645,7 @@ class v8DetectionLoss:
             target_scores = target_scores.to(device=self.device, dtype=pred_scores.dtype)
             fg_mask = fg_mask.to(device=self.device)
             target_gt_idx = target_gt_idx.to(device=self.device)
+        self.support_assignment_metrics = dict(getattr(self.assigner, "last_metrics", {}))
         fg_mask = fg_mask.bool()
         self.last_assignment = (
             tuple(value.detach().clone() for value in (target_bboxes, target_scores, fg_mask, target_gt_idx))
@@ -1703,7 +1754,38 @@ class v8DetectionLoss:
                 CIoU=False,
             ).squeeze(-1).clamp(0, 1).detach()
         ftsc_weights = None
-        self.ftsc_metrics = {}
+        self.ftsc_metrics = dict(self.support_assignment_metrics)
+        if fg_mask.any():
+            assigned_scores = target_scores.sum(-1)[fg_mask].detach().float()
+            self.ftsc_metrics.update(
+                {
+                    "support_assigned_target_score_mean": float(assigned_scores.mean().item()),
+                    "support_assigned_target_score_std": float(assigned_scores.std(unbiased=False).item()),
+                    "support_assigned_realized_iou_mean": float(realized_iou.mean().item()) if realized_iou is not None else 0.0,
+                    "support_assigned_realized_iou_std": float(realized_iou.std(unbiased=False).item()) if realized_iou is not None else 0.0,
+                }
+            )
+        zoom_records = batch.get("adaptive_zoom")
+        if isinstance(zoom_records, list) and zoom_records and isinstance(zoom_records[0], dict):
+            count = float(len(zoom_records))
+            self.ftsc_metrics.update(
+                {
+                    "zoom_applied_fraction": sum(float(item.get("applied", 0.0)) for item in zoom_records) / count,
+                    "zoom_factor_mean": sum(float(item.get("factor", 1.0)) for item in zoom_records) / count,
+                    "zoom_factor_std": max(
+                        sum(float(item.get("factor_sq", 1.0)) for item in zoom_records) / count
+                        - (sum(float(item.get("factor", 1.0)) for item in zoom_records) / count) ** 2,
+                        0.0,
+                    ) ** 0.5,
+                    "zoom_factor_max": max(float(item.get("factor", 1.0)) for item in zoom_records),
+                    "tiny_gt_count": sum(float(item.get("tiny_gt_count", 0.0)) for item in zoom_records),
+                    "zoomed_gt_count": sum(float(item.get("zoomed_gt_count", 0.0)) for item in zoom_records),
+                    "boxes_dropped_by_zoom": sum(float(item.get("boxes_dropped", 0.0)) for item in zoom_records),
+                    "empty_after_zoom_count": sum(float(item.get("empty_after", 0.0)) for item in zoom_records),
+                    "bbox_min_side_before_mean": sum(float(item.get("bbox_min_side_before", 0.0)) for item in zoom_records) / count,
+                    "bbox_min_side_after_mean": sum(float(item.get("bbox_min_side_after", 0.0)) for item in zoom_records) / count,
+                }
+            )
         if self.ftsc_calibrator is not None:
             classification_quality = None
             if "dcfl_dgmm_quality" in self.ftsc_calibrator.evidence_names and fg_mask.any():
@@ -1722,12 +1804,15 @@ class v8DetectionLoss:
                 classification_quality=classification_quality,
                 localization_quality=realized_iou,
             )
-            self.ftsc_metrics = dict(self.ftsc_calibrator.last_metrics)
+            self.ftsc_metrics.update(self.ftsc_calibrator.last_metrics)
             flat_stride = stride_tensor.squeeze(-1)
             for level_index, level_stride in enumerate(self.stride.tolist(), start=2):
                 level_mask = flat_stride == float(level_stride)
                 self.ftsc_metrics[f"ftsc_positive_count_p{level_index}"] = float(
                     fg_mask[:, level_mask].sum().item()
+                )
+                self.ftsc_metrics[f"ftsc_positive_fraction_p{level_index}"] = float(
+                    fg_mask[:, level_mask].sum().item() / max(float(fg_mask.sum().item()), 1.0)
                 )
             if fg_mask.any():
                 positive_scores = target_scores.sum(-1)[fg_mask]
@@ -2326,6 +2411,31 @@ class v8DetectionLoss:
         if self.p2_detail_rec_gain > 0:
             loss[dgfe_idx] = self._p2_detail_reconstruction_loss(preds) * self.p2_detail_rec_gain
             self.p2_detail_metrics["p2_detail_applied_loss"] = float(loss[dgfe_idx].detach().item())
+        self.localization_distill_metrics = {}
+        if self.localization_distill_enabled:
+            teacher = self.localization_distill_teacher
+            base_dfl_loss = loss[2].detach()
+            with torch.no_grad():
+                teacher_output = teacher(batch["img"])
+                teacher_preds = teacher_output[1] if isinstance(teacher_output, tuple) else teacher_output
+                teacher_logits = teacher_preds["boxes"].permute(0, 2, 1).contiguous()
+            if teacher_logits.shape != pred_distri.shape:
+                raise ValueError(
+                    "Localization Distillation requires teacher/student DFL logits with identical shape; "
+                    f"got {tuple(teacher_logits.shape)} vs {tuple(pred_distri.shape)}"
+                )
+            weighted_ld_loss = localization_distillation_loss(
+                pred_distri, teacher_logits, fg_mask, self.localization_distill_lambda
+            )
+            ld_loss = weighted_ld_loss / max(self.localization_distill_lambda, 1e-12)
+            loss[2] = loss[2] + weighted_ld_loss
+            self.localization_distill_metrics = {
+                "ld_loss": float(ld_loss.detach().item()),
+                "ld_base_dfl_loss": float(base_dfl_loss.item()),
+                "ld_teacher_student_divergence": float(ld_loss.detach().item()),
+                "ld_active_positive_count": float(fg_mask.sum().item()),
+                "ld_lambda": self.localization_distill_lambda,
+            }
         return (
             (fg_mask, target_gt_idx, target_bboxes, anchor_points, stride_tensor),
             loss,

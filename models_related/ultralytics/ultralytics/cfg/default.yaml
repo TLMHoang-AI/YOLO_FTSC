@@ -230,6 +230,17 @@ mixup: 0.0 # (float) MixUp augmentation probability
 cutmix: 0.0 # (float) CutMix augmentation probability
 copy_paste: 0.0 # (float) segmentation copy-paste probability
 copy_paste_mode: flip # (str) copy-paste strategy for segmentation: flip or mixup
+adaptive_zoom: false # (bool) training-only GT-aware crop-and-resize
+adaptive_zoom_probability: 0.5 # (float) probability for the project Adaptive Zoom adaptation
+adaptive_zoom_target_min_side: 16.0 # (float) target tiny-object min side in pixels
+adaptive_zoom_max_factor: 2.0 # (float) maximum crop zoom factor
+adaptive_zoom_visible_ratio: 0.5 # (float) minimum visible-area ratio after crop
+adaptive_zoom_center_jitter: 0.05 # (float) deterministic seeded crop-center jitter
+support_assignment: false # (bool) posterior support-aware TAL candidate filtering
+support_assignment_topk: 5 # (int) retained useful candidates per GT
+localization_distill: false # (bool) train-only DFL localization distillation
+localization_distill_teacher: "" # (str) explicit teacher checkpoint path
+localization_distill_lambda: 0.1 # (float) conservative LD coefficient
 auto_augment: randaugment # (str) classification auto augmentation policy: randaugment, autoaugment, augmix
 erasing: 0.4 # (float) random erasing probability for classification (0.0–1.0)
 

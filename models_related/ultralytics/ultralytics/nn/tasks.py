@@ -722,6 +722,7 @@ class BaseModel(torch.nn.Module):
             hbs_metrics = dict(head.last_hbs_metrics)
         diagnostics = {}
         diagnostics.update(getattr(self.criterion, "ftsc_metrics", {}))
+        diagnostics.update(getattr(self.criterion, "localization_distill_metrics", {}))
         diagnostics.update(hbs_metrics)
         diagnostics.update(getattr(self.criterion, "positive_confidence_rescue_metrics", {}))
         diagnostics.update(getattr(self.criterion, "consensus_metrics", {}))

@@ -286,6 +286,76 @@ class TaskAlignedAssigner(nn.Module):
 
         return target_labels, target_bboxes, target_scores
 
+
+class SupportAwareTaskAlignedAssigner(TaskAlignedAssigner):
+    """Keep useful, feasible TAL supports instead of maximizing raw count.
+
+    The standard TAL pass remains the candidate generator and conflict
+    resolver. This adapter only filters its assigned positives per GT by the
+    realized posterior target score, so every retained point is still inside
+    the standard geometric feasible set and produces a valid DFL target.
+    """
+
+    def __init__(self, *args, support_topk: int = 5, **kwargs):
+        super().__init__(*args, **kwargs)
+        if support_topk < 1:
+            raise ValueError("support_topk must be positive")
+        self.support_topk = int(support_topk)
+        self.last_metrics: dict[str, float] = {}
+
+    @torch.no_grad()
+    def forward(self, pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt):
+        result = super().forward(pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt)
+        target_labels, target_bboxes, target_scores, fg_mask, target_gt_idx = result
+        if gt_bboxes.shape[1] == 0:
+            self.last_metrics = {}
+            return result
+
+        keep = fg_mask.clone()
+        total_gt = int(mask_gt.sum().item())
+        zero_before = 0
+        dropped = 0
+        quality_mass, effective_count, positive_counts = [], [], []
+        for batch_index in range(gt_bboxes.shape[0]):
+            for gt_index in range(gt_bboxes.shape[1]):
+                if not bool(mask_gt[batch_index, gt_index, 0]):
+                    continue
+                assigned = torch.where(fg_mask[batch_index] & (target_gt_idx[batch_index] == gt_index))[0]
+                if assigned.numel() == 0:
+                    zero_before += 1
+                    continue
+                gt_class = int(gt_labels[batch_index, gt_index, 0].item())
+                scores = target_scores[batch_index, assigned, gt_class]
+                positive_counts.append(int(assigned.numel()))
+                mass = scores.clamp_min(0)
+                quality_mass.append(float(mass.sum().item()))
+                effective_count.append(float(mass.sum().square().div(mass.square().sum().clamp_min(self.eps)).item()))
+                if assigned.numel() > self.support_topk:
+                    selected = assigned[torch.topk(scores, self.support_topk, largest=True, sorted=False).indices]
+                    keep[batch_index, assigned] = False
+                    keep[batch_index, selected] = True  # retain the best support; at least one survives
+                    dropped += int(assigned.numel() - selected.numel())
+
+        target_scores = target_scores * keep.unsqueeze(-1).to(target_scores.dtype)
+        target_bboxes = target_bboxes.clone()
+        target_bboxes[~keep] = 0
+        target_labels = target_labels.clone()
+        target_labels[~keep] = self.num_classes
+        target_gt_idx = target_gt_idx.clone()
+        target_gt_idx[~keep] = 0
+        self.last_metrics = {
+            "support_gt_count": float(total_gt),
+            "support_zero_positive_fraction": zero_before / max(total_gt, 1),
+            "support_single_positive_fraction": float(sum(value == 1 for value in positive_counts)) / max(total_gt, 1),
+            "support_mean_positives_per_gt": sum(positive_counts) / max(len(positive_counts), 1),
+            "support_mean_target_quality_mass": sum(quality_mass) / max(len(quality_mass), 1),
+            "support_mean_effective_target_count": sum(effective_count) / max(len(effective_count), 1),
+            "support_candidates_dropped": float(dropped),
+            "support_conflict_count": 0.0,  # standard TAL already resolved conflicts before this filter
+            "support_gt_starvation_count": 0.0,
+        }
+        return target_labels, target_bboxes, target_scores, keep, target_gt_idx
+
     def select_candidates_in_gts(self, xy_centers, gt_bboxes, mask_gt, eps=1e-9):
         """Select positive anchor centers within ground truth bounding boxes.
 

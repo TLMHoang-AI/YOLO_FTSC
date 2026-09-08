@@ -1,0 +1,63 @@
+{
+  "variant": "Y4_legacy_compat",
+  "config": "models_related/models_config/yolov8/levir/yolov8n_p2_levir_ftsc_y4_legacy_compat.yaml",
+  "historical_source": {
+    "repository": "yolo_code_legacy_y4_repro",
+    "commit": "ca48644cd1abe08315de08008d138f84565bf6f7",
+    "oracle_is_read_only": true,
+    "test_ap50": {
+      "42": 0.7878924760784733,
+      "43": 0.7784960372913239,
+      "44": 0.803752464872023
+    },
+    "mean_test_ap50": 0.7900469927472734
+  },
+  "semantics": {
+    "policy": "f5",
+    "evidence": [
+      "position_gaussian",
+      "dfl_distribution"
+    ],
+    "dfl_strength": {
+      "mode": "fixed",
+      "value": 1.0,
+      "trainable": false
+    },
+    "position_strength_trainable": true,
+    "dfl_evidence": {
+      "detached": true,
+      "routes": [
+        "cls"
+      ]
+    },
+    "assignment": "standard TaskAlignedAssigner",
+    "fitness_metric": "map50_95",
+    "optimizer": "auto (nc=1, <=10000 iterations resolves to AdamW, lr=0.002, beta1=0.9)",
+    "scheduler": "linear, lrf=0.01",
+    "augmentation": {
+      "mosaic": 1.0,
+      "close_mosaic": 10,
+      "hsv_h": 0.015,
+      "hsv_s": 0.7,
+      "hsv_v": 0.4
+    },
+    "epochs": 100,
+    "patience": 20,
+    "default_seeds": [
+      42
+    ]
+  },
+  "freeze_policy": {
+    "historical_broad_dfl_name_freeze": false,
+    "main_narrow_projection_freeze": true,
+    "note": "Only actual DFL integral projection parameters are frozen; FTSC Position remains trainable."
+  },
+  "runtime_dependency": "none on legacy code; manifest is provenance only",
+  "source_hashes": {
+    "main_compat_config_sha256": "1aeb75b72d67db3d0e9122a0ca8e74b45c92ce2abe0fd784013d88529a26c5cc",
+    "main_canonical_y4_yaml_sha256": "e1a04a832c26d69ee878493a5cac6e5dc9086cc5dd53e9f9839daaea18bbaf7d",
+    "main_legacy_shared_tal_sha256": "6f0be1bf76e9994461fafda24a2e7878de18332a7c65e6d0022c7f85a3c3e822",
+    "main_legacy_shared_metrics_sha256": "15e6e31824736cdfa41f4603cb8d053fe8c419d24b11e36de4339e85a6924d8a",
+    "main_trainer_sha256": "2e3bbf02ff4e475308f32ebd9d5d88b62288b1fa69cab634c01ab95f7ff3543e"
+  }
+}

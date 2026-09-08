@@ -1,0 +1,54 @@
+{
+  "experiment": "levir_yolov8n_p2_ftsc_nomosaic_nextgen",
+  "protocol_version": "ftsc_nomosaic_nextgen_v1",
+  "variants": {
+    "N0_y4_nomosaic": "Y4/F5 fixed DFL=1 control with Mosaic=0",
+    "N1_y4_nomosaic_adaptive_zoom": "N0 + training-only GT-aware crop/resize",
+    "N2_y4_nomosaic_support_assignment": "N0 + TAL-feasible posterior support filter, top five per GT",
+    "N3_y4_nomosaic_localization_distill": "N0 + detached teacher DFL-distribution KL on matched positives"
+  },
+  "locked_protocol": {
+    "seeds": [42],
+    "split_seed": 42,
+    "epochs": 100,
+    "patience": 20,
+    "imgsz": 512,
+    "batch": 8,
+    "workers": 4,
+    "optimizer": "auto -> AdamW (nc=1, 100-epoch LEVIR horizon)",
+    "cos_lr": false,
+    "lrf": 0.01,
+    "fitness": "map50_95",
+    "nms_iou": 0.5,
+    "mosaic": 0.0,
+    "close_mosaic": 0
+  },
+  "adaptive_zoom": {
+    "source": "Wang et al., Adaptive image zoom-in with bounding box transformation for UAV object detection, ISPRS JPRS 233 (2026), DOI 10.1016/j.isprsjprs.2026.01.036",
+    "project_adaptation": "training-only GT-aware crop/resize; no learned/non-uniform ZoomDet module",
+    "probability": 0.5,
+    "target_min_side_px": 16.0,
+    "max_factor": 2.0,
+    "visible_ratio": 0.5,
+    "center_jitter": 0.05
+  },
+  "assignment": {
+    "motivation": ["RFLA (ECCV 2022)", "DCFL (CVPR 2023)", "NWD-RKA (ISPRS JPRS 2022)"],
+    "implementation": "standard YOLO TAL candidate pool and conflict resolution followed by feasible posterior top-five support filtering",
+    "new_loss_or_inference_head": false
+  },
+  "localization_distillation": {
+    "source": "Zheng et al., Localization Distillation for Dense Object Detection, CVPR 2022",
+    "teacher_policy": "explicit --teacher path only; no auto-selection/download",
+    "target": "detached teacher DFL localization distribution on student matched positives",
+    "lambda": 0.1,
+    "inference_change": false
+  },
+  "crosskd": {
+    "source": "Wang et al., CrossKD: Cross-Head Knowledge Distillation for Object Detection, CVPR 2024",
+    "status": "deferred",
+    "reason": "would require an invasive generic head adapter; core N0-N3 remains isolated"
+  },
+  "historical_reference": "Y4+Mosaic legacy results remain in results/ and are not causal baselines for N1-N3",
+  "training_run": false
+}

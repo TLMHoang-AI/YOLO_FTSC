@@ -132,6 +132,164 @@ class RandomHFAttenuation:
         return labels
 
 
+class AdaptiveZoom:
+    """Training-only GT-aware crop-and-resize for tiny-object supervision.
+
+    This is a small project adaptation motivated by ZoomDet, rather than a
+    reimplementation of its learned/non-uniform zoom module. It operates on
+    the single-image labels after the normal geometric transform and before
+    normalization. Validation never constructs this transform.
+    """
+
+    def __init__(
+        self,
+        target_min_side: float = 16.0,
+        p: float = 0.5,
+        z_max: float = 2.0,
+        visible_ratio: float = 0.5,
+        center_jitter: float = 0.05,
+        eps: float = 1e-6,
+    ):
+        if target_min_side <= 0 or not 0 <= p <= 1 or z_max < 1 or not 0 <= visible_ratio <= 1:
+            raise ValueError("AdaptiveZoom parameters are outside their valid ranges")
+        self.target_min_side = float(target_min_side)
+        self.p = float(p)
+        self.z_max = float(z_max)
+        self.visible_ratio = float(visible_ratio)
+        self.center_jitter = float(center_jitter)
+        self.eps = float(eps)
+        self._metrics = {"samples": 0, "zoomed_samples": 0, "zoom_factor_sum": 0.0,
+                         "zoom_factor_sq_sum": 0.0, "zoom_factor_max": 1.0,
+                         "tiny_gt_count": 0, "zoomed_gt_count": 0,
+                         "boxes_dropped_by_zoom": 0, "empty_after_zoom_count": 0,
+                         "bbox_min_side_before_sum": 0.0, "bbox_min_side_after_sum": 0.0,
+                         "bbox_min_side_samples": 0}
+
+    def reset_metrics(self) -> None:
+        for key in self._metrics:
+            self._metrics[key] = 0 if key.endswith("count") or key.endswith("samples") else 0.0
+        self._metrics["zoom_factor_max"] = 1.0
+
+    def metrics(self) -> dict[str, float]:
+        samples = max(int(self._metrics["samples"]), 1)
+        applied = int(self._metrics["zoomed_samples"])
+        mean = self._metrics["zoom_factor_sum"] / max(applied, 1)
+        variance = self._metrics["zoom_factor_sq_sum"] / max(applied, 1) - mean * mean
+        box_samples = max(int(self._metrics["bbox_min_side_samples"]), 1)
+        return {
+            "zoom_applied_fraction": applied / samples,
+            "zoom_factor_mean": mean,
+            "zoom_factor_std": max(variance, 0.0) ** 0.5,
+            "zoom_factor_max": float(self._metrics["zoom_factor_max"]),
+            "tiny_gt_count": float(self._metrics["tiny_gt_count"]),
+            "zoomed_gt_count": float(self._metrics["zoomed_gt_count"]),
+            "boxes_dropped_by_zoom": float(self._metrics["boxes_dropped_by_zoom"]),
+            "empty_after_zoom_count": float(self._metrics["empty_after_zoom_count"]),
+            "bbox_min_side_before_mean": self._metrics["bbox_min_side_before_sum"] / box_samples,
+            "bbox_min_side_after_mean": self._metrics["bbox_min_side_after_sum"] / box_samples,
+        }
+
+    def __call__(self, labels: dict[str, Any]) -> dict[str, Any]:
+        self._metrics["samples"] += 1
+        labels["adaptive_zoom"] = {
+            "applied": 0.0, "factor": 1.0, "factor_sq": 1.0, "tiny_gt_count": 0.0,
+            "zoomed_gt_count": 0.0, "boxes_dropped": 0.0, "empty_after": 0.0,
+            "bbox_min_side_before": 0.0, "bbox_min_side_after": 0.0,
+        }
+        image = labels.get("img")
+        instances = labels.get("instances")
+        if image is None or instances is None or len(instances) == 0 or random.random() >= self.p:
+            return labels
+
+        height, width = image.shape[:2]
+        instances.convert_bbox(format="xyxy")
+        if instances.normalized:
+            instances.denormalize(width, height)
+        boxes = np.asarray(instances.bboxes, dtype=np.float32)
+        if boxes.size == 0:
+            return labels
+        widths = np.maximum(boxes[:, 2] - boxes[:, 0], 0.0)
+        heights = np.maximum(boxes[:, 3] - boxes[:, 1], 0.0)
+        min_sides = np.minimum(widths, heights)
+        tiny = np.flatnonzero((min_sides > self.eps) & (min_sides < self.target_min_side))
+        self._metrics["tiny_gt_count"] += int(tiny.size)
+        if tiny.size == 0:
+            return labels
+
+        # A tiny-GT cluster gets one crop; this avoids independently moving
+        # boxes and keeps all labels in one coherent image coordinate system.
+        centers = (boxes[tiny, :2] + boxes[tiny, 2:]) * 0.5
+        center = centers.mean(axis=0)
+        min_side = float(min_sides[tiny].min())
+        zoom = float(np.clip(self.target_min_side / max(min_side, self.eps), 1.0, self.z_max))
+        crop_w = max(2, min(width, int(round(width / zoom))))
+        crop_h = max(2, min(height, int(round(height / zoom))))
+        jitter_x = random.uniform(-self.center_jitter, self.center_jitter) * crop_w
+        jitter_y = random.uniform(-self.center_jitter, self.center_jitter) * crop_h
+        left = int(round(center[0] + jitter_x - crop_w / 2))
+        top = int(round(center[1] + jitter_y - crop_h / 2))
+        left = min(max(left, 0), width - crop_w)
+        top = min(max(top, 0), height - crop_h)
+        right, bottom = left + crop_w, top + crop_h
+
+        cropped = image[top:bottom, left:right]
+        if cropped.size == 0:
+            return labels
+        resized = cv2.resize(cropped, (width, height), interpolation=cv2.INTER_LINEAR)
+        sx, sy = width / crop_w, height / crop_h
+        shifted = boxes.copy()
+        shifted[:, [0, 2]] = (shifted[:, [0, 2]] - left) * sx
+        shifted[:, [1, 3]] = (shifted[:, [1, 3]] - top) * sy
+        old_area = np.maximum(widths * heights, self.eps)
+        shifted[:, [0, 2]] = shifted[:, [0, 2]].clip(0, width)
+        shifted[:, [1, 3]] = shifted[:, [1, 3]].clip(0, height)
+        new_w = np.maximum(shifted[:, 2] - shifted[:, 0], 0.0)
+        new_h = np.maximum(shifted[:, 3] - shifted[:, 1], 0.0)
+        visible = (new_w * new_h) / old_area
+        keep = (visible >= self.visible_ratio) & (new_w > self.eps) & (new_h > self.eps)
+        dropped = int((~keep).sum())
+        labels["img"] = np.ascontiguousarray(resized)
+        transformed_segments = instances.segments
+        if len(instances.segments):
+            segments = []
+            for segment, retain in zip(instances.segments, keep, strict=True):
+                points = np.asarray(segment, dtype=np.float32).copy()
+                points[:, 0] = ((points[:, 0] - left) * sx).clip(0, width)
+                points[:, 1] = ((points[:, 1] - top) * sy).clip(0, height)
+                segments.append(points)
+            transformed_segments = np.stack(segments, axis=0) if segments else np.zeros((0, 0, 2), dtype=np.float32)
+            transformed_segments = transformed_segments[keep]
+        transformed_keypoints = instances.keypoints
+        if instances.keypoints is not None:
+            keypoints = instances.keypoints[keep].copy()
+            keypoints[..., 0] = ((keypoints[..., 0] - left) * sx).clip(0, width)
+            keypoints[..., 1] = ((keypoints[..., 1] - top) * sy).clip(0, height)
+            transformed_keypoints = keypoints
+        instances.update(bboxes=shifted[keep], segments=transformed_segments, keypoints=transformed_keypoints)
+        labels["cls"] = labels["cls"][keep]
+        instances.normalized = False
+        self._metrics["zoomed_samples"] += 1
+        self._metrics["zoom_factor_sum"] += zoom
+        self._metrics["zoom_factor_sq_sum"] += zoom * zoom
+        self._metrics["zoom_factor_max"] = max(self._metrics["zoom_factor_max"], zoom)
+        self._metrics["zoomed_gt_count"] += int(keep[tiny].sum())
+        self._metrics["bbox_min_side_before_sum"] += float(min_sides[tiny].mean())
+        tiny_after = np.minimum(new_w[tiny], new_h[tiny])[keep[tiny]]
+        self._metrics["bbox_min_side_after_sum"] += float(tiny_after.mean()) if tiny_after.size else 0.0
+        self._metrics["bbox_min_side_samples"] += 1
+        self._metrics["boxes_dropped_by_zoom"] += dropped
+        if not keep.any():
+            self._metrics["empty_after_zoom_count"] += 1
+        labels["adaptive_zoom"] = {
+            "applied": 1.0, "factor": zoom, "factor_sq": zoom * zoom, "tiny_gt_count": float(tiny.size),
+            "zoomed_gt_count": float(keep[tiny].sum()), "boxes_dropped": float(dropped),
+            "empty_after": float(not keep.any()),
+            "bbox_min_side_before": float(min_sides[tiny].mean()),
+            "bbox_min_side_after": float(tiny_after.mean()) if tiny_after.size else 0.0,
+        }
+        return labels
+
+
 class Compose:
     """A class for composing multiple image transformations.
 
@@ -3025,6 +3183,17 @@ def v8_transforms(dataset, imgsz: int, hyp: IterableSimpleNamespace, stretch: bo
                 max_alpha=getattr(hyp, "hf_atten_max_alpha", 1.0),
                 blur_kernel=getattr(hyp, "hf_atten_blur_kernel", 5),
                 mask_grid=getattr(hyp, "hf_atten_mask_grid", 16),
+            ),
+            # Run after all ordinary image/geometry controls and immediately
+            # before Format converts coordinates to normalized tensors.
+            AdaptiveZoom(
+                target_min_side=float(getattr(hyp, "adaptive_zoom_target_min_side", 16.0)),
+                p=float(getattr(hyp, "adaptive_zoom_probability", 0.0))
+                if bool(getattr(hyp, "adaptive_zoom", False))
+                else 0.0,
+                z_max=float(getattr(hyp, "adaptive_zoom_max_factor", 2.0)),
+                visible_ratio=float(getattr(hyp, "adaptive_zoom_visible_ratio", 0.5)),
+                center_jitter=float(getattr(hyp, "adaptive_zoom_center_jitter", 0.05)),
             ),
         ]
     )  # transforms
