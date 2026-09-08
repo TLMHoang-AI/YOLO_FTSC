@@ -11,6 +11,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
+# Fixed, pre-registered interpretation thresholds for observational diagnostics.
+# They are not used by the loss or optimizer and are not tuned against results.
+FTSC_NEAR_IDENTITY_WEIGHT_STD_TOL = 0.01
+FTSC_MEANINGFUL_RANKING_WEIGHT_RANGE_TOL = 0.05
+
 from ultralytics.utils import LOGGER
 from ultralytics.utils.metrics import CITYSCAPES_WEIGHT, OKS_SIGMA, RLE_WEIGHT, box_iou
 from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
@@ -1002,6 +1008,24 @@ class v8DetectionLoss:
             return 0.0
         return float((left * right).sum().div(denominator).item())
 
+    @staticmethod
+    def _ftsc_stats(prefix: str, values: torch.Tensor) -> dict[str, float]:
+        """Return detached finite summary statistics without retaining a graph."""
+        if values.numel() == 0:
+            return {
+                f"{prefix}_mean": 0.0,
+                f"{prefix}_std": 0.0,
+                f"{prefix}_min": 0.0,
+                f"{prefix}_max": 0.0,
+            }
+        detached = values.detach().float().flatten()
+        return {
+            f"{prefix}_mean": float(detached.mean().item()),
+            f"{prefix}_std": float(detached.std(unbiased=False).item()),
+            f"{prefix}_min": float(detached.min().item()),
+            f"{prefix}_max": float(detached.max().item()),
+        }
+
     def preprocess(self, targets: torch.Tensor, batch_size: int, scale_tensor: torch.Tensor) -> torch.Tensor:
         """Preprocess targets by converting to tensor format and scaling coordinates."""
         nl, ne = targets.shape
@@ -1627,14 +1651,61 @@ class v8DetectionLoss:
                 group_weight_means = group_weight_sum[group_count_dense > 0] / group_count_dense[
                     group_count_dense > 0
                 ]
-                self.ftsc_metrics["ftsc_mean_positives_per_gt"] = float(group_counts.float().mean().item())
+                valid_gt_mask = mask_gt.squeeze(-1).bool()
+                valid_gt_batch = torch.arange(batch_size, device=self.device).view(-1, 1).expand_as(valid_gt_mask)[
+                    valid_gt_mask
+                ]
+                valid_gt_index = torch.arange(mask_gt.shape[1], device=self.device).view(1, -1).expand_as(
+                    valid_gt_mask
+                )[valid_gt_mask]
+                valid_group_ids = valid_gt_batch * fg_mask.shape[1] + valid_gt_index
+                valid_group_counts = group_count_dense[valid_group_ids]
+                valid_group_counts_float = valid_group_counts.float()
+                self.ftsc_metrics["ftsc_gt_count"] = float(valid_group_counts.numel())
+                self.ftsc_metrics["ftsc_zero_positive_gt_fraction"] = float(
+                    (valid_group_counts == 0).float().mean().item()
+                )
                 self.ftsc_metrics["ftsc_single_positive_gt_fraction"] = float(
-                    (group_counts == 1).float().mean().item()
+                    (valid_group_counts == 1).float().mean().item()
+                )
+                self.ftsc_metrics["ftsc_multi_positive_gt_fraction"] = float(
+                    (valid_group_counts >= 2).float().mean().item()
+                )
+                self.ftsc_metrics["ftsc_mean_positives_per_gt"] = float(valid_group_counts_float.mean().item())
+                self.ftsc_metrics["ftsc_median_positives_per_gt"] = float(valid_group_counts_float.median().item())
+                self.ftsc_metrics["ftsc_max_positives_per_gt"] = float(valid_group_counts_float.max().item())
+                self.ftsc_metrics["ftsc_positive_group_mean_positives_per_gt"] = float(
+                    group_counts.float().mean().item()
                 )
                 self.ftsc_metrics["ftsc_per_gt_weight_mean"] = float(group_weight_means.float().mean().item())
                 self.ftsc_metrics["ftsc_per_gt_weight_mean_std"] = float(
                     group_weight_means.float().std(unbiased=False).item()
                 )
+                group_weight_stds = []
+                group_weight_ranges = []
+                group_effective_counts = []
+                for _group_id in group_ids.unique():
+                    _values = cls_ftsc_weight[group_ids == _group_id].detach().float()
+                    group_weight_stds.append(_values.std(unbiased=False))
+                    group_weight_ranges.append(_values.max() - _values.min())
+                    group_effective_counts.append(
+                        _values.sum().square() / _values.square().sum().clamp_min(1e-12)
+                    )
+                _weight_stds = torch.stack(group_weight_stds)
+                _weight_ranges = torch.stack(group_weight_ranges)
+                _effective_counts = torch.stack(group_effective_counts)
+                self.ftsc_metrics["ftsc_per_gt_weight_std_mean"] = float(_weight_stds.mean().item())
+                self.ftsc_metrics["ftsc_per_gt_weight_std_median"] = float(_weight_stds.median().item())
+                self.ftsc_metrics["ftsc_per_gt_weight_range_mean"] = float(_weight_ranges.mean().item())
+                self.ftsc_metrics["ftsc_per_gt_weight_range_median"] = float(_weight_ranges.median().item())
+                self.ftsc_metrics["ftsc_per_gt_effective_positive_mean"] = float(_effective_counts.mean().item())
+                self.ftsc_metrics["ftsc_gt_near_identity_fraction"] = float(
+                    (_weight_stds <= FTSC_NEAR_IDENTITY_WEIGHT_STD_TOL).float().mean().item()
+                )
+                self.ftsc_metrics["ftsc_gt_meaningful_ranking_fraction"] = float(
+                    (_weight_ranges >= FTSC_MEANINGFUL_RANKING_WEIGHT_RANGE_TOL).float().mean().item()
+                )
+                self.ftsc_metrics.update(self._ftsc_stats("ftsc_assigned_target_score", positive_scores))
         cls_target_scores = target_scores
         cls_target_scores_sum = target_scores_sum
         assigned_iou = None
@@ -1651,6 +1722,7 @@ class v8DetectionLoss:
             self.ftsc_metrics["ftsc_corr_weight_realized_iou"] = self._ftsc_correlation(
                 ftsc_weights["cls"], realized_iou
             )
+            self.ftsc_metrics.update(self._ftsc_stats("ftsc_assigned_realized_iou", realized_iou))
         loc_target_bboxes, loc_target_scores, loc_fg_mask = self.build_localization_targets(
             anchor_points,
             stride_tensor,
