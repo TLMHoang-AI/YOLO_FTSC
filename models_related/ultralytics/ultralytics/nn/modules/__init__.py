@@ -100,6 +100,8 @@ from .block import (
     set_boundary_enabled,
 )
 from .local_detail import LocalDetailRepC2f
+from .color_cue import P2ColorCueFusion, rgb_color_cues
+from .edge_cue import P2EdgeCueFusion, oriented_edge_responses
 from .conv import (
     CBAM,
     ChannelAttention,
@@ -266,6 +268,10 @@ __all__ = (
     "LayerNorm2d",
     "LightConv",
     "LocalDetailRepC2f",
+    "P2ColorCueFusion",
+    "P2EdgeCueFusion",
+    "rgb_color_cues",
+    "oriented_edge_responses",
     "P1FusionLocalDetail",
     "P1GER",
     "P1PlainFusion",

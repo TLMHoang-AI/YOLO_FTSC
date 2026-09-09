@@ -71,6 +71,8 @@ from ultralytics.nn.modules import (
     HVDecoupledDetect,
     P2NUDFLDetect,
     P3NUDFLDetect,
+    P2ColorCueFusion,
+    P2EdgeCueFusion,
     DWConv,
     DWConvTranspose2d,
     Focus,
@@ -256,9 +258,11 @@ class BaseModel(torch.nn.Module):
         for m in self.model:
             if m.f != -1:  # if not from previous layer
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
-            if profile and not isinstance(m, (FeatureDGFE, MaskedP2DetailReconstruction)):
+            if profile and not isinstance(m, (FeatureDGFE, MaskedP2DetailReconstruction, P2ColorCueFusion, P2EdgeCueFusion)):
                 self._profile_one_layer(m, x, dt)
-            if isinstance(m, FeatureDGFE):
+            if isinstance(m, (P2ColorCueFusion, P2EdgeCueFusion)):
+                x = m(x, img0)
+            elif isinstance(m, FeatureDGFE):
                 x = m(x, img0)
                 if m.last_aux is not None:
                     dgfe_aux.append(m.last_aux)
@@ -289,7 +293,9 @@ class BaseModel(torch.nn.Module):
         for m in self.model:
             if m.f != -1:
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]
-            if isinstance(m, FeatureDGFE):
+            if isinstance(m, (P2ColorCueFusion, P2EdgeCueFusion)):
+                x = m(x, img0)
+            elif isinstance(m, FeatureDGFE):
                 x = m(x, img0)
                 if m.last_aux is not None:
                     dgfe_aux.append(m.last_aux)
@@ -337,7 +343,9 @@ class BaseModel(torch.nn.Module):
                 if m.f != -1:
                     x = (y[m.f] if isinstance(m.f, int)
                          else [x if j == -1 else y[j] for j in m.f])
-                if isinstance(m, FeatureDGFE):
+                if isinstance(m, (P2ColorCueFusion, P2EdgeCueFusion)):
+                    x = m(x, img0)
+                elif isinstance(m, FeatureDGFE):
                     x = m(x, img0)
                     if m.last_aux is not None:
                         dgfe_aux.append(m.last_aux)
@@ -2379,6 +2387,9 @@ def parse_model(d, ch, verbose=True):
             if c2 != nc:
                 c2 = make_divisible(min(c2, max_channels) * width, 8)
             args = [c1, c2, *args[1:]]
+        elif m in frozenset({P2ColorCueFusion, P2EdgeCueFusion}):
+            c2 = ch[f]
+            args = [c2, *args]
         elif m is ASFAttention:
             c2 = ch[f]
             args = [c2, *args]
