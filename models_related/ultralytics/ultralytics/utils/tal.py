@@ -286,6 +286,48 @@ class TaskAlignedAssigner(nn.Module):
 
         return target_labels, target_bboxes, target_scores
 
+    def select_candidates_in_gts(self, xy_centers, gt_bboxes, mask_gt, eps=1e-9):
+        """Return anchors whose centers lie inside each horizontal GT box.
+
+        This is part of the base TAL contract.  Keeping it on the base class
+        is required for the standard assigner used by the N0/H0 controls; it
+        was accidentally defined only on the optional support-aware subclass.
+        """
+        gt_bboxes_xywh = xyxy2xywh(gt_bboxes)
+        wh_mask = gt_bboxes_xywh[..., 2:] < self.stride[0]
+        gt_bboxes_xywh[..., 2:] = torch.where(
+            (wh_mask * mask_gt).bool(),
+            torch.tensor(self.stride_val, dtype=gt_bboxes_xywh.dtype, device=gt_bboxes_xywh.device),
+            gt_bboxes_xywh[..., 2:],
+        )
+        gt_bboxes = xywh2xyxy(gt_bboxes_xywh)
+        n_anchors = xy_centers.shape[0]
+        bs, n_boxes, _ = gt_bboxes.shape
+        lt, rb = gt_bboxes.view(-1, 1, 4).chunk(2, 2)
+        bbox_deltas = torch.cat((xy_centers[None] - lt, rb - xy_centers[None]), dim=2)
+        bbox_deltas = bbox_deltas.view(bs, n_boxes, n_anchors, -1)
+        return bbox_deltas.amin(3).gt_(eps)
+
+    def select_highest_overlaps(self, mask_pos, overlaps, n_max_boxes, align_metric):
+        """Resolve anchors assigned to multiple GTs using maximum overlap."""
+        fg_mask = mask_pos.sum(-2)
+        if fg_mask.max() > 1:
+            mask_multi_gts = (fg_mask.unsqueeze(1) > 1).expand(-1, n_max_boxes, -1)
+            max_overlaps_idx = overlaps.argmax(1)
+            is_max_overlaps = torch.zeros(mask_pos.shape, dtype=mask_pos.dtype, device=mask_pos.device)
+            is_max_overlaps.scatter_(1, max_overlaps_idx.unsqueeze(1), 1)
+            mask_pos = torch.where(mask_multi_gts, is_max_overlaps, mask_pos).float()
+            fg_mask = mask_pos.sum(-2)
+        if self.topk2 != self.topk:
+            align_metric = align_metric * mask_pos
+            max_overlaps_idx = torch.topk(align_metric, self.topk2, dim=-1, largest=True).indices
+            topk_idx = torch.zeros(mask_pos.shape, dtype=mask_pos.dtype, device=mask_pos.device)
+            topk_idx.scatter_(-1, max_overlaps_idx, 1.0)
+            mask_pos *= topk_idx
+            fg_mask = mask_pos.sum(-2)
+        target_gt_idx = mask_pos.argmax(-2)
+        return target_gt_idx, fg_mask, mask_pos
+
 
 class SupportAwareTaskAlignedAssigner(TaskAlignedAssigner):
     """Keep useful, feasible TAL supports instead of maximizing raw count.

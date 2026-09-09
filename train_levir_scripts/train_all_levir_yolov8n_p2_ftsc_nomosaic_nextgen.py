@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent))
 from train_levir_scripts import train_all_levir_yolov8n_p2_routing as workflow
 
+_WORKFLOW_EVALUATE = workflow.evaluate
+
 CONFIG_ROOT = ROOT.parent / "models_related/models_config/yolov8/levir"
 EXPERIMENT_SLUG = "levir_yolov8n_p2_ftsc_nomosaic_nextgen"
 FITNESS_METRIC = "map50_95"
@@ -94,7 +96,8 @@ def train_kwargs(args: argparse.Namespace, data_yaml: Path, seed: int, amp: bool
 
 
 def _head_preflight(model) -> dict[str, object]:
-    from ultralytics.nn.modules import DFL, Detect, P2OffsetRegression
+    from ultralytics.nn.modules import DFL, Detect
+    from ultralytics.nn.modules.head import P2OffsetRegression
     from types import SimpleNamespace
     from ultralytics.engine.trainer import BaseTrainer
 
@@ -242,7 +245,7 @@ def _read_mechanism(run_dir: Path, variant: str, seed: int) -> list[dict[str, ob
 
 
 def evaluate(run_dir: Path, data_yaml: Path, args: argparse.Namespace) -> dict[str, object]:
-    metrics = workflow.evaluate(run_dir, data_yaml, args)
+    metrics = _WORKFLOW_EVALUATE(run_dir, data_yaml, args)
     metrics.update({"protocol/version": PROTOCOL_VERSION, "protocol/fitness_metric": FITNESS_METRIC,
                     "protocol/best_checkpoint_metric": FITNESS_METRIC, "protocol/nms_iou": 0.5,
                     "protocol/mosaic": 0.0, "protocol/close_mosaic": 0})
@@ -327,7 +330,6 @@ def main() -> None:
     if "N3_y4_nomosaic_localization_distill" in args.variants and not ACTIVE_TEACHER:
         raise ValueError("N3 was requested without --teacher; pass an explicit compatible checkpoint")
     workflow.model_for = model_for
-    workflow.evaluate = evaluate
     workflow.train_kwargs = train_kwargs
     args.data_root, args.dataset_root = args.data_root.resolve(), args.dataset_root.resolve()
     data_yaml = workflow.prepare_fixed_split(args)

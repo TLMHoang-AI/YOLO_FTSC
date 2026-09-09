@@ -28,6 +28,13 @@ from .metrics import bbox_iou, probiou
 from .tal import bbox2dist, rbox2dist
 
 
+def _level_label(stride: float) -> str:
+    """Return a stable P-level label from an actual Detect stride."""
+    stride = float(stride)
+    exponent = round(math.log2(stride)) if stride > 0 else -1
+    return f"p{exponent}" if 2**exponent == stride else f"stride{int(stride)}"
+
+
 def localization_distillation_loss(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,
@@ -1806,14 +1813,62 @@ class v8DetectionLoss:
             )
             self.ftsc_metrics.update(self.ftsc_calibrator.last_metrics)
             flat_stride = stride_tensor.squeeze(-1)
-            for level_index, level_stride in enumerate(self.stride.tolist(), start=2):
+            target_score_dense = target_scores.sum(-1)
+            realized_iou_dense = torch.zeros_like(target_score_dense, dtype=torch.float32)
+            if realized_iou is not None and fg_mask.any():
+                realized_iou_dense[fg_mask] = realized_iou.float()
+            # These diagnostics deliberately derive from the existing
+            # assignment/prediction tensors; they do not perform another
+            # forward pass and remain valid for any number of Detect levels.
+            # Keep the unclipped distance for the range diagnostic.  The loss
+            # path clips to ``reg_max - 1 - 0.01``; using that clipped tensor
+            # here would make the requested near-limit fraction identically
+            # zero for the threshold ``reg_max - 1.5``.
+            target_ltrb_raw_dense = bbox2dist(anchor_points, target_bboxes_scaled, None).clamp_min(0)
+            target_ltrb_dense = target_ltrb_raw_dense.clamp_max(self.reg_max - 1 - 0.01)
+            dfl_probability = pred_distri.view(pred_distri.shape[0], pred_distri.shape[1], 4, self.reg_max).softmax(-1)
+            dfl_entropy_dense = -(dfl_probability * dfl_probability.clamp_min(1e-9).log()).sum(-1)
+            for level_stride in self.stride.tolist():
                 level_mask = flat_stride == float(level_stride)
-                self.ftsc_metrics[f"ftsc_positive_count_p{level_index}"] = float(
-                    fg_mask[:, level_mask].sum().item()
+                level_positive = fg_mask & level_mask.unsqueeze(0)
+                label = _level_label(float(level_stride))
+                prefix = f"ftsc_level_{label}"
+                count = int(level_positive.sum().item())
+                self.ftsc_metrics[f"{prefix}_positive_count"] = float(count)
+                self.ftsc_metrics[f"{prefix}_positive_fraction"] = float(count / max(float(fg_mask.sum().item()), 1.0))
+                self.ftsc_metrics[f"{prefix}_target_score_mean"] = float(
+                    target_score_dense[level_positive].mean().item() if count else 0.0
                 )
-                self.ftsc_metrics[f"ftsc_positive_fraction_p{level_index}"] = float(
-                    fg_mask[:, level_mask].sum().item() / max(float(fg_mask.sum().item()), 1.0)
+                self.ftsc_metrics[f"{prefix}_target_score_mass"] = float(target_score_dense[level_positive].sum().item())
+                self.ftsc_metrics[f"{prefix}_realized_iou_mean"] = float(
+                    realized_iou_dense[level_positive].mean().item() if count else 0.0
                 )
+                self.ftsc_metrics[f"{prefix}_dfl_entropy_mean"] = float(
+                    dfl_entropy_dense[level_positive].mean().item() if count else 0.0
+                )
+                if ftsc_weights is not None:
+                    positive_selector = level_positive[fg_mask]
+                    for weight_name in ("cls", "box", "dfl"):
+                        values = ftsc_weights[weight_name][positive_selector].detach().float()
+                        self.ftsc_metrics[f"{prefix}_ftsc_{weight_name}_weight_mean"] = float(
+                            values.mean().item() if values.numel() else 0.0
+                        )
+                        self.ftsc_metrics[f"{prefix}_ftsc_{weight_name}_weight_std"] = float(
+                            values.std(unbiased=False).item() if values.numel() else 0.0
+                        )
+                target_values = target_ltrb_dense[level_positive]
+                target_values_raw = target_ltrb_raw_dense[level_positive]
+                if target_values.numel():
+                    self.ftsc_metrics[f"{prefix}_target_ltrb_max_bin_mean"] = float(target_values_raw.max(-1).values.mean().item())
+                    self.ftsc_metrics[f"{prefix}_dfl_near_regmax_fraction"] = float(
+                        (target_values_raw >= self.reg_max - 1.5).float().mean().item()
+                    )
+                else:
+                    self.ftsc_metrics[f"{prefix}_target_ltrb_max_bin_mean"] = 0.0
+                    self.ftsc_metrics[f"{prefix}_dfl_near_regmax_fraction"] = 0.0
+                # Keep the compact historical names for downstream scripts.
+                self.ftsc_metrics[f"ftsc_positive_count_{label}"] = float(count)
+                self.ftsc_metrics[f"ftsc_positive_fraction_{label}"] = float(count / max(float(fg_mask.sum().item()), 1.0))
             if fg_mask.any():
                 positive_scores = target_scores.sum(-1)[fg_mask]
                 positive_boxes = target_bboxes[fg_mask]
