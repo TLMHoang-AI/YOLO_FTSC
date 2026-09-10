@@ -1134,6 +1134,69 @@ class v8DetectionLoss:
         return float((left * right).sum().div(denominator).item())
 
     @staticmethod
+    def _post_tal_support_metrics(
+        mask_gt: torch.Tensor,
+        fg_mask: torch.Tensor,
+        target_gt_idx: torch.Tensor,
+        flat_stride: torch.Tensor,
+        strides: torch.Tensor,
+    ) -> dict[str, float]:
+        """Collect assignment support counts before any FTSC reweighting.
+
+        ``mask_gt`` is built before TAL and therefore retains GTs with zero
+        positives.  The returned values beginning with ``_tal_`` are raw
+        sufficient statistics; DetectionModel aggregates these across batches
+        and derives fractions only once at epoch end.
+        """
+        batch_size, max_gt = mask_gt.shape[:2]
+        valid_gt = mask_gt.squeeze(-1).bool()
+        gt_count = int(valid_gt.sum().item())
+        positive_count = int(fg_mask.sum().item())
+        if fg_mask.any():
+            batch_ids = torch.arange(batch_size, device=fg_mask.device).view(-1, 1).expand_as(fg_mask)[fg_mask]
+            gt_ids = target_gt_idx[fg_mask].long()
+            linear = batch_ids * max_gt + gt_ids
+            support_dense = torch.zeros(batch_size * max_gt, device=fg_mask.device, dtype=torch.long)
+            support_dense.scatter_add_(0, linear, torch.ones_like(linear, dtype=torch.long))
+            support_dense = support_dense.view(batch_size, max_gt)
+        else:
+            support_dense = torch.zeros((batch_size, max_gt), device=fg_mask.device, dtype=torch.long)
+        support = support_dense[valid_gt]
+        histogram = torch.bincount(support.clamp_max(16), minlength=17) if support.numel() else torch.zeros(17, device=fg_mask.device, dtype=torch.long)
+        metrics: dict[str, float] = {
+            "_tal_gt_count": float(gt_count),
+            "_tal_positive_count": float(positive_count),
+        }
+        for index, value in enumerate(histogram.tolist()):
+            metrics[f"_tal_support_bin_{index}"] = float(value)
+
+        # Per-level support is derived from the same TAL foreground mask.  It
+        # never changes assignment and remains valid for non-contiguous levels.
+        level_counts: dict[int, torch.Tensor] = {}
+        for stride in strides.detach().cpu().tolist():
+            level_mask = flat_stride == float(stride)
+            level_fg = fg_mask & level_mask.unsqueeze(0)
+            if level_fg.any():
+                level_batch = torch.arange(batch_size, device=fg_mask.device).view(-1, 1).expand_as(fg_mask)[level_fg]
+                level_gt = target_gt_idx[level_fg].long()
+                level_linear = level_batch * max_gt + level_gt
+                dense = torch.zeros(batch_size * max_gt, device=fg_mask.device, dtype=torch.long)
+                dense.scatter_add_(0, level_linear, torch.ones_like(level_linear, dtype=torch.long))
+                level_counts[int(round(float(stride)))] = dense.view(batch_size, max_gt)
+            else:
+                level_counts[int(round(float(stride)))] = torch.zeros((batch_size, max_gt), device=fg_mask.device, dtype=torch.long)
+            label = _level_label(float(stride))
+            metrics[f"_tal_positive_count_{label}"] = float(level_counts[int(round(float(stride)))].sum().item())
+
+        p2 = level_counts.get(4, torch.zeros_like(support_dense))[valid_gt]
+        p3 = level_counts.get(8, torch.zeros_like(support_dense))[valid_gt]
+        metrics["_tal_gt_support_p2_only_count"] = float(((p2 > 0) & (p3 == 0)).sum().item())
+        metrics["_tal_gt_support_p3_only_count"] = float(((p2 == 0) & (p3 > 0)).sum().item())
+        metrics["_tal_gt_support_p2_p3_count"] = float(((p2 > 0) & (p3 > 0)).sum().item())
+        metrics["_tal_gt_support_ge2_count"] = float((support >= 2).sum().item())
+        return metrics
+
+    @staticmethod
     def _apply_ftsc_positive_cls_weights(
         cls_weights: torch.Tensor,
         target_scores: torch.Tensor,
@@ -1654,6 +1717,10 @@ class v8DetectionLoss:
             target_gt_idx = target_gt_idx.to(device=self.device)
         self.support_assignment_metrics = dict(getattr(self.assigner, "last_metrics", {}))
         fg_mask = fg_mask.bool()
+        flat_stride = stride_tensor.squeeze(-1)
+        post_tal_support_metrics = self._post_tal_support_metrics(
+            mask_gt, fg_mask, target_gt_idx, flat_stride, self.stride
+        )
         self.last_assignment = (
             tuple(value.detach().clone() for value in (target_bboxes, target_scores, fg_mask, target_gt_idx))
             if self.capture_assignment
@@ -1762,6 +1829,7 @@ class v8DetectionLoss:
             ).squeeze(-1).clamp(0, 1).detach()
         ftsc_weights = None
         self.ftsc_metrics = dict(self.support_assignment_metrics)
+        self.ftsc_metrics.update(post_tal_support_metrics)
         if fg_mask.any():
             assigned_scores = target_scores.sum(-1)[fg_mask].detach().float()
             self.ftsc_metrics.update(
@@ -1772,8 +1840,11 @@ class v8DetectionLoss:
                     "support_assigned_realized_iou_std": float(realized_iou.std(unbiased=False).item()) if realized_iou is not None else 0.0,
                 }
             )
+        # YOLODataset.collate_fn keeps arbitrary per-sample metadata as a tuple;
+        # accept both tuple and list so the existing AdaptiveZoom diagnostics
+        # survive collation into the training batch.
         zoom_records = batch.get("adaptive_zoom")
-        if isinstance(zoom_records, list) and zoom_records and isinstance(zoom_records[0], dict):
+        if isinstance(zoom_records, (list, tuple)) and zoom_records and isinstance(zoom_records[0], dict):
             count = float(len(zoom_records))
             self.ftsc_metrics.update(
                 {
@@ -1812,7 +1883,6 @@ class v8DetectionLoss:
                 localization_quality=realized_iou,
             )
             self.ftsc_metrics.update(self.ftsc_calibrator.last_metrics)
-            flat_stride = stride_tensor.squeeze(-1)
             target_score_dense = target_scores.sum(-1)
             realized_iou_dense = torch.zeros_like(target_score_dense, dtype=torch.float32)
             if realized_iou is not None and fg_mask.any():

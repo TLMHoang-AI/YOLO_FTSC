@@ -756,6 +756,9 @@ class BaseModel(torch.nn.Module):
         if diagnostics:
             sums = getattr(self, "_mechanism_epoch_sums", {})
             for name, value in diagnostics.items():
+                # Post-TAL support diagnostics are raw sufficient statistics;
+                # never average their batch fractions.  Epoch-level rates are
+                # derived from these totals in mechanism_epoch_metrics().
                 sums[name] = sums.get(name, 0.0) + value
             sums["_batch_count"] = sums.get("_batch_count", 0.0) + 1.0
             sums["_p2_positive_count"] = sums.get("_p2_positive_count", 0.0) + p2_positive_count
@@ -768,7 +771,7 @@ class BaseModel(torch.nn.Module):
         self._mechanism_epoch_sums = {}
 
     def mechanism_epoch_metrics(self) -> dict[str, float]:
-        """Return mean batch diagnostics plus epoch-level P2 assignment counts."""
+        """Return batch diagnostics plus globally aggregated post-TAL support."""
         sums = getattr(self, "_mechanism_epoch_sums", {})
         batches = sums.get("_batch_count", 0.0)
         if not batches:
@@ -781,6 +784,47 @@ class BaseModel(torch.nn.Module):
         p2_count = sums.get("_p2_positive_count", 0.0)
         metrics["p2_positive_count"] = p2_count
         metrics["p2_positive_fraction"] = p2_count / max(sums.get("_total_positive_count", 0.0), 1.0)
+        gt_count = sums.get("_tal_gt_count", 0.0)
+        if gt_count:
+            positive_count = sums.get("_tal_positive_count", 0.0)
+            metrics.update(
+                {
+                    "tal_gt_count": gt_count,
+                    "tal_positive_count": positive_count,
+                    "tal_mean_positives_per_gt": positive_count / gt_count,
+                    "tal_zero_positive_gt_fraction": sums.get("_tal_support_bin_0", 0.0) / gt_count,
+                    "tal_single_positive_gt_fraction": sums.get("_tal_support_bin_1", 0.0) / gt_count,
+                    "tal_two_positive_gt_fraction": sums.get("_tal_support_bin_2", 0.0) / gt_count,
+                    "tal_three_positive_gt_fraction": sums.get("_tal_support_bin_3", 0.0) / gt_count,
+                    "tal_four_positive_gt_fraction": sums.get("_tal_support_bin_4", 0.0) / gt_count,
+                    "tal_fiveplus_positive_gt_fraction": sum(
+                        sums.get(f"_tal_support_bin_{index}", 0.0) for index in range(5, 17)
+                    ) / gt_count,
+                    "ftsc_activation_rate": sums.get("_tal_support_ge2_count", 0.0) / gt_count,
+                    "tal_positive_count_p2": sums.get("_tal_positive_count_p2", 0.0),
+                    "tal_positive_count_p3": sums.get("_tal_positive_count_p3", 0.0),
+                    "tal_mean_p2_positives_per_gt": sums.get("_tal_positive_count_p2", 0.0) / gt_count,
+                    "tal_mean_p3_positives_per_gt": sums.get("_tal_positive_count_p3", 0.0) / gt_count,
+                    "tal_gt_support_p2_only_fraction": sums.get("_tal_gt_support_p2_only_count", 0.0) / gt_count,
+                    "tal_gt_support_p3_only_fraction": sums.get("_tal_gt_support_p3_only_count", 0.0) / gt_count,
+                    "tal_gt_support_p2_p3_fraction": sums.get("_tal_gt_support_p2_p3_count", 0.0) / gt_count,
+                    "tal_positive_share_p2": sums.get("_tal_positive_count_p2", 0.0) / max(positive_count, 1.0),
+                    "tal_positive_share_p3": sums.get("_tal_positive_count_p3", 0.0) / max(positive_count, 1.0),
+                }
+            )
+            # The histogram is a sufficient statistic for the exact discrete
+            # median; use both middle order statistics for even GT counts.
+            def _support_at(rank: float) -> float:
+                cumulative = 0.0
+                for index in range(17):
+                    cumulative += sums.get(f"_tal_support_bin_{index}", 0.0)
+                    if cumulative > rank:
+                        return float(index)
+                return 16.0
+
+            lower = _support_at((gt_count - 1.0) / 2.0)
+            upper = _support_at(gt_count / 2.0)
+            metrics["tal_median_positives_per_gt"] = (lower + upper) / 2.0
         return metrics
 
     def init_criterion(self):
