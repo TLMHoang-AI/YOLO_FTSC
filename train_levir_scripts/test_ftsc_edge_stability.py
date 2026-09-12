@@ -29,6 +29,10 @@ class EdgeStabilityContractTests(unittest.TestCase):
             edge = payload["edge_stability"]
             self.assertEqual((edge["residual_scale"], edge["residual_schedule"], edge["orientation_gate_mode"]), values)
             self.assertEqual(edge["hidden"], 32)
+            edge_layers = [layer for layer in payload["head"] if layer[2] == "P2EdgeCueFusion"]
+            self.assertEqual(len(edge_layers), 1)
+            self.assertEqual(edge_layers[0][3][0], 32)  # parser prepends P2 channels
+            self.assertEqual(len(edge_layers[0][3]), 6)
             self.assertEqual(payload["head"][-1][0], [19, 22])
 
     def test_existing_e_h2_is_unchanged_control(self):

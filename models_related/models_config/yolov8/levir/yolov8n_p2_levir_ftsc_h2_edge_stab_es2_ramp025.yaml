@@ -141,7 +141,6 @@ head:
   - 1
   - P2EdgeCueFusion
   - - 32
-    - 32
     - 0.25
     - ramp
     - 5
