@@ -566,6 +566,10 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             self.register_buffer("dfl_shuffle_seed", torch.tensor(shuffle_seed, dtype=torch.long))
             self.register_buffer("dfl_shuffle_step", torch.tensor(0, dtype=torch.long))
         self._last_dfl_shuffle_metrics: dict[str, float] = {}
+        # Optional post-hoc/train-time causal audit.  It is disabled by
+        # default and never participates in the loss graph or inference.
+        self.audit_enabled = bool(config.get("audit_enabled", False))
+        self.last_audit: dict[str, torch.Tensor] = {}
         if self.gt_mass_shuffle:
             configured_seed = config.get("gt_mass_shuffle_seed")
             shuffle_seed = (torch.initial_seed() if configured_seed is None else int(configured_seed)) % (2**63 - 1)
@@ -613,6 +617,106 @@ class AnchorFreeFTSCCalibrator(nn.Module):
                 for key in self.strength_keys(name):
                     self.strength_logits[key] = nn.Parameter(torch.tensor(initial_logit, dtype=torch.float32))
         self.last_metrics: dict[str, float] = {}
+
+    @staticmethod
+    def _audit_cpu(value: torch.Tensor) -> torch.Tensor:
+        """Detach an audit tensor before it leaves the loss call."""
+        return value.detach().float().cpu()
+
+    def _make_audit_snapshot(
+        self,
+        *,
+        fg_mask: torch.Tensor,
+        target_gt_idx: torch.Tensor,
+        target_scores: torch.Tensor,
+        stride: torch.Tensor,
+        anchor_index: torch.Tensor,
+        audit_decoded_iou: torch.Tensor | None,
+        raw_evidence: dict[str, torch.Tensor],
+        task_logs: dict[str, torch.Tensor],
+        weights: dict[str, torch.Tensor],
+        dfl_entropy: torch.Tensor | None,
+        dfl_variance: torch.Tensor | None,
+        epoch: int,
+    ) -> dict[str, torch.Tensor]:
+        """Materialize per-positive audit columns with no autograd edges."""
+        with torch.no_grad():
+            positive = fg_mask
+            batch_ids = torch.arange(fg_mask.shape[0], device=fg_mask.device).view(-1, 1).expand_as(fg_mask)
+            image_index = batch_ids[positive].long()
+            gt_id = target_gt_idx[positive].long()
+            group_ids, group_count = self._positive_group_ids(fg_mask, target_gt_idx)
+            counts = torch.zeros(group_count, device=fg_mask.device, dtype=torch.long)
+            counts.scatter_add_(0, group_ids, torch.ones_like(group_ids, dtype=torch.long))
+            gt_positive_count = counts[group_ids]
+            stride_dense = stride.view(1, -1).expand_as(fg_mask) if stride.ndim == 1 else stride
+            stride_positive = stride_dense[positive].detach().to(dtype=torch.float32)
+            output: dict[str, torch.Tensor] = {
+                "image_index": image_index,
+                "gt_id": gt_id,
+                "positive_index": anchor_index[positive].long(),
+                "stride": stride_positive,
+                "gt_positive_count": gt_positive_count,
+                "tal_target_score": target_scores.sum(-1)[positive],
+                "tal_assigned_class_score": target_scores[positive].amax(-1),
+                "tal_assigned_class": target_scores[positive].argmax(-1).long(),
+                "audit_decoded_iou": (
+                    audit_decoded_iou
+                    if audit_decoded_iou is not None
+                    else target_scores.new_full((int(positive.sum().item()),), float("nan"))
+                ),
+                "epoch": torch.full(
+                    (int(positive.sum().item()),), int(epoch), device=fg_mask.device, dtype=torch.int64
+                ),
+                "ftsc_log_clip": target_scores.new_full(
+                    (int(positive.sum().item()),), float(self.log_clip)
+                ),
+                "ftsc_rho": target_scores.new_full(
+                    (int(positive.sum().item()),), float(self.residual_fraction(epoch))
+                ),
+                "dfl_variance_tau": target_scores.new_full(
+                    (int(positive.sum().item()),),
+                    float(
+                        getattr(
+                            self.providers["dfl_distribution"] if "dfl_distribution" in self.providers else None,
+                            "variance_tau",
+                            0.0,
+                        )
+                    ),
+                ),
+            }
+            for name, values in raw_evidence.items():
+                key = "position" if name in self.POSITION_EVIDENCE else "dfl"
+                output[f"{key}_log_evidence_raw"] = values
+                # Keep the audit definition centered even when an ablation
+                # disables FTSC's per-GT normalization for its actual loss.
+                output[f"{key}_log_evidence_centered"] = self._center_per_gt(
+                    values, fg_mask, target_gt_idx
+                )
+            if dfl_entropy is not None:
+                output["dfl_entropy_mean"] = dfl_entropy
+            if dfl_variance is not None:
+                output["dfl_variance_mean"] = dfl_variance
+            for task in self.TASK_NAMES:
+                output[f"w_{task}"] = weights[task]
+                output[f"log_w_{task}"] = task_logs[task]
+                output[f"w_{task}_clipped_low"] = (task_logs[task] < -self.log_clip).to(torch.float32)
+                output[f"w_{task}_clipped_high"] = (task_logs[task] > self.log_clip).to(torch.float32)
+            for name in self.evidence_names:
+                if name in self.POSITION_EVIDENCE and self.position_task_specific_strength:
+                    strengths = [
+                        self.strength(name, target_scores.new_ones(1), task=task).detach().reshape(1)
+                        for task in self.position_tasks
+                    ]
+                    for task, strength in zip(self.position_tasks, strengths, strict=False):
+                        output[f"ftsc_strength_{name}_{task}"] = strength.expand(int(positive.sum().item()))
+                    output[f"ftsc_strength_{name}"] = torch.stack(strengths).mean().expand(
+                        int(positive.sum().item())
+                    )
+                else:
+                    strength = self.strength(name, target_scores.new_ones(1)).detach().reshape(1)
+                    output[f"ftsc_strength_{name}"] = strength.expand(int(positive.sum().item()))
+            return {name: self._audit_cpu(value) for name, value in output.items()}
 
     def strength_keys(self, name: str) -> tuple[str, ...]:
         """Return parameter keys owned by one evidence provider."""
@@ -873,8 +977,12 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         epoch: int = 0,
         classification_quality: torch.Tensor | None = None,
         localization_quality: torch.Tensor | None = None,
+        audit_target_scores: torch.Tensor | None = None,
+        audit_stride: torch.Tensor | None = None,
+        audit_anchor_index: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Build positive-only classification, box and DFL weights after TAL assignment."""
+        self.last_audit = {}
         positive_count = int(fg_mask.sum().item())
         if positive_count == 0:
             empty = pred_distri.new_empty(0)
@@ -923,14 +1031,17 @@ class AnchorFreeFTSCCalibrator(nn.Module):
                         )
             return {"cls": empty, "box": empty, "dfl": empty, "regularization": zero, "um_loss": zero}
 
+        raw_evidence = {}
         centered = {}
         if "position_gaussian" in self.providers:
             position = self.providers["position_gaussian"](anchor_points_px, target_bboxes_px, fg_mask)
+            raw_evidence["position_gaussian"] = position
             centered["position_gaussian"] = (
                 self._center_per_gt(position, fg_mask, target_gt_idx) if self.per_gt_norm else position
             )
         if "fcos_centerness" in self.providers:
             centerness = self.providers["fcos_centerness"](anchor_points_px, target_bboxes_px, fg_mask)
+            raw_evidence["fcos_centerness"] = centerness
             centered["fcos_centerness"] = (
                 self._center_per_gt(centerness, fg_mask, target_gt_idx) if self.per_gt_norm else centerness
             )
@@ -941,6 +1052,7 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             quality_evidence = self.providers["dcfl_dgmm_quality"](
                 classification_quality, localization_quality, group_ids, group_count
             )
+            raw_evidence["dcfl_dgmm_quality"] = quality_evidence
             centered["dcfl_dgmm_quality"] = (
                 self._center_per_gt(quality_evidence, fg_mask, target_gt_idx)
                 if self.per_gt_norm
@@ -950,6 +1062,7 @@ class AnchorFreeFTSCCalibrator(nn.Module):
             distribution = self.providers["dfl_distribution"](pred_distri, fg_mask)
             if self.dfl_shuffle_within_gt:
                 distribution = self._shuffle_dfl_per_gt(distribution, fg_mask, target_gt_idx, epoch)
+            raw_evidence["dfl_distribution"] = distribution
             centered["dfl_distribution"] = (
                 self._center_per_gt(distribution, fg_mask, target_gt_idx) if self.per_gt_norm else distribution
             )
@@ -1073,6 +1186,24 @@ class AnchorFreeFTSCCalibrator(nn.Module):
                 }
             )
         self.last_metrics = metrics
+        if self.audit_enabled:
+            if audit_target_scores is None or audit_stride is None or audit_anchor_index is None:
+                raise ValueError("FTSC audit requires target scores, stride labels, and anchor indices.")
+            distribution_provider = self.providers["dfl_distribution"] if "dfl_distribution" in self.providers else None
+            self.last_audit = self._make_audit_snapshot(
+                fg_mask=fg_mask,
+                target_gt_idx=target_gt_idx,
+                target_scores=audit_target_scores,
+                stride=audit_stride,
+                anchor_index=audit_anchor_index,
+                audit_decoded_iou=localization_quality,
+                raw_evidence=raw_evidence,
+                task_logs=task_logs,
+                weights=weights,
+                dfl_entropy=(distribution_provider.last_entropy if distribution_provider is not None else None),
+                dfl_variance=(distribution_provider.last_variance if distribution_provider is not None else None),
+                epoch=epoch,
+            )
         return {**weights, "regularization": regularization, "um_loss": um_loss}
 
 

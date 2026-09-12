@@ -51,6 +51,13 @@ class EdgeStabilityContractTests(unittest.TestCase):
         self.assertNotIn("teacher", kwargs)
         self.assertNotIn("localization_distill", kwargs)
 
+    def test_diagnostics_are_phase_committed_and_profile_safe(self):
+        source = (ROOT / "models_related/ultralytics/ultralytics/nn/modules/edge_cue.py").read_text()
+        self.assertIn("_committed_source", source)
+        self.assertIn("source: str = \"train\"", source)
+        self.assertIn("self.training and torch.is_grad_enabled()", source)
+        self.assertIn("invalidate_diagnostics", source)
+
 
 @unittest.skipUnless(importlib.util.find_spec("torch") is not None and importlib.util.find_spec("cv2") is not None, "tensor runtime dependencies are not installed")
 class EdgeStabilityTensorTests(unittest.TestCase):
@@ -75,6 +82,21 @@ class EdgeStabilityTensorTests(unittest.TestCase):
         with torch.no_grad():
             output = module(p2, image)
         self.assertTrue(torch.allclose(output, p2, atol=1e-7, rtol=0))
+
+    def test_eval_or_dummy_forward_cannot_overwrite_training_diagnostics(self):
+        torch = self.torch
+        torch.manual_seed(0)
+        module = self.P2EdgeCueFusion(32)
+        module.train()
+        train_p2 = torch.randn(1, 32, 16, 16, requires_grad=True)
+        train_image = torch.rand(1, 3, 64, 64)
+        module(train_p2, train_image)
+        before = module.diagnostic_metrics(source="train")
+        module.eval()
+        with torch.no_grad():
+            module(torch.zeros_like(train_p2), torch.zeros_like(train_image))
+        after = module.diagnostic_metrics(source="train")
+        self.assertEqual(before, after)
 
     def test_es1_scales_nonzero_residual_by_quarter(self):
         torch = self.torch

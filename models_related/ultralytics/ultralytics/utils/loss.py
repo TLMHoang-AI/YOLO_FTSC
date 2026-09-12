@@ -1872,15 +1872,28 @@ class v8DetectionLoss:
                     classification_quality = pred_scores.detach().sigmoid()[fg_mask].gather(
                         -1, positive_classes
                     ).squeeze(-1)
+            ftsc_kwargs = {
+                "epoch": self.epoch,
+                "classification_quality": classification_quality,
+                "localization_quality": realized_iou,
+            }
+            if self.ftsc_calibrator.audit_enabled:
+                ftsc_kwargs.update(
+                    {
+                        "audit_target_scores": target_scores,
+                        "audit_stride": flat_stride,
+                        "audit_anchor_index": torch.arange(
+                            fg_mask.shape[1], device=fg_mask.device, dtype=torch.long
+                        ).view(1, -1).expand_as(fg_mask),
+                    }
+                )
             ftsc_weights = self.ftsc_calibrator(
                 anchor_points * stride_tensor,
                 target_bboxes,
                 target_gt_idx,
                 fg_mask,
                 pred_distri,
-                epoch=self.epoch,
-                classification_quality=classification_quality,
-                localization_quality=realized_iou,
+                **ftsc_kwargs,
             )
             self.ftsc_metrics.update(self.ftsc_calibrator.last_metrics)
             target_score_dense = target_scores.sum(-1)

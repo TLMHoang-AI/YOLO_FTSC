@@ -737,7 +737,9 @@ class BaseModel(torch.nn.Module):
         diagnostics.update(getattr(self.criterion, "psd_metrics", {}))
         for module in self.modules():
             if isinstance(module, P2EdgeCueFusion):
-                diagnostics.update(module.diagnostic_metrics())
+                # Only the committed training-phase snapshot is valid here.
+                # Evaluation/profile forwards are intentionally excluded.
+                diagnostics.update(module.diagnostic_metrics(source="train"))
         assignment_context = getattr(self.criterion, "dbss_assignment_context", None)
         self.criterion.dbss_assignment_context = None
         for module in self.modules():

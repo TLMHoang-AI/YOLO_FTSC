@@ -131,11 +131,13 @@ def source_preflight(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
-def _state_hash(model, exclude_edge: bool = False) -> str:
+def _state_hash(model, shared_prefix_limit: int | None = None) -> str:
     digest = hashlib.sha256()
     for name, value in sorted(model.state_dict().items()):
-        if exclude_edge and ("model.20" in name or "edge" in name.lower()):
-            continue
+        if shared_prefix_limit is not None:
+            parts = name.split(".")
+            if len(parts) < 2 or parts[0] != "model" or not parts[1].isdigit() or int(parts[1]) > shared_prefix_limit:
+                continue
         digest.update(name.encode())
         digest.update(str(tuple(value.shape)).encode())
         digest.update(value.detach().cpu().contiguous().numpy().tobytes())
@@ -210,7 +212,10 @@ def model_preflight(args: argparse.Namespace) -> dict[str, object]:
         model = DetectionModel(VARIANTS[variant], verbose=False)
         reports[variant] = _head_report(model, variant)
         reports[variant]["GFLOPs"] = round(_static_flops(model, args.imgsz), 6)
-        hashes[variant] = _state_hash(model, exclude_edge=True)
+        # ES3 omits the learned gate, so parameters after the Edge layer have
+        # different RNG draw order. Compare only the shared H2 graph before
+        # Edge (model.0..model.19) to verify matched initialization.
+        hashes[variant] = _state_hash(model, shared_prefix_limit=19)
     _require(len(set(hashes.values())) == 1, f"matched H2 initialization differs: {hashes}")
     return {"variant_reports": reports, "matched_backbone_hashes": hashes, "same_non_edge_initial_state": True}
 

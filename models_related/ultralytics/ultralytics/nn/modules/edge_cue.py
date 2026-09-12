@@ -85,12 +85,22 @@ class P2EdgeCueFusion(nn.Module):
         nn.init.zeros_(self.projection.weight)
         nn.init.zeros_(self.projection.bias)
         self.register_buffer("orientation_kernels", _oriented_kernels(), persistent=False)
+        # ``last_stats`` is intentionally only a compatibility view.  The
+        # committed phase-specific snapshots below prevent profile, warmup,
+        # export, and validation forwards from replacing the training sample
+        # consumed by the mechanism logger.
         self.last_stats: dict[str, torch.Tensor] = {}
+        self._committed_stats: dict[str, torch.Tensor] = {}
+        self._committed_source: str | None = None
+        self._committed_epoch: int | None = None
+        self._committed_forward_id = 0
+        self._forward_id = 0
         self._epoch = 0
 
     def set_epoch(self, epoch: int) -> None:
         """Set the current training epoch for deterministic residual schedules."""
         self._epoch = int(epoch)
+        self.invalidate_diagnostics()
 
     def effective_residual_scale(self, epoch: int | None = None) -> float:
         """Return the fixed residual scale at a zero-based epoch index."""
@@ -138,7 +148,7 @@ class P2EdgeCueFusion(nn.Module):
         rgb_norm = p2.detach().flatten(1).norm(dim=1).mean().clamp_min(1e-8)
         edge_norm = residual.detach().flatten(1).norm(dim=1).mean()
         entropy = -(weights.clamp_min(1e-8) * weights.clamp_min(1e-8).log()).sum(dim=-1).mean()
-        self.last_stats = {
+        stats = {
             "orientation_gate_weights": weights.detach().mean(dim=0),
             "orientation_entropy": entropy.detach(),
             "edge_feature_norm": edge_norm.detach(),
@@ -149,14 +159,44 @@ class P2EdgeCueFusion(nn.Module):
             "edge_activation_std": feature.detach().std(unbiased=False),
             "edge_residual_alpha": torch.as_tensor(effective_scale, device=p2.device, dtype=p2.dtype),
         }
+        self._forward_id += 1
+        source = "train" if self.training and torch.is_grad_enabled() else "eval"
+        # Keep the old public field for callers that inspect it, but only the
+        # phase-specific committed snapshot is used by diagnostics.
+        self.last_stats = stats
+        if source == "train":
+            self._committed_stats = stats
+            self._committed_source = source
+            self._committed_epoch = self._epoch
+            self._committed_forward_id = self._forward_id
         return p2 + residual
 
-    def diagnostic_metrics(self) -> dict[str, float]:
-        """Return scalar metrics from the most recent forward pass."""
-        if not self.last_stats:
+    def invalidate_diagnostics(self) -> None:
+        """Invalidate a pending training snapshot at a controlled boundary."""
+        self._committed_stats = {}
+        self._committed_source = None
+        self._committed_epoch = None
+        self._committed_forward_id = 0
+
+    def diagnostic_provenance(self) -> dict[str, int | str | None]:
+        """Return provenance for the committed snapshot without tensor state."""
+        return {
+            "source": self._committed_source,
+            "epoch": self._committed_epoch,
+            "forward_id": self._committed_forward_id,
+        }
+
+    def diagnostic_metrics(self, source: str = "train") -> dict[str, float]:
+        """Return scalar metrics from an explicitly selected committed phase.
+
+        ``source='train'`` is the default used by the loss logger.  Evaluation
+        and dummy/profile forwards never replace this snapshot, so a late
+        forward cannot create a synthetic epoch row.
+        """
+        if source != "train" or self._committed_source != source or not self._committed_stats:
             return {}
         metrics: dict[str, float] = {}
-        for name, value in self.last_stats.items():
+        for name, value in self._committed_stats.items():
             if name == "orientation_gate_weights":
                 for index, weight in enumerate(value.detach().flatten().tolist()):
                     metrics[f"edge_orientation_gate_weight_{index}"] = float(weight)
