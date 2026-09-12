@@ -735,6 +735,9 @@ class BaseModel(torch.nn.Module):
         diagnostics.update(getattr(self.criterion, "positive_confidence_rescue_metrics", {}))
         diagnostics.update(getattr(self.criterion, "consensus_metrics", {}))
         diagnostics.update(getattr(self.criterion, "psd_metrics", {}))
+        for module in self.modules():
+            if isinstance(module, P2EdgeCueFusion):
+                diagnostics.update(module.diagnostic_metrics())
         assignment_context = getattr(self.criterion, "dbss_assignment_context", None)
         self.criterion.dbss_assignment_context = None
         for module in self.modules():
