@@ -622,7 +622,14 @@ def _run_contract(
             for key, value in train_kwargs(args, variant, seed, data_yaml).items()
             if key not in {"data", "project", "name", "exist_ok"}
         },
-        "variant_contract": asdict(spec) | {"config": str(spec.config)},
+        # Contracts are persisted as JSON. Keep tuple-valued dataclass fields
+        # JSON-native here so a resumed manifest compares equal after a
+        # write/read round trip.
+        "variant_contract": asdict(spec)
+        | {
+            "config": str(spec.config),
+            "detect_from": list(spec.detect_from),
+        },
         "source_preflight": source_report,
         "model_preflight": model_report,
     }

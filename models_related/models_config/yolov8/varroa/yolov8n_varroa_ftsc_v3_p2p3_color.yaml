@@ -1,0 +1,59 @@
+# V1 plus the existing RGB-derived P2 color residual. Detect taps the fused P2
+# and the downstream P3 produced from it.
+ftsc:
+  enabled: true
+  policy: f5
+  evidence: [position_gaussian, dfl_distribution]
+  position_alpha: 6.0
+  dfl_entropy_tau: 1.0
+  dfl_variance_tau: 0.0
+  dfl_detach: true
+  dfl_apply_cls: true
+  dfl_apply_box: false
+  dfl_apply_dfl: false
+  apply_cls: true
+  apply_box: true
+  apply_dfl: true
+  log_clip: 0.35
+  per_gt_norm: true
+  warmup_epochs: 5
+  ramp_epochs: 10
+  strength_init: 1.0
+  strength_max: 2.0
+  strength_reg_weight: 0.0001
+  fixed_strengths: {dfl_distribution: 1.0}
+nc: 1
+scale: n
+scales: {n: [0.33, 0.25, 1024]}
+backbone:
+  - [-1, 1, Conv, [64, 3, 2]]
+  - [-1, 1, Conv, [128, 3, 2]]
+  - [-1, 3, RepC2f, [128, true]]
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [-1, 6, RepC2f, [256, true]]
+  - [-1, 1, Conv, [512, 3, 2]]
+  - [-1, 6, RepC2f, [512, true]]
+  - [-1, 1, Conv, [1024, 3, 2]]
+  - [-1, 3, RepC2f, [1024, true]]
+  - [-1, 1, SPPF, [1024, 5]]
+head:
+  - [-1, 1, nn.Upsample, [null, 2, nearest]]
+  - [[-1, 6], 1, Concat, [1]]
+  - [-1, 3, RepC2f, [512]]
+  - [-1, 1, nn.Upsample, [null, 2, nearest]]
+  - [[-1, 4], 1, Concat, [1]]
+  - [-1, 3, RepC2f, [256]]
+  - [-1, 1, nn.Upsample, [null, 2, nearest]]
+  - [[-1, 2], 1, Concat, [1]]
+  - [-1, 3, RepC2f, [128]]
+  - [-1, 1, P2ColorCueFusion, [32]]  # 19: fused P2/4
+  - [-1, 1, Conv, [128, 3, 2]]
+  - [[-1, 15], 1, Concat, [1]]
+  - [-1, 3, RepC2f, [256]]          # 22: P3/8 downstream from fused P2
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [[-1, 12], 1, Concat, [1]]
+  - [-1, 3, RepC2f, [512]]
+  - [-1, 1, Conv, [512, 3, 2]]
+  - [[-1, 9], 1, Concat, [1]]
+  - [-1, 3, RepC2f, [1024]]
+  - [[19, 22], 1, Detect, [nc]]
