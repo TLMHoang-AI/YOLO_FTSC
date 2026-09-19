@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import random
 from copy import deepcopy
 from typing import Any
@@ -20,6 +21,10 @@ from ultralytics.utils.instance import Instances
 from ultralytics.utils.metrics import bbox_ioa
 from ultralytics.utils.ops import segment2box, xywh2xyxy, xyxyxyxy2xywhr
 from ultralytics.utils.torch_utils import TORCHVISION_0_10, TORCHVISION_0_11, TORCHVISION_0_13
+
+from project_ultralytics.context_augment import build_context_augment
+from project_ultralytics.copy_paste import build_small_object_copy_paste
+from project_ultralytics.mosaic_policy import MosaicProposal, candidate_centers, simulate_visible_boxes
 
 DEFAULT_MEAN = (0.0, 0.0, 0.0)
 DEFAULT_STD = (1.0, 1.0, 1.0)
@@ -250,7 +255,7 @@ class AdaptiveZoom:
         dropped = int((~keep).sum())
         labels["img"] = np.ascontiguousarray(resized)
         transformed_segments = instances.segments
-        if len(instances.segments):
+        if instances.segments is not None and len(instances.segments):
             segments = []
             for segment, retain in zip(instances.segments, keep, strict=True):
                 points = np.asarray(segment, dtype=np.float32).copy()
@@ -665,7 +670,7 @@ class Mosaic(BaseMixTransform):
             >>> indexes = mosaic.get_indexes()
             >>> print(len(indexes))  # Output: 3
         """
-        if self.buffer_enabled:  # select images from buffer
+        if self.buffer_enabled and self.dataset.buffer:  # select images from buffer
             return random.choices(list(self.dataset.buffer), k=self.n - 1)
         else:  # select any images
             return [random.randint(0, len(self.dataset) - 1) for _ in range(self.n - 1)]
@@ -683,10 +688,23 @@ class Mosaic(BaseMixTransform):
         assert labels.get("rect_shape") is None, "rect and mosaic are mutually exclusive."
         assert len(labels.get("mix_labels", [])), "There are no other images for mosaic augment."
 
+        yc, xc = self._sample_center()
+        params["layout"] = self._build_layout(labels, xc, yc)
+        return params
+
+    def _sample_center(self) -> tuple[int, int]:
+        """Sample a standard Mosaic center, preserving the historical RNG path."""
+        s = self.imgsz
+        return (
+            int(random.uniform(-self.border[0], 2 * s + self.border[0])),
+            int(random.uniform(-self.border[1], 2 * s + self.border[1])),
+        )
+
+    def _build_layout(self, labels: dict[str, Any], xc: int, yc: int) -> list[dict[str, Any]]:
+        """Build the existing layout for an explicitly selected center."""
         s = self.imgsz
         layout = []
         if self.n == 4:
-            yc, xc = (int(random.uniform(-x, 2 * s + x)) for x in self.border)
             for i in range(4):
                 labels_patch = labels if i == 0 else labels["mix_labels"][i - 1]
                 img = labels_patch["img"]
@@ -762,8 +780,7 @@ class Mosaic(BaseMixTransform):
                     }
                 )
                 hp, wp = h, w
-        params["layout"] = layout
-        return params
+        return layout
 
     def apply_image(self, labels: dict[str, Any], params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Apply mosaic augmentation to the image.
@@ -888,6 +905,8 @@ class Mosaic(BaseMixTransform):
             >>> updated_labels = Mosaic._update_labels(labels, padw, padh)
         """
         nh, nw = img_shape if img_shape is not None else labels["img"].shape[:2]
+        if labels["instances"].segments is None:
+            labels["instances"].segments = np.empty((len(labels["instances"]), 0, 2), dtype=np.float32)
         labels["instances"].convert_bbox(format="xyxy")
         labels["instances"].denormalize(nw, nh)
         labels["instances"].add_padding(padw, padh)
@@ -940,6 +959,198 @@ class Mosaic(BaseMixTransform):
         if "texts" in mosaic_labels[0]:
             final_labels["texts"] = mosaic_labels[0]["texts"]
         return final_labels
+
+
+class HardNegativeMosaic(Mosaic):
+    """Source M5 policy: visibility-preserving Mosaic plus one optional label-empty donor."""
+
+    def __init__(
+        self,
+        dataset,
+        imgsz: int = 640,
+        p: float = 1.0,
+        candidates: int = 16,
+        topk: int = 4,
+        visibility_thresh: float = 0.70,
+        visibility_lambda: float = 1.0,
+        hard_negative_tile: bool = True,
+        hardneg_mosaic_prob: float = 0.30,
+        hard_negative_bank: str | os.PathLike | None = None,
+    ) -> None:
+        super().__init__(dataset, imgsz=imgsz, p=p, n=4)
+        self.policy = "hard_negative"
+        self.candidates = max(int(candidates), 1)
+        self.topk = max(int(topk), 1)
+        self.visibility_thresh = float(visibility_thresh)
+        self.visibility_lambda = float(visibility_lambda)
+        self.hard_negative_tile = bool(hard_negative_tile)
+        self.hardneg_mosaic_prob = float(hardneg_mosaic_prob)
+        self.hardneg_bank = self._load_hard_negative_bank(hard_negative_bank)
+        self._metadata = getattr(dataset, "labels", [])
+        self._index_by_file = {
+            os.path.realpath(os.path.expanduser(str(path))): index
+            for index, path in enumerate(getattr(dataset, "im_files", []))
+        }
+        self._diagnostics = getattr(dataset, "mosaic_policy_diagnostics", None)
+        if self._diagnostics is None or self._diagnostics.get("policy") != self.policy:
+            self._diagnostics = {
+                "policy": self.policy,
+                "selected": 0,
+                "fallback": 0,
+                "visibility": [],
+                "partial_fraction": [],
+                "removed_fraction": [],
+                "visible_count": [],
+                "reference_visible_count": [],
+                "hardneg_count": 0,
+                "hardneg_confidence": [],
+            }
+            dataset.mosaic_policy_diagnostics = self._diagnostics
+
+    @staticmethod
+    def _load_hard_negative_bank(path: str | os.PathLike | None) -> list[dict[str, Any]]:
+        if not path:
+            return []
+        import json
+
+        with open(path, encoding="utf-8") as stream:
+            bank = json.load(stream)
+        if not isinstance(bank, list):
+            raise ValueError("hard_negative_bank must contain a JSON list")
+        return [item for item in bank if isinstance(item, dict) and "image" in item and "crop_xyxy" in item]
+
+    def _anchor_index(self, labels: dict[str, Any]) -> int:
+        key = os.path.realpath(os.path.expanduser(str(labels.get("im_file", ""))))
+        return self._index_by_file.get(key, 0)
+
+    def _prepare_hard_negative(self, template: dict[str, Any]) -> dict[str, Any] | None:
+        """Create a source-faithful, explicitly label-empty hard-negative donor."""
+        if not self.hard_negative_tile or not self.hardneg_bank or random.random() >= self.hardneg_mosaic_prob:
+            return None
+        item = random.choices(
+            self.hardneg_bank,
+            weights=[0.5 + 0.5 * float(entry.get("fp_conf", 0.0)) for entry in self.hardneg_bank],
+            k=1,
+        )[0]
+        image = cv2.imread(str(item["image"]))
+        if image is None:
+            return None
+        x1, y1, x2, y2 = [int(value) for value in item["crop_xyxy"]]
+        image = image[max(y1, 0) : max(y2, 0), max(x1, 0) : max(x2, 0)]
+        if image.size == 0:
+            return None
+        height, width = image.shape[:2]
+        if max(height, width) > self.imgsz:
+            scale = self.imgsz / max(height, width)
+            image = cv2.resize(
+                image,
+                (max(int(width * scale), 1), max(int(height * scale), 1)),
+                interpolation=cv2.INTER_AREA,
+            )
+        empty = deepcopy(template)
+        empty["img"] = image
+        empty["resized_shape"] = image.shape[:2]
+        empty["instances"] = Instances(
+            np.empty((0, 4), dtype=np.float32),
+            segments=np.empty((0, 0, 2), dtype=np.float32),
+            bbox_format="xywh",
+            normalized=True,
+        )
+        empty["cls"] = template["cls"][:0]
+        empty["im_file"] = str(item["image"])
+        self._diagnostics["hardneg_count"] += 1
+        self._diagnostics["hardneg_confidence"].append(float(item.get("fp_conf", 0.0)))
+        return empty
+
+    def _load(self, indices: tuple[int, ...], labels: dict[str, Any]) -> list[dict[str, Any]]:
+        mix_labels = [self.dataset.get_image_and_label(index) for index in indices]
+        labels["mix_labels"] = mix_labels
+        self._update_label_text(labels)
+        return mix_labels
+
+    def _proposal_visibility(self, indices: list[int], xc: int, yc: int) -> np.ndarray:
+        return simulate_visible_boxes(self._metadata, indices, self.imgsz, xc, yc)
+
+    def _choose_visibility(self, anchor: int, donors: tuple[int, ...]) -> MosaicProposal:
+        indices = [anchor, *donors]
+        reference = self._sample_center()
+        reference_visibility = self._proposal_visibility(indices, *reference[::-1])
+        reference_count = int(np.count_nonzero(reference_visibility > 0))
+        self._last_reference_visible_count = reference_count
+        proposals = []
+        for xc, yc in candidate_centers(self.imgsz, self.border, self.candidates):
+            visibility = self._proposal_visibility(indices, xc, yc)
+            visible_count = int(np.count_nonzero(visibility > 0))
+            reference_boxes_kept = not np.any((reference_visibility > 0) & (visibility <= 0))
+            if visible_count == reference_count and reference_boxes_kept:
+                partial = float(np.count_nonzero((visibility > 0) & (visibility < self.visibility_thresh)))
+                score = float(
+                    visibility[reference_visibility > 0].sum() - 0.1 * self.visibility_lambda * partial
+                )
+                proposals.append(MosaicProposal(donors, xc, yc, visibility, None, score))
+        if not proposals:
+            self._diagnostics["fallback"] += 1
+            return MosaicProposal(donors, reference[1], reference[0], reference_visibility, None, None)
+        proposals.sort(key=lambda item: float(item.score), reverse=True)
+        return random.choice(proposals[: min(self.topk, len(proposals))])
+
+    def get_params(self, labels: dict[str, Any]) -> dict[str, Any]:
+        assert labels.get("rect_shape") is None, "rect and mosaic are mutually exclusive."
+        anchor = self._anchor_index(labels)
+        donors = tuple(self.get_indexes())
+        proposal = self._choose_visibility(anchor, donors)
+        mix_labels = self._load(proposal.donor_indices, labels)
+        negative = self._prepare_hard_negative(mix_labels[-1] if mix_labels else labels)
+        if negative is not None:
+            mix_labels[-1] = negative
+        params = {"mix_labels": mix_labels, "layout": self._build_layout(labels, proposal.xc, proposal.yc)}
+        self._diagnostics["selected"] += 1
+        values = proposal.visibility
+        if values is not None:
+            self._diagnostics["visibility"].append(float(np.mean(values)) if len(values) else 1.0)
+            self._diagnostics["partial_fraction"].append(
+                float(np.mean((values > 0) & (values < self.visibility_thresh))) if len(values) else 0.0
+            )
+            self._diagnostics["removed_fraction"].append(float(np.mean(values <= 0)) if len(values) else 0.0)
+            self._diagnostics["visible_count"].append(int(np.count_nonzero(values > 0)))
+            self._diagnostics["reference_visible_count"].append(int(self._last_reference_visible_count))
+        return params
+
+    def save_diagnostics(self, path: str | os.PathLike) -> None:
+        import json
+
+        summary = dict(self._diagnostics)
+        for key, values in list(summary.items()):
+            if isinstance(values, list):
+                summary[key] = {
+                    "count": len(values),
+                    "mean": float(np.mean(values)) if values else 0.0,
+                    "min": float(np.min(values)) if values else 0.0,
+                    "max": float(np.max(values)) if values else 0.0,
+                }
+        with open(path, "w", encoding="utf-8") as stream:
+            json.dump(summary, stream, indent=2)
+
+
+def build_mosaic(dataset, imgsz: int, hyp):
+    """Construct standard Mosaic or the source-faithful M5 policy."""
+    policy = str(getattr(hyp, "mosaic_policy", "standard")).lower()
+    if policy in {"", "standard", "none"}:
+        return Mosaic(dataset, imgsz=imgsz, p=hyp.mosaic)
+    if policy not in {"hard_negative", "hardneg"}:
+        raise ValueError(f"The FTSC augmentation suite does not expose Mosaic policy: {policy}")
+    return HardNegativeMosaic(
+        dataset,
+        imgsz=imgsz,
+        p=hyp.mosaic,
+        candidates=getattr(hyp, "mosaic_policy_candidates", 16),
+        topk=getattr(hyp, "mosaic_policy_topk", 4),
+        visibility_thresh=getattr(hyp, "mosaic_visibility_thresh", 0.70),
+        visibility_lambda=getattr(hyp, "mosaic_visibility_lambda", 1.0),
+        hard_negative_tile=getattr(hyp, "hard_negative_tile", False),
+        hardneg_mosaic_prob=getattr(hyp, "hardneg_mosaic_prob", 0.30),
+        hard_negative_bank=getattr(hyp, "hard_negative_bank", None),
+    )
 
 
 class MixUp(BaseMixTransform):
@@ -3097,6 +3308,16 @@ class RandomLoadText(BaseTransform):
         return labels
 
 
+def _context_aug_sequence(pre_transform, context_aug, placement: str):
+    """Place OACP at the same pipeline boundary as Duy's source fork."""
+    placement = str(placement).lower()
+    if placement == "pre_transform":
+        return [*context_aug, pre_transform]
+    if placement == "post_mosaic":
+        return [pre_transform, *context_aug]
+    raise ValueError(f"unknown OACP_PLACEMENT: {placement}")
+
+
 def v8_transforms(dataset, imgsz: int, hyp: IterableSimpleNamespace, stretch: bool = False):
     """Apply a series of image transformations for training.
 
@@ -3137,7 +3358,7 @@ def v8_transforms(dataset, imgsz: int, hyp: IterableSimpleNamespace, stretch: bo
         >>> hyp.augmentations = augmentations
         >>> transforms = v8_transforms(dataset, imgsz=640, hyp=hyp)
     """
-    mosaic = Mosaic(dataset, imgsz=imgsz, p=hyp.mosaic)
+    mosaic = build_mosaic(dataset, imgsz, hyp)
     affine = RandomPerspective(
         degrees=hyp.degrees,
         translate=hyp.translate,
@@ -3148,15 +3369,17 @@ def v8_transforms(dataset, imgsz: int, hyp: IterableSimpleNamespace, stretch: bo
     )
 
     pre_transform = Compose([mosaic, affine])
+    # Custom detection CP2 is appended separately. Never route its "single"
+    # mode into Ultralytics' segmentation-only CopyPaste implementation.
     if hyp.copy_paste_mode == "flip":
-        pre_transform.insert(1, CopyPaste(dataset, p=hyp.copy_paste, mode=hyp.copy_paste_mode))
-    else:
+        pre_transform.insert(1, CopyPaste(dataset, p=hyp.copy_paste, mode="flip"))
+    elif hyp.copy_paste_mode == "mixup":
         pre_transform.append(
             CopyPaste(
                 dataset,
-                pre_transform=Compose([Mosaic(dataset, imgsz=imgsz, p=hyp.mosaic), affine]),
+                pre_transform=Compose([build_mosaic(dataset, imgsz, hyp), affine]),
                 p=hyp.copy_paste,
-                mode=hyp.copy_paste_mode,
+                mode="mixup",
             )
         )
     flip_idx = dataset.data.get("flip_idx", [])  # for keypoints augmentation
@@ -3168,9 +3391,21 @@ def v8_transforms(dataset, imgsz: int, hyp: IterableSimpleNamespace, stretch: bo
         elif flip_idx and (len(flip_idx) != kpt_shape[0]):
             raise ValueError(f"data.yaml flip_idx={flip_idx} length must be equal to kpt_shape[0]={kpt_shape[0]}")
 
+    context_aug = build_context_augment(dataset)
+    detection_copy_paste = build_small_object_copy_paste(dataset, hyp)
+    # A1 explicitly selects pre_transform. The source A4 combination did not
+    # set OACP_PLACEMENT, so its actual order is M5/RandomPerspective -> OACP.
+    final_canvas_aug = _context_aug_sequence(
+        pre_transform,
+        context_aug,
+        os.environ.get("OACP_PLACEMENT", "post_mosaic"),
+    )
+    if detection_copy_paste is not None:
+        final_canvas_aug.append(detection_copy_paste)
+
     return Compose(
         [
-            pre_transform,
+            *final_canvas_aug,
             MixUp(dataset, pre_transform=pre_transform, p=hyp.mixup),
             CutMix(dataset, pre_transform=pre_transform, p=hyp.cutmix),
             Albumentations(p=1.0, transforms=getattr(hyp, "augmentations", None)),

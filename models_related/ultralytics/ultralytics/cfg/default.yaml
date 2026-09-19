@@ -226,10 +226,31 @@ hf_atten_max_alpha: 1.0 # (float) EXPERIMENTAL maximum retained high-frequency r
 hf_atten_blur_kernel: 5 # (int) EXPERIMENTAL odd blur kernel for high-frequency residual
 hf_atten_mask_grid: 16 # (int) EXPERIMENTAL random alpha grid size before upsampling
 mosaic: 1.0 # (float) mosaic augmentation probability
+mosaic_policy: standard # (str) standard or hard_negative (M5)
+mosaic_policy_candidates: 16 # (int) visibility-preserving center proposals used by M5
+mosaic_policy_topk: 4 # (int) stochastic pool among the highest-scoring M5 proposals
+mosaic_visibility_thresh: 0.70 # (float) partial-box visibility threshold used by M5
+mosaic_visibility_lambda: 1.0 # (float) partial-box penalty used by M5
+hard_negative_tile: false # (bool) replace one M5 donor with a mined hard-negative crop
+hardneg_mosaic_prob: 0.30 # (float) probability of hard-negative donor replacement
+hard_negative_bank: # (str, optional) JSON bank created by tools/mine_mosaic_hard_negatives.py
 mixup: 0.0 # (float) MixUp augmentation probability
 cutmix: 0.0 # (float) CutMix augmentation probability
 copy_paste: 0.0 # (float) segmentation copy-paste probability
 copy_paste_mode: flip # (str) copy-paste strategy for segmentation: flip or mixup
+# Detection CP2 is separate from the segmentation copy_paste option above.
+copy_paste_enabled: false # (bool) enable object-detection Copy-Paste
+copy_paste_p: 0.5 # (float) image probability
+copy_paste_unit: single # (str) CP2 uses a single source object
+copy_paste_copies: 1 # (int) source default; the CP2 case explicitly overrides this to two
+copy_paste_placement: random # (str) random or collision_aware
+copy_paste_max_overlap: 0.0 # (float) overlap threshold for collision-aware placement
+copy_paste_padding: 0.0 # (float) CP2 crop padding (locked to zero)
+copy_paste_scale: 1.0 # (float) CP2 source scale (locked to native scale)
+copy_paste_blend: hard # (str) CP2 blend mode (locked to hard)
+copy_paste_max_trials: 30 # (int) destination attempts per copy
+copy_paste_allow_empty_target: true # (bool) allow CP2 on empty target images
+copy_paste_allow_same_source: true # (bool) permit source and target image identity
 adaptive_zoom: false # (bool) training-only GT-aware crop-and-resize
 adaptive_zoom_probability: 0.5 # (float) probability for the project Adaptive Zoom adaptation
 adaptive_zoom_target_min_side: 16.0 # (float) target tiny-object min side in pixels

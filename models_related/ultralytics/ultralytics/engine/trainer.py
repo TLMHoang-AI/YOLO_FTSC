@@ -636,10 +636,35 @@ class BaseTrainer:
         if RANK in {-1, 0}:
             if self.args.plots:
                 self.plot_metrics()
+            self._save_mosaic_policy_diagnostics()
             self.run_callbacks("on_train_end")
         self._clear_memory()
         unset_deterministic()
         self.run_callbacks("teardown")
+
+    def _save_mosaic_policy_diagnostics(self):
+        """Persist M5 diagnostics when a policy Mosaic exists in the transform tree."""
+        dataset = getattr(getattr(self, "train_loader", None), "dataset", None)
+        if dataset is None:
+            return
+        seen = set()
+        stack = [getattr(dataset, "transforms", None)]
+        while stack:
+            obj = stack.pop()
+            if obj is None or id(obj) in seen:
+                continue
+            seen.add(id(obj))
+            saver = getattr(obj, "save_diagnostics", None)
+            if callable(saver):
+                saver(Path(self.save_dir) / "mosaic_policy_diagnostics.json")
+                return
+            transforms = getattr(obj, "transforms", None)
+            if transforms:
+                stack.extend(transforms)
+            for attribute in ("normal_pipeline", "mosaic", "pre_transform"):
+                child = getattr(obj, attribute, None)
+                if child is not None:
+                    stack.append(child)
 
     def auto_batch(self, max_num_obj=0, dataset_size=0):
         """Calculate optimal batch size based on model and device memory constraints."""

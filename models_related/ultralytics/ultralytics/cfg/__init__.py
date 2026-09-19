@@ -230,9 +230,16 @@ CFG_FRACTION_KEYS = frozenset(
         "hf_atten_min_alpha",
         "hf_atten_max_alpha",
         "mosaic",
+        "mosaic_visibility_thresh",
+        "mosaic_visibility_lambda",
+        "hardneg_mosaic_prob",
         "mixup",
         "cutmix",
         "copy_paste",
+        "copy_paste_p",
+        "copy_paste_max_overlap",
+        "copy_paste_padding",
+        "copy_paste_scale",
         "conf",
         "iou",
         "soft_nms_sigma",
@@ -253,6 +260,11 @@ CFG_CHOICE_KEYS = {
     "quality_score_mode": {"cls_mul_q", "sqrt_cls_mul_q", "cls_mul_q2"},
     "dgfe_spatial_target_mode": {"iou", "edge_error"},
     "positive_support_mode": {"dominant", "random", "none"},
+    "mosaic_policy": {"standard", "hard_negative"},
+    "copy_paste_mode": {"flip", "mixup", "single"},
+    "copy_paste_unit": {"single"},
+    "copy_paste_placement": {"random", "collision_aware"},
+    "copy_paste_blend": {"hard"},
 }
 CFG_INT_KEYS = frozenset(
     {  # integer-only arguments
@@ -288,6 +300,10 @@ CFG_INT_KEYS = frozenset(
         "positive_support_warmup_end",
         "hf_atten_blur_kernel",
         "hf_atten_mask_grid",
+        "mosaic_policy_candidates",
+        "mosaic_policy_topk",
+        "copy_paste_copies",
+        "copy_paste_max_trials",
     }
 )
 CFG_BOOL_KEYS = frozenset(
@@ -315,6 +331,10 @@ CFG_BOOL_KEYS = frozenset(
         "loc_assign",
         "box_consensus_log_grad_ratio",
         "positive_support_dropout",
+        "hard_negative_tile",
+        "copy_paste_enabled",
+        "copy_paste_allow_empty_target",
+        "copy_paste_allow_same_source",
         "box_voting",
         "wiou_monotonous",
         "single_cls",
