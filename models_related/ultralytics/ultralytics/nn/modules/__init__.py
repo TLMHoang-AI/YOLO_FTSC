@@ -101,7 +101,7 @@ from .block import (
 )
 from .local_detail import LocalDetailRepC2f
 from .color_cue import P2ColorCueFusion, rgb_color_cues
-from .edge_cue import P2EdgeCueFusion, oriented_edge_responses
+from .edge_cue import EdgeCueFusion, P2EdgeCueFusion, P3EdgeCueFusion, oriented_edge_responses
 from .conv import (
     CBAM,
     ChannelAttention,
@@ -271,7 +271,9 @@ __all__ = (
     "LightConv",
     "LocalDetailRepC2f",
     "P2ColorCueFusion",
+    "EdgeCueFusion",
     "P2EdgeCueFusion",
+    "P3EdgeCueFusion",
     "rgb_color_cues",
     "oriented_edge_responses",
     "P1FusionLocalDetail",

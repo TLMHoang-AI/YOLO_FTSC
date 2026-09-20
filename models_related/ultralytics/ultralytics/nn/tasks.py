@@ -72,7 +72,9 @@ from ultralytics.nn.modules import (
     P2NUDFLDetect,
     P3NUDFLDetect,
     P2ColorCueFusion,
+    EdgeCueFusion,
     P2EdgeCueFusion,
+    P3EdgeCueFusion,
     DWConv,
     DWConvTranspose2d,
     Focus,
@@ -258,9 +260,9 @@ class BaseModel(torch.nn.Module):
         for m in self.model:
             if m.f != -1:  # if not from previous layer
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
-            if profile and not isinstance(m, (FeatureDGFE, MaskedP2DetailReconstruction, P2ColorCueFusion, P2EdgeCueFusion)):
+            if profile and not isinstance(m, (FeatureDGFE, MaskedP2DetailReconstruction, P2ColorCueFusion, EdgeCueFusion)):
                 self._profile_one_layer(m, x, dt)
-            if isinstance(m, (P2ColorCueFusion, P2EdgeCueFusion)):
+            if isinstance(m, (P2ColorCueFusion, EdgeCueFusion)):
                 x = m(x, img0)
             elif isinstance(m, FeatureDGFE):
                 x = m(x, img0)
@@ -293,7 +295,7 @@ class BaseModel(torch.nn.Module):
         for m in self.model:
             if m.f != -1:
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]
-            if isinstance(m, (P2ColorCueFusion, P2EdgeCueFusion)):
+            if isinstance(m, (P2ColorCueFusion, EdgeCueFusion)):
                 x = m(x, img0)
             elif isinstance(m, FeatureDGFE):
                 x = m(x, img0)
@@ -343,7 +345,7 @@ class BaseModel(torch.nn.Module):
                 if m.f != -1:
                     x = (y[m.f] if isinstance(m.f, int)
                          else [x if j == -1 else y[j] for j in m.f])
-                if isinstance(m, (P2ColorCueFusion, P2EdgeCueFusion)):
+                if isinstance(m, (P2ColorCueFusion, EdgeCueFusion)):
                     x = m(x, img0)
                 elif isinstance(m, FeatureDGFE):
                     x = m(x, img0)
@@ -736,7 +738,7 @@ class BaseModel(torch.nn.Module):
         diagnostics.update(getattr(self.criterion, "consensus_metrics", {}))
         diagnostics.update(getattr(self.criterion, "psd_metrics", {}))
         for module in self.modules():
-            if isinstance(module, P2EdgeCueFusion):
+            if isinstance(module, EdgeCueFusion):
                 # Only the committed training-phase snapshot is valid here.
                 # Evaluation/profile forwards are intentionally excluded.
                 diagnostics.update(module.diagnostic_metrics(source="train"))
@@ -2436,7 +2438,7 @@ def parse_model(d, ch, verbose=True):
             if c2 != nc:
                 c2 = make_divisible(min(c2, max_channels) * width, 8)
             args = [c1, c2, *args[1:]]
-        elif m in frozenset({P2ColorCueFusion, P2EdgeCueFusion}):
+        elif m in frozenset({P2ColorCueFusion, EdgeCueFusion, P2EdgeCueFusion, P3EdgeCueFusion}):
             c2 = ch[f]
             args = [c2, *args]
         elif m is ASFAttention:

@@ -2,7 +2,7 @@
 
 This is a BDNet-inspired project adaptation, not the full BDNet OrSM. Fixed
 oriented filters preserve directional information; a learned softmax gate selects
-orientations before a zero-initialized P2 residual projection.
+orientations before a zero-initialized residual projection at the target scale.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 from .conv import Conv
 
-__all__ = ("P2EdgeCueFusion", "oriented_edge_responses")
+__all__ = ("EdgeCueFusion", "P2EdgeCueFusion", "P3EdgeCueFusion", "oriented_edge_responses")
 
 
 def _oriented_kernels(dtype: torch.dtype = torch.float32) -> torch.Tensor:
@@ -39,15 +39,16 @@ def oriented_edge_responses(image: torch.Tensor) -> torch.Tensor:
     return F.conv2d(gray, kernels, padding=1).nan_to_num(0.0, 0.0, 0.0)
 
 
-class P2EdgeCueFusion(nn.Module):
-    """Orientation-selective edge branch with identity-friendly P2 fusion."""
+class EdgeCueFusion(nn.Module):
+    """Orientation-selective edge branch with identity-friendly target-scale fusion."""
 
     needs_image = True
     orientation_count = 4
+    _legacy_p2_diagnostics = False
 
     def __init__(
         self,
-        p2_channels: int,
+        target_channels: int,
         hidden: int = 32,
         residual_scale: float = 1.0,
         residual_schedule: str = "constant",
@@ -81,7 +82,7 @@ class P2EdgeCueFusion(nn.Module):
             if self.orientation_gate_mode == "learned"
             else None
         )
-        self.projection = nn.Conv2d(hidden, p2_channels, 1, bias=True)
+        self.projection = nn.Conv2d(hidden, target_channels, 1, bias=True)
         nn.init.zeros_(self.projection.weight)
         nn.init.zeros_(self.projection.bias)
         self.register_buffer("orientation_kernels", _oriented_kernels(), persistent=False)
@@ -126,8 +127,8 @@ class P2EdgeCueFusion(nn.Module):
             total += 2 * self.gate.in_features * self.gate.out_features
         return total / 1e9
 
-    def forward(self, p2: torch.Tensor, image: torch.Tensor) -> torch.Tensor:
-        responses = oriented_edge_responses(image).to(device=p2.device, dtype=p2.dtype)
+    def forward(self, target: torch.Tensor, image: torch.Tensor) -> torch.Tensor:
+        responses = oriented_edge_responses(image).to(device=target.device, dtype=target.dtype)
         # Gate from pooled directional responses; softmax guarantees normalized weights.
         pooled = responses.abs().mean(dim=(-2, -1))
         if self.orientation_gate_mode == "uniform":
@@ -141,23 +142,27 @@ class P2EdgeCueFusion(nn.Module):
             weights = torch.softmax(self.gate(pooled), dim=-1)
         selected = responses * weights.unsqueeze(-1).unsqueeze(-1)
         feature = self.encoder(selected)
-        if feature.shape[-2:] != p2.shape[-2:]:
-            feature = F.interpolate(feature, size=p2.shape[-2:], mode="bilinear", align_corners=False)
+        if feature.shape[-2:] != target.shape[-2:]:
+            feature = F.interpolate(feature, size=target.shape[-2:], mode="bilinear", align_corners=False)
         effective_scale = self.effective_residual_scale()
         residual = self.projection(feature) * effective_scale
-        rgb_norm = p2.detach().flatten(1).norm(dim=1).mean().clamp_min(1e-8)
+        target_norm = target.detach().flatten(1).norm(dim=1).mean().clamp_min(1e-8)
         edge_norm = residual.detach().flatten(1).norm(dim=1).mean()
         entropy = -(weights.clamp_min(1e-8) * weights.clamp_min(1e-8).log()).sum(dim=-1).mean()
+        target_stride = 0.5 * (
+            image.shape[-2] / target.shape[-2] + image.shape[-1] / target.shape[-1]
+        )
         stats = {
             "orientation_gate_weights": weights.detach().mean(dim=0),
             "orientation_entropy": entropy.detach(),
-            "edge_feature_norm": edge_norm.detach(),
-            "rgb_p2_norm": rgb_norm,
-            "edge_rgb_norm_ratio": edge_norm / rgb_norm,
+            "edge_residual_norm": edge_norm.detach(),
+            "target_feature_norm": target_norm,
+            "edge_residual_target_norm_ratio": edge_norm / target_norm,
+            "target_stride": torch.as_tensor(target_stride, device=target.device, dtype=target.dtype),
             "edge_projection_norm": self.projection.weight.detach().norm(),
             "edge_activation_mean": feature.detach().mean(),
             "edge_activation_std": feature.detach().std(unbiased=False),
-            "edge_residual_alpha": torch.as_tensor(effective_scale, device=p2.device, dtype=p2.dtype),
+            "edge_residual_alpha": torch.as_tensor(effective_scale, device=target.device, dtype=target.dtype),
         }
         self._forward_id += 1
         source = "train" if self.training and torch.is_grad_enabled() else "eval"
@@ -169,7 +174,7 @@ class P2EdgeCueFusion(nn.Module):
             self._committed_source = source
             self._committed_epoch = self._epoch
             self._committed_forward_id = self._forward_id
-        return p2 + residual
+        return target + residual
 
     def invalidate_diagnostics(self) -> None:
         """Invalidate a pending training snapshot at a controlled boundary."""
@@ -203,13 +208,29 @@ class P2EdgeCueFusion(nn.Module):
                 continue
             metric_name = {
                 "orientation_entropy": "edge_orientation_entropy",
-                "edge_feature_norm": "edge_residual_norm",
-                "rgb_p2_norm": "edge_p2_norm",
-                "edge_rgb_norm_ratio": "edge_residual_p2_norm_ratio",
+                "edge_residual_norm": "edge_residual_norm",
+                "target_feature_norm": "edge_target_feature_norm",
+                "edge_residual_target_norm_ratio": "edge_residual_target_norm_ratio",
+                "target_stride": "edge_target_stride",
                 "edge_projection_norm": "edge_projection_weight_norm",
                 "edge_activation_mean": "edge_feature_activation_mean",
                 "edge_activation_std": "edge_feature_activation_std",
                 "edge_residual_alpha": "edge_effective_residual_alpha",
             }.get(name, f"edge_{name}")
             metrics[metric_name] = float(value.detach().mean().item())
+        if self._legacy_p2_diagnostics:
+            # Historical P2 log consumers use these names. Keep aliases while
+            # exposing scale-neutral fields for all new placements.
+            metrics["edge_p2_norm"] = metrics["edge_target_feature_norm"]
+            metrics["edge_residual_p2_norm_ratio"] = metrics["edge_residual_target_norm_ratio"]
         return metrics
+
+
+class P2EdgeCueFusion(EdgeCueFusion):
+    """Backward-compatible P2-named wrapper around :class:`EdgeCueFusion`."""
+
+    _legacy_p2_diagnostics = True
+
+
+class P3EdgeCueFusion(EdgeCueFusion):
+    """Descriptive P3-named wrapper around :class:`EdgeCueFusion`."""
