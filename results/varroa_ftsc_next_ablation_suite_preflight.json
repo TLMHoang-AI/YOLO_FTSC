@@ -1,0 +1,1249 @@
+{
+  "case_names": [
+    "FTSC_P234_EDGE_P2_DETECT_ONLY",
+    "FTSC_P34",
+    "FTSC_P34_EDGE_P3_DETECT_ONLY",
+    "FTSC_P23_NOMOSAIC",
+    "FTSC_P23_CP2",
+    "FTSC_P23_NOMOSAIC_CP2",
+    "EDGE_P2_DETECT_ONLY_NOMOSAIC",
+    "EDGE_P2_DETECT_ONLY_CP2",
+    "EDGE_P2_DETECT_ONLY_NOMOSAIC_CP2"
+  ],
+  "model": {
+    "EDGE_P2_DETECT_ONLY_CP2": {
+      "detect_from": [
+        19,
+        22
+      ],
+      "detect_source_types": [
+        "P2EdgeCueFusion",
+        "RepC2f"
+      ],
+      "detect_strides": [
+        4.0,
+        8.0
+      ],
+      "edge_count": 1,
+      "edge_kernel_sha256": "60dcdd4114d79a544ec925c2d91a5f93bd744fa239839b2f487bb32f8c637815",
+      "forward_input_shape": [
+        1,
+        3,
+        64,
+        64
+      ],
+      "forward_output_shapes": [
+        [
+          1,
+          5,
+          320
+        ],
+        {
+          "boxes": [
+            1,
+            64,
+            320
+          ],
+          "feats": [
+            [
+              1,
+              32,
+              16,
+              16
+            ],
+            [
+              1,
+              64,
+              8,
+              8
+            ]
+          ],
+          "scores": [
+            1,
+            1,
+            320
+          ]
+        }
+      ],
+      "gflops_640": 13.0633856,
+      "gradients": 2699307,
+      "parameters": 2699323
+    },
+    "EDGE_P2_DETECT_ONLY_NOMOSAIC": {
+      "detect_from": [
+        19,
+        22
+      ],
+      "detect_source_types": [
+        "P2EdgeCueFusion",
+        "RepC2f"
+      ],
+      "detect_strides": [
+        4.0,
+        8.0
+      ],
+      "edge_count": 1,
+      "edge_kernel_sha256": "60dcdd4114d79a544ec925c2d91a5f93bd744fa239839b2f487bb32f8c637815",
+      "forward_input_shape": [
+        1,
+        3,
+        64,
+        64
+      ],
+      "forward_output_shapes": [
+        [
+          1,
+          5,
+          320
+        ],
+        {
+          "boxes": [
+            1,
+            64,
+            320
+          ],
+          "feats": [
+            [
+              1,
+              32,
+              16,
+              16
+            ],
+            [
+              1,
+              64,
+              8,
+              8
+            ]
+          ],
+          "scores": [
+            1,
+            1,
+            320
+          ]
+        }
+      ],
+      "gflops_640": 13.0633856,
+      "gradients": 2699307,
+      "parameters": 2699323
+    },
+    "EDGE_P2_DETECT_ONLY_NOMOSAIC_CP2": {
+      "detect_from": [
+        19,
+        22
+      ],
+      "detect_source_types": [
+        "P2EdgeCueFusion",
+        "RepC2f"
+      ],
+      "detect_strides": [
+        4.0,
+        8.0
+      ],
+      "edge_count": 1,
+      "edge_kernel_sha256": "60dcdd4114d79a544ec925c2d91a5f93bd744fa239839b2f487bb32f8c637815",
+      "forward_input_shape": [
+        1,
+        3,
+        64,
+        64
+      ],
+      "forward_output_shapes": [
+        [
+          1,
+          5,
+          320
+        ],
+        {
+          "boxes": [
+            1,
+            64,
+            320
+          ],
+          "feats": [
+            [
+              1,
+              32,
+              16,
+              16
+            ],
+            [
+              1,
+              64,
+              8,
+              8
+            ]
+          ],
+          "scores": [
+            1,
+            1,
+            320
+          ]
+        }
+      ],
+      "gflops_640": 13.0633856,
+      "gradients": 2699307,
+      "parameters": 2699323
+    },
+    "FTSC_P234_EDGE_P2_DETECT_ONLY": {
+      "detect_from": [
+        19,
+        22,
+        25
+      ],
+      "detect_source_types": [
+        "P2EdgeCueFusion",
+        "RepC2f",
+        "RepC2f"
+      ],
+      "detect_strides": [
+        4.0,
+        8.0,
+        16.0
+      ],
+      "edge_count": 1,
+      "edge_kernel_sha256": "60dcdd4114d79a544ec925c2d91a5f93bd744fa239839b2f487bb32f8c637815",
+      "forward_input_shape": [
+        1,
+        3,
+        64,
+        64
+      ],
+      "forward_output_shapes": [
+        [
+          1,
+          5,
+          336
+        ],
+        {
+          "boxes": [
+            1,
+            64,
+            336
+          ],
+          "feats": [
+            [
+              1,
+              32,
+              16,
+              16
+            ],
+            [
+              1,
+              64,
+              8,
+              8
+            ],
+            [
+              1,
+              128,
+              4,
+              4
+            ]
+          ],
+          "scores": [
+            1,
+            1,
+            336
+          ]
+        }
+      ],
+      "gflops_640": 13.580608000000002,
+      "gradients": 2971598,
+      "parameters": 2971614
+    },
+    "FTSC_P23_CP2": {
+      "detect_from": [
+        18,
+        21
+      ],
+      "detect_source_types": [
+        "RepC2f",
+        "RepC2f"
+      ],
+      "detect_strides": [
+        4.0,
+        8.0
+      ],
+      "edge_count": 0,
+      "edge_kernel_sha256": null,
+      "forward_input_shape": [
+        1,
+        3,
+        64,
+        64
+      ],
+      "forward_output_shapes": [
+        [
+          1,
+          5,
+          320
+        ],
+        {
+          "boxes": [
+            1,
+            64,
+            320
+          ],
+          "feats": [
+            [
+              1,
+              32,
+              16,
+              16
+            ],
+            [
+              1,
+              64,
+              8,
+              8
+            ]
+          ],
+          "scores": [
+            1,
+            1,
+            320
+          ]
+        }
+      ],
+      "gflops_640": 11.7919744,
+      "gradients": 2678455,
+      "parameters": 2678471
+    },
+    "FTSC_P23_NOMOSAIC": {
+      "detect_from": [
+        18,
+        21
+      ],
+      "detect_source_types": [
+        "RepC2f",
+        "RepC2f"
+      ],
+      "detect_strides": [
+        4.0,
+        8.0
+      ],
+      "edge_count": 0,
+      "edge_kernel_sha256": null,
+      "forward_input_shape": [
+        1,
+        3,
+        64,
+        64
+      ],
+      "forward_output_shapes": [
+        [
+          1,
+          5,
+          320
+        ],
+        {
+          "boxes": [
+            1,
+            64,
+            320
+          ],
+          "feats": [
+            [
+              1,
+              32,
+              16,
+              16
+            ],
+            [
+              1,
+              64,
+              8,
+              8
+            ]
+          ],
+          "scores": [
+            1,
+            1,
+            320
+          ]
+        }
+      ],
+      "gflops_640": 11.7919744,
+      "gradients": 2678455,
+      "parameters": 2678471
+    },
+    "FTSC_P23_NOMOSAIC_CP2": {
+      "detect_from": [
+        18,
+        21
+      ],
+      "detect_source_types": [
+        "RepC2f",
+        "RepC2f"
+      ],
+      "detect_strides": [
+        4.0,
+        8.0
+      ],
+      "edge_count": 0,
+      "edge_kernel_sha256": null,
+      "forward_input_shape": [
+        1,
+        3,
+        64,
+        64
+      ],
+      "forward_output_shapes": [
+        [
+          1,
+          5,
+          320
+        ],
+        {
+          "boxes": [
+            1,
+            64,
+            320
+          ],
+          "feats": [
+            [
+              1,
+              32,
+              16,
+              16
+            ],
+            [
+              1,
+              64,
+              8,
+              8
+            ]
+          ],
+          "scores": [
+            1,
+            1,
+            320
+          ]
+        }
+      ],
+      "gflops_640": 11.7919744,
+      "gradients": 2678455,
+      "parameters": 2678471
+    },
+    "FTSC_P34": {
+      "detect_from": [
+        21,
+        24
+      ],
+      "detect_source_types": [
+        "RepC2f",
+        "RepC2f"
+      ],
+      "detect_strides": [
+        8.0,
+        16.0
+      ],
+      "edge_count": 0,
+      "edge_kernel_sha256": null,
+      "forward_input_shape": [
+        1,
+        3,
+        64,
+        64
+      ],
+      "forward_output_shapes": [
+        [
+          1,
+          5,
+          80
+        ],
+        {
+          "boxes": [
+            1,
+            64,
+            80
+          ],
+          "feats": [
+            [
+              1,
+              64,
+              8,
+              8
+            ],
+            [
+              1,
+              128,
+              4,
+              4
+            ]
+          ],
+          "scores": [
+            1,
+            1,
+            80
+          ]
+        }
+      ],
+      "gflops_640": 9.0812416,
+      "gradients": 2927703,
+      "parameters": 2927719
+    },
+    "FTSC_P34_EDGE_P3_DETECT_ONLY": {
+      "detect_from": [
+        22,
+        25
+      ],
+      "detect_source_types": [
+        "P3EdgeCueFusion",
+        "RepC2f"
+      ],
+      "detect_strides": [
+        8.0,
+        16.0
+      ],
+      "edge_count": 1,
+      "edge_kernel_sha256": "60dcdd4114d79a544ec925c2d91a5f93bd744fa239839b2f487bb32f8c637815",
+      "forward_input_shape": [
+        1,
+        3,
+        64,
+        64
+      ],
+      "forward_output_shapes": [
+        [
+          1,
+          5,
+          80
+        ],
+        {
+          "boxes": [
+            1,
+            64,
+            80
+          ],
+          "feats": [
+            [
+              1,
+              64,
+              8,
+              8
+            ],
+            [
+              1,
+              128,
+              4,
+              4
+            ]
+          ],
+          "scores": [
+            1,
+            1,
+            80
+          ]
+        }
+      ],
+      "gflops_640": 10.3264384,
+      "gradients": 2949611,
+      "parameters": 2949627
+    }
+  },
+  "source": {
+    "canonical_ftsc_config": "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_v1_p2p3.yaml",
+    "case_names": [
+      "FTSC_P234_EDGE_P2_DETECT_ONLY",
+      "FTSC_P34",
+      "FTSC_P34_EDGE_P3_DETECT_ONLY",
+      "FTSC_P23_NOMOSAIC",
+      "FTSC_P23_CP2",
+      "FTSC_P23_NOMOSAIC_CP2",
+      "EDGE_P2_DETECT_ONLY_NOMOSAIC",
+      "EDGE_P2_DETECT_ONLY_CP2",
+      "EDGE_P2_DETECT_ONLY_NOMOSAIC_CP2"
+    ],
+    "cases": {
+      "EDGE_P2_DETECT_ONLY_CP2": {
+        "architecture_base": "REF_EDGE_P2_DETECT_ONLY",
+        "augmentation": {
+          "close_mosaic": 10,
+          "cp2_enabled": true,
+          "cp2_parameter_fingerprint": "94fca255b5106e541f34b664f4252f4995d4590d1e5f8f0fcf93d6eb79366ab7",
+          "cp2_parameters": {
+            "copy_paste": 0.0,
+            "copy_paste_allow_empty_target": true,
+            "copy_paste_allow_same_source": true,
+            "copy_paste_blend": "hard",
+            "copy_paste_copies": 2,
+            "copy_paste_enabled": true,
+            "copy_paste_max_overlap": 0.0,
+            "copy_paste_max_trials": 30,
+            "copy_paste_mode": "single",
+            "copy_paste_p": 0.5,
+            "copy_paste_padding": 0.0,
+            "copy_paste_placement": "random",
+            "copy_paste_scale": 1.0,
+            "copy_paste_unit": "single"
+          },
+          "m5_enabled": false,
+          "mosaic": 1.0,
+          "mosaic_source": "inherited_current_varroa_default",
+          "oacp_enabled": false,
+          "stock_segmentation_copy_paste": 0.0,
+          "train_overrides": {
+            "copy_paste": 0.0,
+            "copy_paste_allow_empty_target": true,
+            "copy_paste_allow_same_source": true,
+            "copy_paste_blend": "hard",
+            "copy_paste_copies": 2,
+            "copy_paste_enabled": true,
+            "copy_paste_max_overlap": 0.0,
+            "copy_paste_max_trials": 30,
+            "copy_paste_mode": "single",
+            "copy_paste_p": 0.5,
+            "copy_paste_padding": 0.0,
+            "copy_paste_placement": "random",
+            "copy_paste_scale": 1.0,
+            "copy_paste_unit": "single",
+            "hard_negative_bank": "",
+            "hard_negative_tile": false,
+            "mosaic_policy": "standard"
+          },
+          "transform_order": [
+            "StandardMosaic",
+            "RandomPerspective",
+            "DetectionCP2"
+          ]
+        },
+        "clean_downstream_verified": true,
+        "config": "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_edge_p2_detect_only.yaml",
+        "config_sha256": "f80e4a20e0a6048f9a4bed705012a802e4ac5ce615781c7b6dd3596d4b198733",
+        "detect_from": [
+          19,
+          22
+        ],
+        "detect_source_types": [
+          "P2EdgeCueFusion",
+          "RepC2f"
+        ],
+        "detect_strides": [
+          4.0,
+          8.0
+        ],
+        "edge_detect_only": true,
+        "edge_enabled": true,
+        "edge_index": 19,
+        "ftsc_fingerprint": "ff37542332fe0524a896cd68cc19ea22fca5c0b61324a0f50e198ea0a13f3a62",
+        "stage": "augmentation-edge",
+        "status": "PREPARED_NOT_RUN"
+      },
+      "EDGE_P2_DETECT_ONLY_NOMOSAIC": {
+        "architecture_base": "REF_EDGE_P2_DETECT_ONLY",
+        "augmentation": {
+          "close_mosaic": 0,
+          "cp2_enabled": false,
+          "cp2_parameter_fingerprint": "94fca255b5106e541f34b664f4252f4995d4590d1e5f8f0fcf93d6eb79366ab7",
+          "cp2_parameters": null,
+          "m5_enabled": false,
+          "mosaic": 0.0,
+          "mosaic_source": "explicit_off",
+          "oacp_enabled": false,
+          "stock_segmentation_copy_paste": 0.0,
+          "train_overrides": {
+            "close_mosaic": 0,
+            "copy_paste": 0.0,
+            "copy_paste_enabled": false,
+            "hard_negative_bank": "",
+            "hard_negative_tile": false,
+            "mosaic": 0.0,
+            "mosaic_policy": "standard"
+          },
+          "transform_order": [
+            "Mosaic_disabled",
+            "RandomPerspective"
+          ]
+        },
+        "clean_downstream_verified": true,
+        "config": "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_edge_p2_detect_only.yaml",
+        "config_sha256": "f80e4a20e0a6048f9a4bed705012a802e4ac5ce615781c7b6dd3596d4b198733",
+        "detect_from": [
+          19,
+          22
+        ],
+        "detect_source_types": [
+          "P2EdgeCueFusion",
+          "RepC2f"
+        ],
+        "detect_strides": [
+          4.0,
+          8.0
+        ],
+        "edge_detect_only": true,
+        "edge_enabled": true,
+        "edge_index": 19,
+        "ftsc_fingerprint": "ff37542332fe0524a896cd68cc19ea22fca5c0b61324a0f50e198ea0a13f3a62",
+        "stage": "augmentation-edge",
+        "status": "PREPARED_NOT_RUN"
+      },
+      "EDGE_P2_DETECT_ONLY_NOMOSAIC_CP2": {
+        "architecture_base": "REF_EDGE_P2_DETECT_ONLY",
+        "augmentation": {
+          "close_mosaic": 0,
+          "cp2_enabled": true,
+          "cp2_parameter_fingerprint": "94fca255b5106e541f34b664f4252f4995d4590d1e5f8f0fcf93d6eb79366ab7",
+          "cp2_parameters": {
+            "copy_paste": 0.0,
+            "copy_paste_allow_empty_target": true,
+            "copy_paste_allow_same_source": true,
+            "copy_paste_blend": "hard",
+            "copy_paste_copies": 2,
+            "copy_paste_enabled": true,
+            "copy_paste_max_overlap": 0.0,
+            "copy_paste_max_trials": 30,
+            "copy_paste_mode": "single",
+            "copy_paste_p": 0.5,
+            "copy_paste_padding": 0.0,
+            "copy_paste_placement": "random",
+            "copy_paste_scale": 1.0,
+            "copy_paste_unit": "single"
+          },
+          "m5_enabled": false,
+          "mosaic": 0.0,
+          "mosaic_source": "explicit_off",
+          "oacp_enabled": false,
+          "stock_segmentation_copy_paste": 0.0,
+          "train_overrides": {
+            "close_mosaic": 0,
+            "copy_paste": 0.0,
+            "copy_paste_allow_empty_target": true,
+            "copy_paste_allow_same_source": true,
+            "copy_paste_blend": "hard",
+            "copy_paste_copies": 2,
+            "copy_paste_enabled": true,
+            "copy_paste_max_overlap": 0.0,
+            "copy_paste_max_trials": 30,
+            "copy_paste_mode": "single",
+            "copy_paste_p": 0.5,
+            "copy_paste_padding": 0.0,
+            "copy_paste_placement": "random",
+            "copy_paste_scale": 1.0,
+            "copy_paste_unit": "single",
+            "hard_negative_bank": "",
+            "hard_negative_tile": false,
+            "mosaic": 0.0,
+            "mosaic_policy": "standard"
+          },
+          "transform_order": [
+            "Mosaic_disabled",
+            "RandomPerspective",
+            "DetectionCP2"
+          ]
+        },
+        "clean_downstream_verified": true,
+        "config": "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_edge_p2_detect_only.yaml",
+        "config_sha256": "f80e4a20e0a6048f9a4bed705012a802e4ac5ce615781c7b6dd3596d4b198733",
+        "detect_from": [
+          19,
+          22
+        ],
+        "detect_source_types": [
+          "P2EdgeCueFusion",
+          "RepC2f"
+        ],
+        "detect_strides": [
+          4.0,
+          8.0
+        ],
+        "edge_detect_only": true,
+        "edge_enabled": true,
+        "edge_index": 19,
+        "ftsc_fingerprint": "ff37542332fe0524a896cd68cc19ea22fca5c0b61324a0f50e198ea0a13f3a62",
+        "stage": "augmentation-edge",
+        "status": "PREPARED_NOT_RUN"
+      },
+      "FTSC_P234_EDGE_P2_DETECT_ONLY": {
+        "architecture_base": "REF_HEAD_P234",
+        "augmentation": {
+          "close_mosaic": 10,
+          "cp2_enabled": false,
+          "cp2_parameter_fingerprint": "94fca255b5106e541f34b664f4252f4995d4590d1e5f8f0fcf93d6eb79366ab7",
+          "cp2_parameters": null,
+          "m5_enabled": false,
+          "mosaic": 1.0,
+          "mosaic_source": "inherited_current_varroa_default",
+          "oacp_enabled": false,
+          "stock_segmentation_copy_paste": 0.0,
+          "train_overrides": {
+            "copy_paste": 0.0,
+            "copy_paste_enabled": false,
+            "hard_negative_bank": "",
+            "hard_negative_tile": false,
+            "mosaic_policy": "standard"
+          },
+          "transform_order": [
+            "StandardMosaic",
+            "RandomPerspective"
+          ]
+        },
+        "clean_downstream_verified": true,
+        "config": "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_p234_edge_p2_detect_only.yaml",
+        "config_sha256": "9cc05747bb4eb1dc16ed5e467190260cde8cd11c5b432e0d14d3720f2cb31687",
+        "detect_from": [
+          19,
+          22,
+          25
+        ],
+        "detect_source_types": [
+          "P2EdgeCueFusion",
+          "RepC2f",
+          "RepC2f"
+        ],
+        "detect_strides": [
+          4.0,
+          8.0,
+          16.0
+        ],
+        "edge_detect_only": true,
+        "edge_enabled": true,
+        "edge_index": 19,
+        "ftsc_fingerprint": "ff37542332fe0524a896cd68cc19ea22fca5c0b61324a0f50e198ea0a13f3a62",
+        "stage": "architecture",
+        "status": "PREPARED_NOT_RUN"
+      },
+      "FTSC_P23_CP2": {
+        "architecture_base": "REF_FTSC_P23",
+        "augmentation": {
+          "close_mosaic": 10,
+          "cp2_enabled": true,
+          "cp2_parameter_fingerprint": "94fca255b5106e541f34b664f4252f4995d4590d1e5f8f0fcf93d6eb79366ab7",
+          "cp2_parameters": {
+            "copy_paste": 0.0,
+            "copy_paste_allow_empty_target": true,
+            "copy_paste_allow_same_source": true,
+            "copy_paste_blend": "hard",
+            "copy_paste_copies": 2,
+            "copy_paste_enabled": true,
+            "copy_paste_max_overlap": 0.0,
+            "copy_paste_max_trials": 30,
+            "copy_paste_mode": "single",
+            "copy_paste_p": 0.5,
+            "copy_paste_padding": 0.0,
+            "copy_paste_placement": "random",
+            "copy_paste_scale": 1.0,
+            "copy_paste_unit": "single"
+          },
+          "m5_enabled": false,
+          "mosaic": 1.0,
+          "mosaic_source": "inherited_current_varroa_default",
+          "oacp_enabled": false,
+          "stock_segmentation_copy_paste": 0.0,
+          "train_overrides": {
+            "copy_paste": 0.0,
+            "copy_paste_allow_empty_target": true,
+            "copy_paste_allow_same_source": true,
+            "copy_paste_blend": "hard",
+            "copy_paste_copies": 2,
+            "copy_paste_enabled": true,
+            "copy_paste_max_overlap": 0.0,
+            "copy_paste_max_trials": 30,
+            "copy_paste_mode": "single",
+            "copy_paste_p": 0.5,
+            "copy_paste_padding": 0.0,
+            "copy_paste_placement": "random",
+            "copy_paste_scale": 1.0,
+            "copy_paste_unit": "single",
+            "hard_negative_bank": "",
+            "hard_negative_tile": false,
+            "mosaic_policy": "standard"
+          },
+          "transform_order": [
+            "StandardMosaic",
+            "RandomPerspective",
+            "DetectionCP2"
+          ]
+        },
+        "clean_downstream_verified": true,
+        "config": "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_v1_p2p3.yaml",
+        "config_sha256": "cdab99127e6172f75a5a35f1b2cc7ae1b5a08a316447fec38092f33edde6cb09",
+        "detect_from": [
+          18,
+          21
+        ],
+        "detect_source_types": [
+          "RepC2f",
+          "RepC2f"
+        ],
+        "detect_strides": [
+          4.0,
+          8.0
+        ],
+        "edge_detect_only": false,
+        "edge_enabled": false,
+        "edge_index": null,
+        "ftsc_fingerprint": "ff37542332fe0524a896cd68cc19ea22fca5c0b61324a0f50e198ea0a13f3a62",
+        "stage": "augmentation-core",
+        "status": "PREPARED_NOT_RUN"
+      },
+      "FTSC_P23_NOMOSAIC": {
+        "architecture_base": "REF_FTSC_P23",
+        "augmentation": {
+          "close_mosaic": 0,
+          "cp2_enabled": false,
+          "cp2_parameter_fingerprint": "94fca255b5106e541f34b664f4252f4995d4590d1e5f8f0fcf93d6eb79366ab7",
+          "cp2_parameters": null,
+          "m5_enabled": false,
+          "mosaic": 0.0,
+          "mosaic_source": "explicit_off",
+          "oacp_enabled": false,
+          "stock_segmentation_copy_paste": 0.0,
+          "train_overrides": {
+            "close_mosaic": 0,
+            "copy_paste": 0.0,
+            "copy_paste_enabled": false,
+            "hard_negative_bank": "",
+            "hard_negative_tile": false,
+            "mosaic": 0.0,
+            "mosaic_policy": "standard"
+          },
+          "transform_order": [
+            "Mosaic_disabled",
+            "RandomPerspective"
+          ]
+        },
+        "clean_downstream_verified": true,
+        "config": "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_v1_p2p3.yaml",
+        "config_sha256": "cdab99127e6172f75a5a35f1b2cc7ae1b5a08a316447fec38092f33edde6cb09",
+        "detect_from": [
+          18,
+          21
+        ],
+        "detect_source_types": [
+          "RepC2f",
+          "RepC2f"
+        ],
+        "detect_strides": [
+          4.0,
+          8.0
+        ],
+        "edge_detect_only": false,
+        "edge_enabled": false,
+        "edge_index": null,
+        "ftsc_fingerprint": "ff37542332fe0524a896cd68cc19ea22fca5c0b61324a0f50e198ea0a13f3a62",
+        "stage": "augmentation-core",
+        "status": "PREPARED_NOT_RUN"
+      },
+      "FTSC_P23_NOMOSAIC_CP2": {
+        "architecture_base": "REF_FTSC_P23",
+        "augmentation": {
+          "close_mosaic": 0,
+          "cp2_enabled": true,
+          "cp2_parameter_fingerprint": "94fca255b5106e541f34b664f4252f4995d4590d1e5f8f0fcf93d6eb79366ab7",
+          "cp2_parameters": {
+            "copy_paste": 0.0,
+            "copy_paste_allow_empty_target": true,
+            "copy_paste_allow_same_source": true,
+            "copy_paste_blend": "hard",
+            "copy_paste_copies": 2,
+            "copy_paste_enabled": true,
+            "copy_paste_max_overlap": 0.0,
+            "copy_paste_max_trials": 30,
+            "copy_paste_mode": "single",
+            "copy_paste_p": 0.5,
+            "copy_paste_padding": 0.0,
+            "copy_paste_placement": "random",
+            "copy_paste_scale": 1.0,
+            "copy_paste_unit": "single"
+          },
+          "m5_enabled": false,
+          "mosaic": 0.0,
+          "mosaic_source": "explicit_off",
+          "oacp_enabled": false,
+          "stock_segmentation_copy_paste": 0.0,
+          "train_overrides": {
+            "close_mosaic": 0,
+            "copy_paste": 0.0,
+            "copy_paste_allow_empty_target": true,
+            "copy_paste_allow_same_source": true,
+            "copy_paste_blend": "hard",
+            "copy_paste_copies": 2,
+            "copy_paste_enabled": true,
+            "copy_paste_max_overlap": 0.0,
+            "copy_paste_max_trials": 30,
+            "copy_paste_mode": "single",
+            "copy_paste_p": 0.5,
+            "copy_paste_padding": 0.0,
+            "copy_paste_placement": "random",
+            "copy_paste_scale": 1.0,
+            "copy_paste_unit": "single",
+            "hard_negative_bank": "",
+            "hard_negative_tile": false,
+            "mosaic": 0.0,
+            "mosaic_policy": "standard"
+          },
+          "transform_order": [
+            "Mosaic_disabled",
+            "RandomPerspective",
+            "DetectionCP2"
+          ]
+        },
+        "clean_downstream_verified": true,
+        "config": "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_v1_p2p3.yaml",
+        "config_sha256": "cdab99127e6172f75a5a35f1b2cc7ae1b5a08a316447fec38092f33edde6cb09",
+        "detect_from": [
+          18,
+          21
+        ],
+        "detect_source_types": [
+          "RepC2f",
+          "RepC2f"
+        ],
+        "detect_strides": [
+          4.0,
+          8.0
+        ],
+        "edge_detect_only": false,
+        "edge_enabled": false,
+        "edge_index": null,
+        "ftsc_fingerprint": "ff37542332fe0524a896cd68cc19ea22fca5c0b61324a0f50e198ea0a13f3a62",
+        "stage": "augmentation-core",
+        "status": "PREPARED_NOT_RUN"
+      },
+      "FTSC_P34": {
+        "architecture_base": "REF_FTSC_P23",
+        "augmentation": {
+          "close_mosaic": 10,
+          "cp2_enabled": false,
+          "cp2_parameter_fingerprint": "94fca255b5106e541f34b664f4252f4995d4590d1e5f8f0fcf93d6eb79366ab7",
+          "cp2_parameters": null,
+          "m5_enabled": false,
+          "mosaic": 1.0,
+          "mosaic_source": "inherited_current_varroa_default",
+          "oacp_enabled": false,
+          "stock_segmentation_copy_paste": 0.0,
+          "train_overrides": {
+            "copy_paste": 0.0,
+            "copy_paste_enabled": false,
+            "hard_negative_bank": "",
+            "hard_negative_tile": false,
+            "mosaic_policy": "standard"
+          },
+          "transform_order": [
+            "StandardMosaic",
+            "RandomPerspective"
+          ]
+        },
+        "clean_downstream_verified": true,
+        "config": "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_head_p34.yaml",
+        "config_sha256": "cb0a1568acb8c7092e2fa9c833fb903f21357861163520f50bc91116b908bb44",
+        "detect_from": [
+          21,
+          24
+        ],
+        "detect_source_types": [
+          "RepC2f",
+          "RepC2f"
+        ],
+        "detect_strides": [
+          8.0,
+          16.0
+        ],
+        "edge_detect_only": false,
+        "edge_enabled": false,
+        "edge_index": null,
+        "ftsc_fingerprint": "ff37542332fe0524a896cd68cc19ea22fca5c0b61324a0f50e198ea0a13f3a62",
+        "stage": "architecture",
+        "status": "PREPARED_NOT_RUN"
+      },
+      "FTSC_P34_EDGE_P3_DETECT_ONLY": {
+        "architecture_base": "REF_EDGE_P3_DETECT_ONLY",
+        "augmentation": {
+          "close_mosaic": 10,
+          "cp2_enabled": false,
+          "cp2_parameter_fingerprint": "94fca255b5106e541f34b664f4252f4995d4590d1e5f8f0fcf93d6eb79366ab7",
+          "cp2_parameters": null,
+          "m5_enabled": false,
+          "mosaic": 1.0,
+          "mosaic_source": "inherited_current_varroa_default",
+          "oacp_enabled": false,
+          "stock_segmentation_copy_paste": 0.0,
+          "train_overrides": {
+            "copy_paste": 0.0,
+            "copy_paste_enabled": false,
+            "hard_negative_bank": "",
+            "hard_negative_tile": false,
+            "mosaic_policy": "standard"
+          },
+          "transform_order": [
+            "StandardMosaic",
+            "RandomPerspective"
+          ]
+        },
+        "clean_downstream_verified": true,
+        "config": "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_head_p34_edge_p3.yaml",
+        "config_sha256": "2d129f871237e83b7e5718328b5315d6b9139220de4c223726bd8ccfd703714b",
+        "detect_from": [
+          22,
+          25
+        ],
+        "detect_source_types": [
+          "P3EdgeCueFusion",
+          "RepC2f"
+        ],
+        "detect_strides": [
+          8.0,
+          16.0
+        ],
+        "edge_detect_only": true,
+        "edge_enabled": true,
+        "edge_index": 22,
+        "ftsc_fingerprint": "ff37542332fe0524a896cd68cc19ea22fca5c0b61324a0f50e198ea0a13f3a62",
+        "stage": "architecture",
+        "status": "PREPARED_NOT_RUN"
+      }
+    },
+    "configs_created": [
+      "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_p234_edge_p2_detect_only.yaml"
+    ],
+    "configs_reused": [
+      "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_edge_p2_detect_only.yaml",
+      "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_head_p34.yaml",
+      "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_head_p34_edge_p3.yaml",
+      "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_v1_p2p3.yaml"
+    ],
+    "cp2_parameter_fingerprint": "94fca255b5106e541f34b664f4252f4995d4590d1e5f8f0fcf93d6eb79366ab7",
+    "cp2_parameters": {
+      "copy_paste": 0.0,
+      "copy_paste_allow_empty_target": true,
+      "copy_paste_allow_same_source": true,
+      "copy_paste_blend": "hard",
+      "copy_paste_copies": 2,
+      "copy_paste_enabled": true,
+      "copy_paste_max_overlap": 0.0,
+      "copy_paste_max_trials": 30,
+      "copy_paste_mode": "single",
+      "copy_paste_p": 0.5,
+      "copy_paste_padding": 0.0,
+      "copy_paste_placement": "random",
+      "copy_paste_scale": 1.0,
+      "copy_paste_unit": "single"
+    },
+    "cp2_source": "train_levir_ftsc_augmentation_suite.A3_CP2",
+    "ftsc_config": {
+      "apply_box": true,
+      "apply_cls": true,
+      "apply_dfl": true,
+      "dfl_apply_box": false,
+      "dfl_apply_cls": true,
+      "dfl_apply_dfl": false,
+      "dfl_detach": true,
+      "dfl_entropy_tau": 1.0,
+      "dfl_variance_tau": 0.0,
+      "enabled": true,
+      "evidence": [
+        "position_gaussian",
+        "dfl_distribution"
+      ],
+      "fixed_strengths": {
+        "dfl_distribution": 1.0
+      },
+      "log_clip": 0.35,
+      "per_gt_norm": true,
+      "policy": "f5",
+      "position_alpha": 6.0,
+      "ramp_epochs": 10,
+      "strength_init": 1.0,
+      "strength_max": 2.0,
+      "strength_reg_weight": 0.0001,
+      "warmup_epochs": 5
+    },
+    "ftsc_fingerprint": "ff37542332fe0524a896cd68cc19ea22fca5c0b61324a0f50e198ea0a13f3a62",
+    "historical_references": {
+      "REF_EDGE_P2_DETECT_ONLY": {
+        "config": "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_edge_p2_detect_only.yaml",
+        "meaning": "completed P2 prediction-local Edge with clean downstream P3",
+        "training_enabled": false
+      },
+      "REF_EDGE_P3_DETECT_ONLY": {
+        "config": "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_edge_p3_detect_only.yaml",
+        "meaning": "completed P3 prediction-local Edge with Detect P2/P3",
+        "training_enabled": false
+      },
+      "REF_FTSC_P23": {
+        "config": "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_v1_p2p3.yaml",
+        "meaning": "completed canonical FTSC Detect P2/P3",
+        "training_enabled": false
+      },
+      "REF_HEAD_P234": {
+        "config": "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_head_p234.yaml",
+        "meaning": "completed clean FTSC Detect P2/P3/P4",
+        "training_enabled": false
+      },
+      "REF_HEAD_P234_EDGE_P3": {
+        "config": "/run/media/htmlai/Data/LEV/yolo_code/models_related/models_config/yolov8/varroa/yolov8n_varroa_ftsc_head_p234_edge_p3.yaml",
+        "meaning": "completed P3 prediction-local Edge with Detect P2/P3/P4",
+        "training_enabled": false
+      }
+    },
+    "references_scheduled": false,
+    "seeds": [
+      42,
+      43,
+      44
+    ],
+    "stages": {
+      "all": [
+        "FTSC_P234_EDGE_P2_DETECT_ONLY",
+        "FTSC_P34",
+        "FTSC_P34_EDGE_P3_DETECT_ONLY",
+        "FTSC_P23_NOMOSAIC",
+        "FTSC_P23_CP2",
+        "FTSC_P23_NOMOSAIC_CP2",
+        "EDGE_P2_DETECT_ONLY_NOMOSAIC",
+        "EDGE_P2_DETECT_ONLY_CP2",
+        "EDGE_P2_DETECT_ONLY_NOMOSAIC_CP2"
+      ],
+      "architecture": [
+        "FTSC_P234_EDGE_P2_DETECT_ONLY",
+        "FTSC_P34",
+        "FTSC_P34_EDGE_P3_DETECT_ONLY"
+      ],
+      "augmentation-core": [
+        "FTSC_P23_NOMOSAIC",
+        "FTSC_P23_CP2",
+        "FTSC_P23_NOMOSAIC_CP2"
+      ],
+      "augmentation-edge": [
+        "EDGE_P2_DETECT_ONLY_NOMOSAIC",
+        "EDGE_P2_DETECT_ONLY_CP2",
+        "EDGE_P2_DETECT_ONLY_NOMOSAIC_CP2"
+      ]
+    },
+    "status": "PREPARED_NOT_RUN",
+    "suite": "varroa_ftsc_next_ablation_suite",
+    "summary_paths": {
+      "aggregate": "/run/media/htmlai/Data/LEV/yolo_code/results/varroa_ftsc_next_ablation_suite_summary_aggregate.csv",
+      "runs": "/run/media/htmlai/Data/LEV/yolo_code/results/varroa_ftsc_next_ablation_suite_summary_runs.csv"
+    },
+    "training_protocol": {
+      "batch": 4,
+      "dataset": {
+        "class_policy": "map-3-to-1",
+        "expected_counts": {
+          "test": 592,
+          "train": 2762,
+          "val": 592
+        },
+        "gt_source": "gt_one",
+        "only_positives": true
+      },
+      "deterministic": true,
+      "epochs": 100,
+      "imgsz": 640,
+      "optimizer_scheduler": "unchanged current Varroa/Ultralytics defaults",
+      "patience": 20,
+      "pretrained": "yolov8n.pt with smart_transfer=True",
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "tal_loss_ftsc": "frozen"
+    }
+  },
+  "status": "PREPARED_NOT_RUN",
+  "suite": "varroa_ftsc_next_ablation_suite"
+}
