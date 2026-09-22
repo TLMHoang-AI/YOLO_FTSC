@@ -65,7 +65,12 @@ class SmallObjectCopyPaste:
         self.max_trials = int(max_trials)
         self.allow_empty_target = bool(allow_empty_target)
         self.allow_same_source = bool(allow_same_source)
-        self.rng = rng or random
+        # Keep the default RNG implicit instead of storing the ``random``
+        # module on the transform. PyTorch DataLoader workers started with
+        # ``spawn`` must pickle the dataset/transform graph, and module objects
+        # are not picklable. Resolving the module lazily preserves the existing
+        # process-local, seed-controlled behavior.
+        self.rng = rng
         self.object_pool: list[ObjectRecord] = []
         self._pool_built = False
         self.stats = {
@@ -132,14 +137,15 @@ class SmallObjectCopyPaste:
         return np.asarray(instances.bboxes, dtype=np.float32).copy()
 
     def _choose_destination(self, patch_shape: tuple[int, int], canvas_shape: tuple[int, int], existing: np.ndarray):
+        rng = self.rng if self.rng is not None else random
         patch_h, patch_w = patch_shape
         height, width = canvas_shape
         if patch_h <= 0 or patch_w <= 0 or patch_h > height or patch_w > width:
             self.stats["rejected_boundary"] += 1
             return None
         for _ in range(self.max_trials):
-            x = self.rng.randint(0, width - patch_w)
-            y = self.rng.randint(0, height - patch_h)
+            x = rng.randint(0, width - patch_w)
+            y = rng.randint(0, height - patch_h)
             box = np.array([x, y, x + patch_w, y + patch_h], dtype=np.float32)
             if self.placement == "collision_aware" and self._intersection_over_area(box, existing) > self.max_overlap:
                 self.stats["rejected_collision"] += 1
@@ -181,7 +187,8 @@ class SmallObjectCopyPaste:
         ).astype(np.float32, copy=False)
 
     def __call__(self, labels: dict[str, Any]) -> dict[str, Any]:
-        if self.p <= 0 or self.rng.random() >= self.p:
+        rng = self.rng if self.rng is not None else random
+        if self.p <= 0 or rng.random() >= self.p:
             return labels
         self._build_pool()
         if not self.object_pool:
@@ -200,12 +207,12 @@ class SmallObjectCopyPaste:
             self.stats["empty_target_seen"] += 1
             if not self.allow_empty_target:
                 return labels
-        source_record = self.rng.choice(self.object_pool)
+        source_record = rng.choice(self.object_pool)
         if not self.allow_same_source and target_index == source_record.image_index:
             alternatives = [record for record in self.object_pool if record.image_index != target_index]
             if not alternatives:
                 return labels
-            source_record = self.rng.choice(alternatives)
+            source_record = rng.choice(alternatives)
         source_image = self._load_raw(source_record.image_index)
         if source_image is None:
             return labels

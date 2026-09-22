@@ -6,10 +6,12 @@ import contextlib
 import copy
 import importlib.util
 import io
+import pickle
 import random
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from train_levir_scripts import train_varroa_ftsc_next_ablation_suite as suite
@@ -197,6 +199,20 @@ class VarroaNextAblationStaticTests(unittest.TestCase):
     "local Python lacks torch/cv2",
 )
 class VarroaNextAblationRuntimeTests(unittest.TestCase):
+    def test_detection_cp2_transform_is_spawn_picklable(self):
+        suite.shared.local_ultralytics()
+        from project_ultralytics.copy_paste import SmallObjectCopyPaste
+
+        transform = SmallObjectCopyPaste(
+            dataset=SimpleNamespace(im_files=[], labels=[]),
+            p=0.5,
+            unit="single",
+            copies=2,
+        )
+        restored = pickle.loads(pickle.dumps(transform))
+        self.assertIsNone(restored.rng)
+        self.assertEqual((restored.unit, restored.copies), ("single", 2))
+
     def test_detection_cp2_builder_not_segmentation_copypaste(self):
         suite.shared.local_ultralytics()
         from ultralytics.cfg import get_cfg
