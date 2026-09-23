@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare/run the five-case FTSC H2 augmentation suite.
+"""Prepare/run the seven-case FTSC H2 augmentation suite.
 
 The default action is a read-only preflight. Training is unreachable unless
 ``--confirm-run`` is supplied. No upload or remote-service path exists here.
@@ -32,7 +32,14 @@ CASES = (
     "A2_M5",
     "A3_CP2",
     "A4_OACP_R2_M5",
+    "A5_NEGCANVAS_R1",
+    "A6_NEGCANVAS_R4",
 )
+HARD_NEGATIVE_BANK_CASES = frozenset({"A2_M5", "A4_OACP_R2_M5"})
+NEGATIVE_CANVAS_CASES = {
+    "A5_NEGCANVAS_R1": "r1",
+    "A6_NEGCANVAS_R4": "r4",
+}
 SEEDS = (42, 43, 44)
 OACP_ENV_KEYS = (
     "YOLO_CONTEXT_AUG",
@@ -103,7 +110,47 @@ def augmentation_for(case: str, hard_negative_bank: Path | None = None) -> dict[
         )
     if case == "A3_CP2":
         settings.update(copy_paste_enabled=True, copy_paste_mode="single")
+    if case in NEGATIVE_CANVAS_CASES:
+        # Keep R1/R4 in lockstep with the already-ported canonical recipe.
+        from train_levir_scripts.train_ftsc_negative_canvas_suite import (
+            augmentation_for as negative_canvas_augmentation_for,
+        )
+
+        settings.update(negative_canvas_augmentation_for(NEGATIVE_CANVAS_CASES[case]))
     return settings
+
+
+def hard_negative_bank_required(cases: list[str] | tuple[str, ...]) -> bool:
+    """Return whether any selected case consumes the M5 hard-negative bank."""
+    return bool(HARD_NEGATIVE_BANK_CASES.intersection(cases))
+
+
+def prepared_data_yaml(args: argparse.Namespace) -> Path:
+    """Return the fixed-split YAML path without preparing or downloading data."""
+    return args.dataset_root / f"levir_ship_yolo_seed{args.split_seed}" / "levir_ship.yaml"
+
+
+def dataset_preflight(args: argparse.Namespace) -> dict[str, object]:
+    """Report A5/A6 eligibility while keeping default preflight read-only."""
+    selected = [case for case in args.cases if case in NEGATIVE_CANVAS_CASES]
+    data_yaml = prepared_data_yaml(args)
+    report: dict[str, object] = {
+        "required": bool(selected),
+        "selected_cases": selected,
+        "data_yaml": str(data_yaml.resolve()),
+    }
+    if not selected:
+        report["status"] = "NOT_REQUIRED"
+        return report
+    if not data_yaml.is_file():
+        report["status"] = "PENDING_DATA_PREPARATION"
+        return report
+
+    from train_levir_scripts.train_ftsc_negative_canvas_suite import dataset_eligibility
+
+    report.update(dataset_eligibility(data_yaml))
+    report["status"] = "READY"
+    return report
 
 
 def environment_for(case: str) -> dict[str, str]:
@@ -137,6 +184,13 @@ def transform_order_for(case: str) -> tuple[str, ...]:
         return ("M5_HardNegativeMosaic", "RandomPerspective")
     if case == "A3_CP2":
         return ("Mosaic_disabled", "RandomPerspective", "DetectionCP2")
+    if case in NEGATIVE_CANVAS_CASES:
+        return (
+            "Mosaic_disabled",
+            "RandomPerspective",
+            "NegativeCanvasCopyPaste",
+            "photometric_transforms/flips",
+        )
     return ("Mosaic_disabled", "RandomPerspective")
 
 
@@ -198,6 +252,10 @@ def source_preflight(args: argparse.Namespace) -> dict[str, object]:
     if ftsc["fixed_strengths"] != {"dfl_distribution": 1.0}:
         raise ValueError("FTSC DFL strength changed")
     configs = {case: augmentation_for(case, args.hard_negative_bank) for case in CASES}
+    for case in NEGATIVE_CANVAS_CASES:
+        config = configs[case]
+        if config["hard_negative_tile"] or config["hard_negative_bank"]:
+            raise RuntimeError(f"{case} must not depend on a hard-negative bank")
     invariant_keys = (
         "epochs", "imgsz", "batch_size", "workers", "patience", "split_seed", "pretrained"
     )
@@ -213,6 +271,12 @@ def source_preflight(args: argparse.Namespace) -> dict[str, object]:
         "augmentation": configs,
         "oacp_environment": {case: environment_for(case) for case in CASES},
         "transform_order": {case: transform_order_for(case) for case in CASES},
+        "hard_negative_bank": {
+            "required": hard_negative_bank_required(args.cases),
+            "selected_cases": [case for case in args.cases if case in HARD_NEGATIVE_BANK_CASES],
+            "path": str(args.hard_negative_bank.resolve()) if args.hard_negative_bank else None,
+        },
+        "dataset_eligibility": dataset_preflight(args),
         "primary_metric": "AP50",
         "secondary_metrics": ["mAP50-95", "AP75", "precision", "recall"],
     }
@@ -369,10 +433,15 @@ def main(argv: list[str] | None = None) -> None:
     if not pretrained.is_file():
         raise FileNotFoundError("--pretrained must name an existing local checkpoint; downloads are disabled")
     args.pretrained = str(pretrained.resolve())
-    needs_bank = any(case in {"A2_M5", "A4_OACP_R2_M5"} for case in args.cases)
-    if needs_bank and (args.hard_negative_bank is None or not args.hard_negative_bank.is_file()):
+    if hard_negative_bank_required(args.cases) and (
+        args.hard_negative_bank is None or not args.hard_negative_bank.is_file()
+    ):
         raise FileNotFoundError("A2/A4 require an existing --hard-negative-bank JSON")
     data_yaml = workflow.prepare_fixed_split(args)
+    if any(case in NEGATIVE_CANVAS_CASES for case in args.cases):
+        from train_levir_scripts.train_ftsc_negative_canvas_suite import dataset_eligibility
+
+        dataset_eligibility(data_yaml)
     for seed in args.seeds:
         for case in args.cases:
             run_dir = train_one(args, case, seed, data_yaml)

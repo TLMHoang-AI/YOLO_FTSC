@@ -249,8 +249,28 @@ def build_small_object_copy_paste(dataset, hyp) -> SmallObjectCopyPaste | None:
     if not bool(getattr(hyp, "copy_paste_enabled", False)):
         return None
     mode = str(getattr(hyp, "copy_paste_mode", "single")).lower()
+    if mode == "negative_canvas":
+        from .negative_canvas_copy_paste import NegativeCanvasCopyPaste
+
+        return NegativeCanvasCopyPaste(
+            dataset=dataset,
+            p=float(getattr(hyp, "negative_cp_p", 0.30)),
+            target_policy=str(getattr(hyp, "negative_cp_target_policy", "empirical")),
+            donor_policy=str(getattr(hyp, "negative_cp_donor_policy", "matched")),
+            target_max_size=float(getattr(hyp, "negative_cp_target_max_size", 20.0)),
+            deficit_gamma=float(getattr(hyp, "negative_cp_deficit_gamma", 0.5)),
+            max_weight_ratio=float(getattr(hyp, "negative_cp_max_weight_ratio", 3.0)),
+            matched_ratio_max=float(getattr(hyp, "negative_cp_matched_ratio_max", 1.5)),
+            large_ratio_min=float(getattr(hyp, "negative_cp_large_ratio_min", 1.5)),
+            large_ratio_max=float(getattr(hyp, "negative_cp_large_ratio_max", 2.5)),
+            degradation=str(getattr(hyp, "negative_cp_degradation", "none")),
+            blur_sigma=float(getattr(hyp, "negative_cp_blur_sigma", 0.5)),
+            max_trials=int(getattr(hyp, "copy_paste_max_trials", 30)),
+            debug_dir=getattr(hyp, "copy_paste_debug_dir", None),
+            rng=getattr(hyp, "copy_paste_rng", None),
+        )
     if mode not in {"single", "double", "cp2"}:
-        raise ValueError("The FTSC suite exposes only CP2 single-object Copy-Paste")
+        raise ValueError("The FTSC suite exposes CP2 and negative_canvas Copy-Paste")
     copies = 2 if mode in {"double", "cp2"} else int(getattr(hyp, "copy_paste_copies", 1))
     return SmallObjectCopyPaste(
         dataset=dataset,
@@ -284,4 +304,16 @@ def copy_paste_config(hyp) -> dict[str, Any]:
         "allow_empty_target": bool(getattr(hyp, "copy_paste_allow_empty_target", True)),
         "allow_same_source": bool(getattr(hyp, "copy_paste_allow_same_source", True)),
         "max_trials": int(getattr(hyp, "copy_paste_max_trials", 30)),
+        "negative_cp_p": float(getattr(hyp, "negative_cp_p", 0.30)),
+        "negative_cp_target_policy": str(getattr(hyp, "negative_cp_target_policy", "empirical")),
+        "negative_cp_donor_policy": str(getattr(hyp, "negative_cp_donor_policy", "matched")),
+        "negative_cp_target_max_size": float(getattr(hyp, "negative_cp_target_max_size", 20.0)),
+        "negative_cp_deficit_gamma": float(getattr(hyp, "negative_cp_deficit_gamma", 0.5)),
+        "negative_cp_max_weight_ratio": float(getattr(hyp, "negative_cp_max_weight_ratio", 3.0)),
+        "negative_cp_matched_ratio_max": float(getattr(hyp, "negative_cp_matched_ratio_max", 1.5)),
+        "negative_cp_large_ratio_min": float(getattr(hyp, "negative_cp_large_ratio_min", 1.5)),
+        "negative_cp_large_ratio_max": float(getattr(hyp, "negative_cp_large_ratio_max", 2.5)),
+        "negative_cp_degradation": str(getattr(hyp, "negative_cp_degradation", "none")),
+        "negative_cp_blur_sigma": float(getattr(hyp, "negative_cp_blur_sigma", 0.5)),
+        "negative_bank_required": False,
     }

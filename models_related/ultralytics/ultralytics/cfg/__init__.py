@@ -261,7 +261,7 @@ CFG_CHOICE_KEYS = {
     "dgfe_spatial_target_mode": {"iou", "edge_error"},
     "positive_support_mode": {"dominant", "random", "none"},
     "mosaic_policy": {"standard", "hard_negative"},
-    "copy_paste_mode": {"flip", "mixup", "single"},
+    "copy_paste_mode": {"flip", "mixup", "single", "negative_canvas"},
     "copy_paste_unit": {"single"},
     "copy_paste_placement": {"random", "collision_aware"},
     "copy_paste_blend": {"hard"},

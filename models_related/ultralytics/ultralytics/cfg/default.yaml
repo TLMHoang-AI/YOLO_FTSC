@@ -251,6 +251,18 @@ copy_paste_blend: hard # (str) CP2 blend mode (locked to hard)
 copy_paste_max_trials: 30 # (int) destination attempts per copy
 copy_paste_allow_empty_target: true # (bool) allow CP2 on empty target images
 copy_paste_allow_same_source: true # (bool) permit source and target image identity
+copy_paste_debug_dir: "" # (str, optional) local diagnostic samples for detection Copy-Paste
+negative_cp_p: 0.30 # (float) probability conditional on an original negative image
+negative_cp_target_policy: empirical # (str) empirical or deficit
+negative_cp_donor_policy: matched # (str) matched or larger
+negative_cp_target_max_size: 20.0 # (float) maximum target sqrt-area
+negative_cp_deficit_gamma: 0.5 # (float) inverse-frequency exponent for deficit sampling
+negative_cp_max_weight_ratio: 3.0 # (float) maximum deficit-bin weight ratio
+negative_cp_matched_ratio_max: 1.5 # (float) exclusive R1 source/target upper ratio
+negative_cp_large_ratio_min: 1.5 # (float) inclusive R4 source/target lower ratio
+negative_cp_large_ratio_max: 2.5 # (float) inclusive R4 source/target upper ratio
+negative_cp_degradation: none # (str) none or weak_blur
+negative_cp_blur_sigma: 0.5 # (float) fixed weak-blur sigma for R4
 adaptive_zoom: false # (bool) training-only GT-aware crop-and-resize
 adaptive_zoom_probability: 0.5 # (float) probability for the project Adaptive Zoom adaptation
 adaptive_zoom_target_min_side: 16.0 # (float) target tiny-object min side in pixels

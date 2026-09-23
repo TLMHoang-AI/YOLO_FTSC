@@ -1,4 +1,4 @@
-"""No-training tests for the FTSC H2 A0--A4 augmentation port."""
+"""No-training tests for the FTSC H2 A0--A6 augmentation port."""
 from __future__ import annotations
 
 import importlib.util
@@ -49,7 +49,7 @@ def _empty_instances():
     )
 
 
-def test_exactly_five_cases_and_shared_h2_protocol(tmp_path):
+def test_exactly_seven_cases_and_shared_h2_protocol(tmp_path):
     args = runner.parse_args([])
     assert runner.CASES == (
         "A0_FTSC",
@@ -57,6 +57,8 @@ def test_exactly_five_cases_and_shared_h2_protocol(tmp_path):
         "A2_M5",
         "A3_CP2",
         "A4_OACP_R2_M5",
+        "A5_NEGCANVAS_R1",
+        "A6_NEGCANVAS_R4",
     )
     assert args.seeds == [42, 43, 44]
     assert (args.epochs, args.patience, args.imgsz, args.batch_size) == (100, 20, 512, 8)
@@ -111,6 +113,55 @@ def test_case_augmentation_contracts(tmp_path):
     assert a4["hardneg_mosaic_prob"] == 0.30 and not a4["copy_paste_enabled"]
     assert env4["OACP_PROFILE"] == "r2" and env4["YOLO_LEGACY_DOUBLE_OACP"] == "0"
     assert "OACP_PLACEMENT" not in env4  # exact source-combination precedent
+
+    a5 = cases["A5_NEGCANVAS_R1"]
+    assert a5["copy_paste_enabled"] is True and a5["copy_paste_mode"] == "negative_canvas"
+    assert a5["negative_cp_p"] == 0.30
+    assert a5["negative_cp_target_policy"] == "empirical"
+    assert a5["negative_cp_donor_policy"] == "matched"
+    assert a5["negative_cp_target_max_size"] == 20.0
+    assert a5["negative_cp_degradation"] == "none"
+    assert a5["negative_cp_matched_ratio_max"] == 1.5
+    assert (a5["copy_paste_copies"], a5["copy_paste_placement"]) == (1, "collision_aware")
+    assert (a5["copy_paste_scale"], a5["copy_paste_padding"]) == (1.0, 0.0)
+    assert (a5["copy_paste_blend"], a5["copy_paste_max_overlap"]) == ("hard", 0.0)
+    assert (a5["mosaic"], a5["hard_negative_tile"], a5["hard_negative_bank"]) == (0.0, False, "")
+    assert runner.environment_for("A5_NEGCANVAS_R1") == {}
+
+    a6 = cases["A6_NEGCANVAS_R4"]
+    assert a6["copy_paste_enabled"] is True and a6["copy_paste_mode"] == "negative_canvas"
+    assert a6["negative_cp_p"] == 0.30
+    assert a6["negative_cp_target_policy"] == "deficit"
+    assert (a6["negative_cp_deficit_gamma"], a6["negative_cp_max_weight_ratio"]) == (0.5, 3.0)
+    assert a6["negative_cp_donor_policy"] == "larger"
+    assert (a6["negative_cp_large_ratio_min"], a6["negative_cp_large_ratio_max"]) == (1.5, 2.5)
+    assert a6["negative_cp_target_max_size"] == 20.0
+    assert (a6["negative_cp_degradation"], a6["negative_cp_blur_sigma"]) == ("weak_blur", 0.5)
+    assert (a6["copy_paste_copies"], a6["copy_paste_placement"]) == (1, "collision_aware")
+    assert (a6["copy_paste_scale"], a6["copy_paste_padding"]) == (1.0, 0.0)
+    assert (a6["copy_paste_blend"], a6["copy_paste_max_overlap"]) == ("hard", 0.0)
+    assert (a6["mosaic"], a6["hard_negative_tile"], a6["hard_negative_bank"]) == (0.0, False, "")
+    assert runner.environment_for("A6_NEGCANVAS_R4") == {}
+
+    intended_copy_paste_switches = {
+        "copy_paste_enabled",
+        "copy_paste_mode",
+        "copy_paste_copies",
+        "copy_paste_placement",
+    }
+    for case in (a5, a6):
+        for key, baseline_value in a0.items():
+            if key not in intended_copy_paste_switches:
+                assert case[key] == baseline_value, key
+
+
+def test_hard_negative_bank_isolated_to_a2_and_a4():
+    assert runner.hard_negative_bank_required(["A2_M5"])
+    assert runner.hard_negative_bank_required(["A4_OACP_R2_M5"])
+    assert runner.hard_negative_bank_required(["A0_FTSC", "A2_M5"])
+    assert not runner.hard_negative_bank_required(["A5_NEGCANVAS_R1"])
+    assert not runner.hard_negative_bank_required(["A6_NEGCANVAS_R4"])
+    assert not runner.hard_negative_bank_required(["A5_NEGCANVAS_R1", "A6_NEGCANVAS_R4"])
 
 
 def test_r2_config_and_source_parity(monkeypatch):
@@ -288,6 +339,7 @@ def test_parser_defaults_accept_ported_keys_and_pipeline_order(tmp_path):
     from ultralytics.data.augment import Compose, HardNegativeMosaic, v8_transforms
     from project_ultralytics.context_augment import OACP
     from project_ultralytics.copy_paste import SmallObjectCopyPaste
+    from project_ultralytics.negative_canvas_copy_paste import NegativeCanvasCopyPaste
 
     image_path = tmp_path / "image.png"
     cv2.imwrite(str(image_path), np.zeros((32, 32, 3), dtype=np.uint8))
@@ -309,6 +361,13 @@ def test_parser_defaults_accept_ported_keys_and_pipeline_order(tmp_path):
         elif case == "A3_CP2":
             assert isinstance(top[0], Compose) and isinstance(top[1], SmallObjectCopyPaste)
             assert all(type(transform).__name__ != "CopyPaste" for transform in top[0].transforms)
+        elif case in runner.NEGATIVE_CANVAS_CASES:
+            assert isinstance(top[0], Compose)
+            assert type(top[0].transforms[-1]).__name__ == "RandomPerspective"
+            assert type(top[1]) is NegativeCanvasCopyPaste
+            assert type(top[2]).__name__ == "MixUp"
+            assert type(top[3]).__name__ == "CutMix"
+            assert all(type(transform).__name__ != "CopyPaste" for transform in top[0].transforms)
 
 
 def test_ftsc_h2_model_instantiates_with_p2_p3_unchanged():
@@ -325,3 +384,63 @@ def test_default_path_fails_closed_without_training(monkeypatch):
     monkeypatch.setattr(runner, "train_one", lambda *args, **kwargs: called.append((args, kwargs)))
     runner.main([])
     assert called == []
+
+
+def test_a5_a6_preflight_needs_neither_bank_nor_implicit_data_preparation(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(runner, "model_preflight", lambda: {"ok": True})
+    prepared = []
+    monkeypatch.setattr(runner.workflow, "prepare_fixed_split", lambda _args: prepared.append(True))
+    runner.main(
+        [
+            "--cases",
+            "A5_NEGCANVAS_R1",
+            "A6_NEGCANVAS_R4",
+            "--dataset-root",
+            str(tmp_path / "absent_data"),
+        ]
+    )
+    output = capsys.readouterr().out
+    assert '"required": false' in output
+    assert '"status": "PENDING_DATA_PREPARATION"' in output
+    assert prepared == []
+
+
+def test_a5_a6_dataset_eligibility_uses_canonical_counts(tmp_path):
+    dataset = tmp_path / "levir_ship_yolo_seed42"
+    image_dir = dataset / "images" / "train"
+    label_dir = dataset / "labels" / "train"
+    image_dir.mkdir(parents=True)
+    label_dir.mkdir(parents=True)
+    assert cv2.imwrite(str(image_dir / "positive.png"), np.zeros((64, 64, 3), dtype=np.uint8))
+    assert cv2.imwrite(str(image_dir / "negative.png"), np.zeros((64, 64, 3), dtype=np.uint8))
+    (label_dir / "positive.txt").write_text("0 0.5 0.5 0.25 0.25\n", encoding="utf-8")
+    (label_dir / "negative.txt").write_text("", encoding="utf-8")
+    (dataset / "levir_ship.yaml").write_text(
+        "path: .\ntrain: images/train\nval: images/train\ntest: images/train\nnames: [ship]\n",
+        encoding="utf-8",
+    )
+    args = runner.parse_args(
+        [
+            "--cases",
+            "A5_NEGCANVAS_R1",
+            "A6_NEGCANVAS_R4",
+            "--dataset-root",
+            str(tmp_path),
+        ]
+    )
+    report = runner.dataset_preflight(args)
+    assert report["status"] == "READY"
+    assert report["training_images"] == 2
+    assert report["original_positive_images"] == 1
+    assert report["original_negative_images"] == 1
+    assert report["donor_objects"] == 1
+    assert report["eligible_small_targets_le_20px"] == 1
+
+    (label_dir / "negative.txt").write_text("0 0.5 0.5 0.25 0.25\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="zero original-negative"):
+        runner.dataset_preflight(args)
+
+    (label_dir / "negative.txt").write_text("", encoding="utf-8")
+    (label_dir / "positive.txt").write_text("0 0.5 0.5 0.5 0.5\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="zero eligible <=20 px"):
+        runner.dataset_preflight(args)

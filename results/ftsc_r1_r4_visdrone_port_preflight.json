@@ -1,0 +1,217 @@
+{
+  "status": "PREPARED_NOT_RUN",
+  "generated_at_local_date": "2026-09-23",
+  "training_run": false,
+  "metrics_generated": false,
+  "remote_service_used": false,
+  "main_repository": {
+    "path": "/run/media/htmlai/Data/LEV/yolo_code",
+    "source_commit_before_worktree_changes": "6d40e4692f450eed8ab3bfeb7af998480e51e557"
+  },
+  "partner_reference": {
+    "path": "/run/media/htmlai/Data/LEV/duy_yolo_code/yolo_code",
+    "commit": "6e8c41646ded2ac4964fbf72ae76c07227e45055"
+  },
+  "negative_canvas": {
+    "enabled_datasets": [
+      "levir",
+      "tinyperson"
+    ],
+    "disabled_datasets": [
+      "varroa",
+      "visdrone"
+    ],
+    "negative_bank_required": false,
+    "mosaic": 0.0,
+    "close_mosaic": 0,
+    "paste_count": 1,
+    "placement": "collision_aware",
+    "allowed_gt_overlap": 0.0,
+    "padding": 0.0,
+    "blend": "hard",
+    "interpolation": "cv2.INTER_AREA",
+    "source_reference": {
+      "file": "project_ultralytics/negative_canvas_copy_paste.py",
+      "sha256": "a804242dd7c7637657e6bbd923539fb5b3017ff8f0a270d444ed66ea25287f26"
+    },
+    "implementation_fingerprints": {
+      "project_ultralytics/negative_canvas_copy_paste.py": "78d32570ee1e6ffa0f4793a60bbede95680f85cbac0dff54cfecd1f44b9d0028",
+      "project_ultralytics/copy_paste.py": "c15fb5a66f88f483a6850256374d431a84f37aa4885f1d0dd3514c0d46170367",
+      "models_related/ultralytics/ultralytics/cfg/default.yaml": "ca57d5aff4c3436cc6bd70515fae1db4d32c1c2373101b1cda26953cc493d71b",
+      "models_related/ultralytics/ultralytics/cfg/__init__.py": "50a162ab5a31d70018adc9099ff76da93ff12fb7af9ddadc07b224b16211336a",
+      "train_levir_scripts/train_ftsc_negative_canvas_suite.py": "6174c863f2eae12f98afca0be8c00f7b9ddd72632fd07cb51cfb10c811e7b585"
+    },
+    "r1_effective_config": {
+      "copy_paste_enabled": true,
+      "copy_paste_mode": "negative_canvas",
+      "negative_cp_p": 0.3,
+      "negative_cp_target_policy": "empirical",
+      "negative_cp_donor_policy": "matched",
+      "negative_cp_target_max_size": 20.0,
+      "negative_cp_matched_ratio": "1.0 <= source_size / target_size < 1.5",
+      "negative_cp_degradation": "none"
+    },
+    "r4_effective_config": {
+      "copy_paste_enabled": true,
+      "copy_paste_mode": "negative_canvas",
+      "negative_cp_p": 0.3,
+      "negative_cp_target_policy": "deficit",
+      "negative_cp_deficit_gamma": 0.5,
+      "negative_cp_max_weight_ratio": 3.0,
+      "negative_cp_donor_policy": "larger",
+      "negative_cp_target_max_size": 20.0,
+      "negative_cp_larger_ratio": "1.5 <= source_size / target_size <= 2.5",
+      "negative_cp_degradation": "weak_blur",
+      "negative_cp_blur_kernel": [3, 3],
+      "negative_cp_blur_sigma": 0.5
+    },
+    "ftsc_reference": {
+      "config": "models_related/models_config/yolov8/levir/yolov8n_p2_levir_ftsc_nomosaic_h2_p2_p3.yaml",
+      "sha256": "93c90262592a15962553a7f4ffe7f9cf9545679d8dbc702c614fae9d97842676",
+      "detect_scales": [
+        "P2",
+        "P3"
+      ],
+      "policy": "f5",
+      "evidence": [
+        "position_gaussian",
+        "dfl_distribution"
+      ],
+      "mathematics_modified": false
+    },
+    "control_references": {
+      "levir": {
+        "reference": "existing matched FTSC-H2 no-Mosaic reference",
+        "reused": true,
+        "rerun": false
+      },
+      "tinyperson": {
+        "reference": "existing H2_NM reference",
+        "reused": true,
+        "rerun": false
+      }
+    },
+    "dataset_eligibility": {
+      "levir": {
+        "status": "PENDING_DATA_PREPARATION",
+        "reason": "No prepared LEVIR dataset is present locally; no download was attempted."
+      },
+      "tinyperson": {
+        "status": "PENDING_DATA_PREPARATION",
+        "reason": "No prepared TinyPerson dataset is present locally; no download was attempted."
+      }
+    }
+  },
+  "visdrone": {
+    "source_implementation_files": [
+      "train_scripts/train_all_visdrone_yolo_baselines.py",
+      "train_visdrone_scripts/train_all_visdrone_verifier.py",
+      "evaluate_test/size_bucket_evaluator.py",
+      "vendor/tinyperson_cocoeval.py"
+    ],
+    "implementation_fingerprints": {
+      "train_visdrone_scripts/visdrone_protocol.py": "172ed0c5dacb1e3e60795520be883de2c0f9107b02c7c0248492aa2f6388ff30",
+      "train_visdrone_scripts/evaluate_visdrone.py": "06a5ccb25194f7da3f9274f5dff0f949eaae5c80be16238066ecab23c140efac",
+      "evaluate_test/size_bucket_evaluator.py": "39a4040888f88a97095fd502b659ef501d9d5772f7c0147cf712edb99b9f10b0",
+      "vendor/tinyperson_cocoeval.py": "1c6b720408fb7f04d80c95d4e10c9c40a03d77c93e97d093c91f710cf135a15c"
+    },
+    "official_split_mapping": {
+      "VisDrone2019-DET-train": "train",
+      "VisDrone2019-DET-val": "val",
+      "VisDrone2019-DET-test-dev": "test"
+    },
+    "expected_image_counts": {
+      "train": 6471,
+      "val": 548,
+      "test": 1610
+    },
+    "expected_valid_object_counts": {
+      "train": 343205,
+      "val": 38759,
+      "test": 75102
+    },
+    "class_mapping": {
+      "0": "pedestrian",
+      "1": "people",
+      "2": "bicycle",
+      "3": "car",
+      "4": "van",
+      "5": "truck",
+      "6": "tricycle",
+      "7": "awning-tricycle",
+      "8": "bus",
+      "9": "motor"
+    },
+    "expected_class_histograms": {
+      "train": [79337, 27059, 10480, 144867, 24956, 12875, 4812, 3246, 5926, 29647],
+      "val": [8844, 5125, 1287, 14064, 1975, 750, 1045, 532, 251, 4886],
+      "test": [21006, 6376, 1302, 28074, 5771, 2659, 530, 599, 2940, 5845]
+    },
+    "filtering_rules": {
+      "skip_when_row_4_equals_string_zero": true,
+      "class_formula": "int(category_id) - 1",
+      "retained_classes": "0..9",
+      "category_0_ignored": true,
+      "category_11_ignored": true,
+      "label_precision_decimals": 6
+    },
+    "generated_data_validator": {
+      "available": true,
+      "checks": [
+        "official raw split counts",
+        "raw image/annotation basename parity",
+        "generated image/label basename parity",
+        "valid object totals",
+        "ten-class histograms",
+        "generated YAML semantics"
+      ],
+      "real_data_status": "PENDING_RAW_DATA",
+      "synthetic_fixture_status": "PASSED"
+    },
+    "standard_evaluation": {
+      "multiclass": true,
+      "classes": 10,
+      "splits": [
+        "val",
+        "test"
+      ],
+      "imgsz": 640,
+      "nms_iou": 0.5,
+      "metric_names": [
+        "val/AP50",
+        "val/mAP50-95",
+        "test/AP50",
+        "test/mAP50-95"
+      ]
+    },
+    "size_evaluation": {
+      "class_agnostic": true,
+      "ground_truth_category_id": 1,
+      "prediction_category_id": 1,
+      "area_ranges": {
+        "all": [1, 10000000000.0],
+        "tiny": [1, 400],
+        "Tiny1": [1, 64],
+        "Tiny2": [64, 144],
+        "Tiny3": [144, 400],
+        "Small": [400, 1024],
+        "Medium": [1024, 9216]
+      },
+      "iou_thresholds": [0.5, 0.55, 0.6, 0.65, 0.7, 0.75],
+      "max_detections": 200,
+      "evaluator_path": "vendor/tinyperson_cocoeval.py",
+      "evaluator_path_valid": true,
+      "protocol": "TinyBenchmark area buckets on native YOLO test images; class-agnostic"
+    },
+    "cross_repo_conversion_checker": "train_visdrone_scripts.visdrone_protocol compare",
+    "checkpoint_metric_parity_status": "PENDING_LOCAL_COMPATIBLE_CHECKPOINT"
+  },
+  "verification": {
+    "static_import_compile": "PASSED",
+    "new_synthetic_tests": "21 passed",
+    "existing_cp2_tests": "9 passed",
+    "partner_negative_canvas_tests_against_main": "10 passed",
+    "total_selected_tests": "40 passed",
+    "failures": 0
+  }
+}
