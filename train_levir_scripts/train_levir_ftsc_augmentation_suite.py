@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare/run the seven-case FTSC H2 augmentation suite.
+"""Prepare/run the nine-case FTSC H2/ES1 augmentation suite.
 
 The default action is a read-only preflight. Training is unreachable unless
 ``--confirm-run`` is supplied. No upload or remote-service path exists here.
@@ -24,7 +24,11 @@ sys.path.insert(0, str(REPO))
 
 from train_levir_scripts import train_all_levir_yolov8n_p2_routing as workflow
 
-MODEL_CONFIG = REPO / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_ftsc_nomosaic_h2_p2_p3.yaml"
+H2_MODEL_CONFIG = REPO / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_ftsc_nomosaic_h2_p2_p3.yaml"
+ES1_MODEL_CONFIG = REPO / "models_related/models_config/yolov8/levir/yolov8n_p2_levir_ftsc_h2_edge_stab_es1_scale025.yaml"
+# Backward-compatible alias used by the existing A0--A6 integrations.
+MODEL_CONFIG = H2_MODEL_CONFIG
+ES1_MODEL_CONFIG_SHA256 = "29d7bc1c09d970426e61bf7f15d5d8d687aad441319374ed95963f9892730e79"
 EXPERIMENT = "levir_ftsc_h2_augmentation_suite"
 CASES = (
     "A0_FTSC",
@@ -34,12 +38,17 @@ CASES = (
     "A4_OACP_R2_M5",
     "A5_NEGCANVAS_R1",
     "A6_NEGCANVAS_R4",
+    "A7_ES1_NEGCANVAS_R1",
+    "A8_ES1_NEGCANVAS_R4",
 )
 HARD_NEGATIVE_BANK_CASES = frozenset({"A2_M5", "A4_OACP_R2_M5"})
 NEGATIVE_CANVAS_CASES = {
     "A5_NEGCANVAS_R1": "r1",
     "A6_NEGCANVAS_R4": "r4",
+    "A7_ES1_NEGCANVAS_R1": "r1",
+    "A8_ES1_NEGCANVAS_R4": "r4",
 }
+ES1_CASES = frozenset({"A7_ES1_NEGCANVAS_R1", "A8_ES1_NEGCANVAS_R4"})
 SEEDS = (42, 43, 44)
 OACP_ENV_KEYS = (
     "YOLO_CONTEXT_AUG",
@@ -120,6 +129,13 @@ def augmentation_for(case: str, hard_negative_bank: Path | None = None) -> dict[
     return settings
 
 
+def model_config_for(case: str) -> Path:
+    """Select the frozen model graph for a suite case."""
+    if case not in CASES:
+        raise ValueError(case)
+    return ES1_MODEL_CONFIG if case in ES1_CASES else H2_MODEL_CONFIG
+
+
 def hard_negative_bank_required(cases: list[str] | tuple[str, ...]) -> bool:
     """Return whether any selected case consumes the M5 hard-negative bank."""
     return bool(HARD_NEGATIVE_BANK_CASES.intersection(cases))
@@ -131,7 +147,7 @@ def prepared_data_yaml(args: argparse.Namespace) -> Path:
 
 
 def dataset_preflight(args: argparse.Namespace) -> dict[str, object]:
-    """Report A5/A6 eligibility while keeping default preflight read-only."""
+    """Report negative-canvas eligibility while keeping default preflight read-only."""
     selected = [case for case in args.cases if case in NEGATIVE_CANVAS_CASES]
     data_yaml = prepared_data_yaml(args)
     report: dict[str, object] = {
@@ -243,7 +259,7 @@ def train_kwargs(args: argparse.Namespace, case: str, data_yaml: Path, seed: int
 def source_preflight(args: argparse.Namespace) -> dict[str, object]:
     import yaml
 
-    payload = yaml.safe_load(MODEL_CONFIG.read_text(encoding="utf-8"))
+    payload = yaml.safe_load(H2_MODEL_CONFIG.read_text(encoding="utf-8"))
     if payload["head"][-1][0] != [19, 22]:
         raise ValueError("FTSC H2 P2/P3 Detect inputs changed")
     ftsc = payload["ftsc"]
@@ -251,11 +267,38 @@ def source_preflight(args: argparse.Namespace) -> dict[str, object]:
         raise ValueError("FTSC evidence changed")
     if ftsc["fixed_strengths"] != {"dfl_distribution": 1.0}:
         raise ValueError("FTSC DFL strength changed")
+
+    es1_sha256 = sha256(ES1_MODEL_CONFIG)
+    if es1_sha256 != ES1_MODEL_CONFIG_SHA256:
+        raise ValueError(
+            "historical ES1 model YAML changed: "
+            f"expected {ES1_MODEL_CONFIG_SHA256}, got {es1_sha256}"
+        )
+    es1_payload = yaml.safe_load(ES1_MODEL_CONFIG.read_text(encoding="utf-8"))
+    if es1_payload["head"][9] != [-1, 1, "nn.Identity", []]:
+        raise ValueError("historical ES1 layer 19 Identity changed")
+    if es1_payload["head"][10] != [
+        -1,
+        1,
+        "P2EdgeCueFusion",
+        [32, 0.25, "constant", 5, 15, "learned"],
+    ]:
+        raise ValueError("historical ES1 layer 20 P2EdgeCueFusion changed")
+    if es1_payload["head"][-1][0] != [19, 22]:
+        raise ValueError("historical ES1 Detect inputs must remain [19, 22]")
+    if es1_payload["ftsc"] != ftsc:
+        raise ValueError("ES1 must retain the canonical H2 FTSC configuration")
+
     configs = {case: augmentation_for(case, args.hard_negative_bank) for case in CASES}
     for case in NEGATIVE_CANVAS_CASES:
         config = configs[case]
         if config["hard_negative_tile"] or config["hard_negative_bank"]:
             raise RuntimeError(f"{case} must not depend on a hard-negative bank")
+    model_configs = {case: model_config_for(case) for case in CASES}
+    if any(model_configs[case] != H2_MODEL_CONFIG for case in CASES[:7]):
+        raise RuntimeError("A0--A6 must retain the canonical H2 model YAML")
+    if any(model_configs[case] != ES1_MODEL_CONFIG for case in ES1_CASES):
+        raise RuntimeError("A7/A8 must use the historical ES1 model YAML")
     invariant_keys = (
         "epochs", "imgsz", "batch_size", "workers", "patience", "split_seed", "pretrained"
     )
@@ -263,10 +306,22 @@ def source_preflight(args: argparse.Namespace) -> dict[str, object]:
         "status": "PREPARED — NOT YET RUN",
         "cases": list(CASES),
         "seeds": list(args.seeds),
-        "model_config": str(MODEL_CONFIG),
-        "model_config_sha256": sha256(MODEL_CONFIG),
+        "model_config": str(H2_MODEL_CONFIG),
+        "model_config_sha256": sha256(H2_MODEL_CONFIG),
+        "model_config_by_case": {case: str(path) for case, path in model_configs.items()},
+        "model_config_sha256_by_case": {
+            case: sha256(path) for case, path in model_configs.items()
+        },
         "head_inputs": payload["head"][-1][0],
         "ftsc": ftsc,
+        "es1_graph": {
+            "yaml_sha256": es1_sha256,
+            "identity_layer": 19,
+            "edge_fusion_layer": 20,
+            "edge_fusion_args": es1_payload["head"][10][3],
+            "detect_inputs": es1_payload["head"][-1][0],
+            "edge_stability": es1_payload["edge_stability"],
+        },
         "invariants": {key: getattr(args, key) for key in invariant_keys},
         "augmentation": configs,
         "oacp_environment": {case: environment_for(case) for case in CASES},
@@ -282,25 +337,74 @@ def source_preflight(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
-def model_preflight() -> dict[str, object]:
+def model_preflight(model_config: Path = MODEL_CONFIG) -> dict[str, object]:
     workflow.local_ultralytics()
     from ultralytics.nn.tasks import DetectionModel
 
-    model = DetectionModel(MODEL_CONFIG, verbose=False)
+    model_config = model_config.resolve()
+    if model_config not in {H2_MODEL_CONFIG.resolve(), ES1_MODEL_CONFIG.resolve()}:
+        raise ValueError(f"unsupported suite model config: {model_config}")
+    model = DetectionModel(model_config, verbose=False)
     head = model.model[-1]
     strides = [float(value) for value in head.stride.detach().cpu().tolist()]
     if strides != [4.0, 8.0]:
         raise ValueError(f"expected P2/P3 strides [4, 8], got {strides}")
     calibrator = head.ftsc_calibrator
     if calibrator is None or calibrator.policy != "f5":
-        raise ValueError("FTSC H2 calibrator is inactive")
-    return {
+        raise ValueError("FTSC f5 calibrator is inactive")
+    if list(calibrator.evidence_names) != ["position_gaussian", "dfl_distribution"]:
+        raise ValueError("FTSC evidence changed")
+    if list(head.f) != [19, 22]:
+        raise ValueError(f"Detect topology changed for {model_config.name}: {head.f}")
+
+    report: dict[str, object] = {
         "class": type(model).__name__,
         "head": type(head).__name__,
         "strides": strides,
         "ftsc_policy": calibrator.policy,
         "ftsc_evidence": list(calibrator.evidence_names),
     }
+    if model_config == ES1_MODEL_CONFIG.resolve():
+        edge = model.model[20]
+        runtime_signature = {
+            "identity_layer_19": type(model.model[19]).__name__,
+            "edge_layer_20": type(edge).__name__,
+            "edge_from": edge.f,
+            "residual_scale": float(edge.residual_scale),
+            "residual_schedule": edge.residual_schedule,
+            "ramp_start_epoch": int(edge.ramp_start_epoch),
+            "ramp_end_epoch": int(edge.ramp_end_epoch),
+            "orientation_gate_mode": edge.orientation_gate_mode,
+            "hidden": int(edge.hidden),
+            "detect_inputs": list(head.f),
+        }
+        expected_signature = {
+            "identity_layer_19": "Identity",
+            "edge_layer_20": "P2EdgeCueFusion",
+            "edge_from": -1,
+            "residual_scale": 0.25,
+            "residual_schedule": "constant",
+            "ramp_start_epoch": 5,
+            "ramp_end_epoch": 15,
+            "orientation_gate_mode": "learned",
+            "hidden": 32,
+            "detect_inputs": [19, 22],
+        }
+        if runtime_signature != expected_signature:
+            raise ValueError(
+                "historical ES1 runtime graph changed: "
+                f"expected {expected_signature}, got {runtime_signature}"
+            )
+        report["es1_runtime_graph"] = runtime_signature
+    return report
+
+
+def model_preflights(cases: list[str] | tuple[str, ...]) -> dict[str, dict[str, object]]:
+    """Build-check every model family needed by the selected cases."""
+    reports = {"H2": model_preflight(H2_MODEL_CONFIG)}
+    if ES1_CASES.intersection(cases):
+        reports["ES1"] = model_preflight(ES1_MODEL_CONFIG)
+    return reports
 
 
 def git_sha() -> str:
@@ -309,14 +413,15 @@ def git_sha() -> str:
 
 def write_manifest(run_dir: Path, args: argparse.Namespace, case: str, seed: int, data_yaml: Path) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
+    model_config = model_config_for(case)
     manifest = {
         "status": "RUN AUTHORIZED — METRICS PENDING",
         "experiment": EXPERIMENT,
         "case": case,
         "seed": seed,
         "split_seed": args.split_seed,
-        "model_config": str(MODEL_CONFIG),
-        "model_config_sha256": sha256(MODEL_CONFIG),
+        "model_config": str(model_config),
+        "model_config_sha256": sha256(model_config),
         "data_yaml": str(data_yaml),
         "epochs": args.epochs,
         "patience": args.patience,
@@ -346,10 +451,10 @@ def train_one(args: argparse.Namespace, case: str, seed: int, data_yaml: Path) -
     from ultralytics import YOLO
 
     # Reset Python/NumPy/Torch before every case so matched seeds start from
-    # the same transferred model state; only the augmentation path may differ.
+    # the same transferred checkpoint before the explicit case model/augmentation.
     workflow.seed_everything(seed)
     with configured_environment(case):
-        model = YOLO(MODEL_CONFIG, task="detect")
+        model = YOLO(model_config_for(case), task="detect")
         model.load(args.pretrained, smart_transfer=True)
         model.train(
             **train_kwargs(args, case, data_yaml, seed),
@@ -419,7 +524,9 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     args.project = args.project.resolve()
     report = source_preflight(args)
-    report["model"] = model_preflight()
+    model_reports = model_preflights(args.cases)
+    report["model"] = model_reports["H2"]
+    report["models"] = model_reports
     print(json.dumps(report, indent=2, sort_keys=True))
     if args.aggregate_only:
         aggregate(args)

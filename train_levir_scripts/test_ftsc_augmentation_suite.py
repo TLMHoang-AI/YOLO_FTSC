@@ -1,4 +1,4 @@
-"""No-training tests for the FTSC H2 A0--A6 augmentation port."""
+"""No-training tests for the FTSC H2/ES1 A0--A8 augmentation suite."""
 from __future__ import annotations
 
 import importlib.util
@@ -49,7 +49,7 @@ def _empty_instances():
     )
 
 
-def test_exactly_seven_cases_and_shared_h2_protocol(tmp_path):
+def test_exactly_nine_cases_and_shared_training_protocol(tmp_path):
     args = runner.parse_args([])
     assert runner.CASES == (
         "A0_FTSC",
@@ -59,6 +59,8 @@ def test_exactly_seven_cases_and_shared_h2_protocol(tmp_path):
         "A4_OACP_R2_M5",
         "A5_NEGCANVAS_R1",
         "A6_NEGCANVAS_R4",
+        "A7_ES1_NEGCANVAS_R1",
+        "A8_ES1_NEGCANVAS_R4",
     )
     assert args.seeds == [42, 43, 44]
     assert (args.epochs, args.patience, args.imgsz, args.batch_size) == (100, 20, 512, 8)
@@ -143,13 +145,20 @@ def test_case_augmentation_contracts(tmp_path):
     assert (a6["mosaic"], a6["hard_negative_tile"], a6["hard_negative_bank"]) == (0.0, False, "")
     assert runner.environment_for("A6_NEGCANVAS_R4") == {}
 
+    a7 = cases["A7_ES1_NEGCANVAS_R1"]
+    a8 = cases["A8_ES1_NEGCANVAS_R4"]
+    assert a7 == a5
+    assert a8 == a6
+    assert runner.environment_for("A7_ES1_NEGCANVAS_R1") == {}
+    assert runner.environment_for("A8_ES1_NEGCANVAS_R4") == {}
+
     intended_copy_paste_switches = {
         "copy_paste_enabled",
         "copy_paste_mode",
         "copy_paste_copies",
         "copy_paste_placement",
     }
-    for case in (a5, a6):
+    for case in (a5, a6, a7, a8):
         for key, baseline_value in a0.items():
             if key not in intended_copy_paste_switches:
                 assert case[key] == baseline_value, key
@@ -162,6 +171,55 @@ def test_hard_negative_bank_isolated_to_a2_and_a4():
     assert not runner.hard_negative_bank_required(["A5_NEGCANVAS_R1"])
     assert not runner.hard_negative_bank_required(["A6_NEGCANVAS_R4"])
     assert not runner.hard_negative_bank_required(["A5_NEGCANVAS_R1", "A6_NEGCANVAS_R4"])
+    assert not runner.hard_negative_bank_required(["A7_ES1_NEGCANVAS_R1"])
+    assert not runner.hard_negative_bank_required(["A8_ES1_NEGCANVAS_R4"])
+    assert not runner.hard_negative_bank_required(["A7_ES1_NEGCANVAS_R1", "A8_ES1_NEGCANVAS_R4"])
+
+
+def test_per_case_model_config_mapping_preserves_a0_a6():
+    for case in runner.CASES[:7]:
+        assert runner.model_config_for(case) == runner.H2_MODEL_CONFIG
+    assert runner.model_config_for("A7_ES1_NEGCANVAS_R1") == runner.ES1_MODEL_CONFIG
+    assert runner.model_config_for("A8_ES1_NEGCANVAS_R4") == runner.ES1_MODEL_CONFIG
+
+
+def test_source_preflight_pins_h2_and_historical_es1_graph(tmp_path):
+    args = runner.parse_args(
+        [
+            "--cases",
+            "A5_NEGCANVAS_R1",
+            "A6_NEGCANVAS_R4",
+            "A7_ES1_NEGCANVAS_R1",
+            "A8_ES1_NEGCANVAS_R4",
+            "--dataset-root",
+            str(tmp_path / "absent_data"),
+        ]
+    )
+    report = runner.source_preflight(args)
+    mapping = report["model_config_by_case"]
+    assert mapping["A5_NEGCANVAS_R1"] == str(runner.H2_MODEL_CONFIG)
+    assert mapping["A6_NEGCANVAS_R4"] == str(runner.H2_MODEL_CONFIG)
+    assert mapping["A7_ES1_NEGCANVAS_R1"] == str(runner.ES1_MODEL_CONFIG)
+    assert mapping["A8_ES1_NEGCANVAS_R4"] == str(runner.ES1_MODEL_CONFIG)
+    assert report["es1_graph"] == {
+        "yaml_sha256": runner.ES1_MODEL_CONFIG_SHA256,
+        "identity_layer": 19,
+        "edge_fusion_layer": 20,
+        "edge_fusion_args": [32, 0.25, "constant", 5, 15, "learned"],
+        "detect_inputs": [19, 22],
+        "edge_stability": {
+            "case": "ES1",
+            "base_reference": "E_H2",
+            "residual_scale": 0.25,
+            "residual_schedule": "constant",
+            "ramp_start_epoch": 5,
+            "ramp_end_epoch": 15,
+            "orientation_gate_mode": "learned",
+            "hidden": 32,
+            "description": "Fixed residual alpha=0.25; learned orientation gate.",
+        },
+    }
+    assert report["hard_negative_bank"]["required"] is False
 
 
 def test_r2_config_and_source_parity(monkeypatch):
@@ -378,8 +436,28 @@ def test_ftsc_h2_model_instantiates_with_p2_p3_unchanged():
     assert report["ftsc_evidence"] == ["position_gaussian", "dfl_distribution"]
 
 
+def test_es1_model_instantiates_with_historical_runtime_graph_unchanged():
+    report = runner.model_preflight(runner.ES1_MODEL_CONFIG)
+    assert report["head"] == "Detect"
+    assert report["strides"] == [4.0, 8.0]
+    assert report["ftsc_policy"] == "f5"
+    assert report["ftsc_evidence"] == ["position_gaussian", "dfl_distribution"]
+    assert report["es1_runtime_graph"] == {
+        "identity_layer_19": "Identity",
+        "edge_layer_20": "P2EdgeCueFusion",
+        "edge_from": -1,
+        "residual_scale": 0.25,
+        "residual_schedule": "constant",
+        "ramp_start_epoch": 5,
+        "ramp_end_epoch": 15,
+        "orientation_gate_mode": "learned",
+        "hidden": 32,
+        "detect_inputs": [19, 22],
+    }
+
+
 def test_default_path_fails_closed_without_training(monkeypatch):
-    monkeypatch.setattr(runner, "model_preflight", lambda: {"ok": True})
+    monkeypatch.setattr(runner, "model_preflight", lambda *_args: {"ok": True})
     called = []
     monkeypatch.setattr(runner, "train_one", lambda *args, **kwargs: called.append((args, kwargs)))
     runner.main([])
@@ -387,7 +465,7 @@ def test_default_path_fails_closed_without_training(monkeypatch):
 
 
 def test_a5_a6_preflight_needs_neither_bank_nor_implicit_data_preparation(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(runner, "model_preflight", lambda: {"ok": True})
+    monkeypatch.setattr(runner, "model_preflight", lambda *_args: {"ok": True})
     prepared = []
     monkeypatch.setattr(runner.workflow, "prepare_fixed_split", lambda _args: prepared.append(True))
     runner.main(
@@ -403,6 +481,81 @@ def test_a5_a6_preflight_needs_neither_bank_nor_implicit_data_preparation(monkey
     assert '"required": false' in output
     assert '"status": "PENDING_DATA_PREPARATION"' in output
     assert prepared == []
+
+
+def test_a7_a8_preflight_uses_both_models_without_bank_or_data_preparation(monkeypatch, tmp_path, capsys):
+    calls = []
+
+    def fake_model_preflight(model_config=runner.MODEL_CONFIG):
+        calls.append(model_config)
+        return {"model_config": str(model_config)}
+
+    monkeypatch.setattr(runner, "model_preflight", fake_model_preflight)
+    prepared = []
+    monkeypatch.setattr(runner.workflow, "prepare_fixed_split", lambda _args: prepared.append(True))
+    runner.main(
+        [
+            "--cases",
+            "A7_ES1_NEGCANVAS_R1",
+            "A8_ES1_NEGCANVAS_R4",
+            "--dataset-root",
+            str(tmp_path / "absent_data"),
+        ]
+    )
+    output = capsys.readouterr().out
+    assert calls == [runner.H2_MODEL_CONFIG, runner.ES1_MODEL_CONFIG]
+    assert '"required": false' in output
+    assert '"status": "PENDING_DATA_PREPARATION"' in output
+    assert prepared == []
+
+
+def test_manifest_records_the_model_selected_for_each_case(monkeypatch, tmp_path):
+    monkeypatch.setattr(runner, "git_sha", lambda: "test-commit")
+    args = runner.parse_args([])
+    for case, expected in (
+        ("A6_NEGCANVAS_R4", runner.H2_MODEL_CONFIG),
+        ("A8_ES1_NEGCANVAS_R4", runner.ES1_MODEL_CONFIG),
+    ):
+        run_dir = tmp_path / case
+        runner.write_manifest(run_dir, args, case, 42, Path("split.yaml"))
+        manifest = json.loads((run_dir / "experiment_manifest.json").read_text(encoding="utf-8"))
+        assert manifest["model_config"] == str(expected)
+        assert manifest["model_config_sha256"] == runner.sha256(expected)
+
+
+def test_train_one_constructs_the_case_selected_model_without_training(monkeypatch, tmp_path):
+    import ultralytics
+
+    constructed = []
+
+    class FakeYOLO:
+        def __init__(self, model_config, task):
+            constructed.append((Path(model_config), task))
+
+        def load(self, _pretrained, smart_transfer):
+            assert smart_transfer is True
+
+        def train(self, **kwargs):
+            run_dir = Path(kwargs["project"]) / kwargs["name"]
+            (run_dir / "weights").mkdir(parents=True, exist_ok=True)
+            (run_dir / "weights" / "best.pt").touch()
+            (run_dir / "weights" / "last.pt").touch()
+            (run_dir / "results.csv").touch()
+
+    monkeypatch.setattr(runner.workflow, "local_ultralytics", lambda: None)
+    monkeypatch.setattr(runner.workflow, "seed_everything", lambda _seed: None)
+    monkeypatch.setattr(runner, "git_sha", lambda: "test-commit")
+    monkeypatch.setattr(ultralytics, "YOLO", FakeYOLO)
+    args = runner.parse_args(["--project", str(tmp_path / "runs")])
+    args.project = args.project.resolve()
+    args.pretrained = "local-test-checkpoint.pt"
+
+    runner.train_one(args, "A6_NEGCANVAS_R4", 42, Path("split.yaml"))
+    runner.train_one(args, "A8_ES1_NEGCANVAS_R4", 42, Path("split.yaml"))
+    assert constructed == [
+        (runner.H2_MODEL_CONFIG, "detect"),
+        (runner.ES1_MODEL_CONFIG, "detect"),
+    ]
 
 
 def test_a5_a6_dataset_eligibility_uses_canonical_counts(tmp_path):
