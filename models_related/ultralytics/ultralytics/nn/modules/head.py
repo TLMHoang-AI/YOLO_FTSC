@@ -184,10 +184,12 @@ class Detect(nn.Module):
         ftsc: dict | None = None,
         hbs: dict | None = None,
         ghm: dict | None = None,
+        disable_experimental_detect_heads: bool = False,
     ):
         """Initialize the YOLO detection layer with specified number of classes and channels."""
         super().__init__()
         self.nc = nc  # number of classes
+        self.disable_experimental_detect_heads = bool(disable_experimental_detect_heads)
         self.ftsc_calibrator = (
             AnchorFreeFTSCCalibrator(ftsc, reg_max) if ftsc and bool(ftsc.get("enabled", True)) else None
         )
@@ -289,12 +291,20 @@ class Detect(nn.Module):
         # EXPERIMENTAL: localization quality map heads. These parameters live
         # on the model so the optimizer can update them during LQM training.
         self.loc_quality_enabled = False
-        self.loc_cv = nn.ModuleList(nn.Conv2d(x, 1, 1) for x in ch)
+        self.loc_cv = (
+            nn.ModuleList(nn.Conv2d(x, 1, 1) for x in ch)
+            if not self.disable_experimental_detect_heads
+            else nn.ModuleList()
+        )
         # EXPERIMENTAL: true IoU quality heads. Unlike loc_quality, this branch
         # is inference-visible and learns assigned predicted-box IoU.
         quality_ch = 14 if self.quality_box_features else 0
-        self.cvq = nn.ModuleList(
-            nn.Sequential(Conv(x + quality_ch, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 1, 1)) for x in ch
+        self.cvq = (
+            nn.ModuleList(
+                nn.Sequential(Conv(x + quality_ch, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 1, 1)) for x in ch
+            )
+            if not self.disable_experimental_detect_heads
+            else nn.ModuleList()
         )
 
         if end2end:

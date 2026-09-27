@@ -61,10 +61,12 @@ __all__ = (
     "CBFuse",
     "CBLinear",
     "ContrastiveHead",
+    "DeformableHeadConv",
     "GhostBottleneck",
     "HGBlock",
     "HGStem",
     "ImagePoolingAttn",
+    "IRDCB",
     "FullSelfAttention",
     "GlobalChannelContextCalibration",
     "KVCompressedAttention",
@@ -73,6 +75,8 @@ __all__ = (
     "KVCompressedTransformerEncoder",
     "M3NATFuse",
     "Proto",
+    "LDown",
+    "P2LocalToP3",
     "RegionRoutingAttentionLite",
     "TopKAdaptiveGroupKVAttention",
     "TopKGlobalGroupKVAttention",
@@ -1209,6 +1213,157 @@ class DFL(nn.Module):
         b, _, a = x.shape  # batch, channels, anchors
         return self.conv(x.view(b, 4, self.c1, a).transpose(2, 1).softmax(1)).view(b, 4, a)
         # return self.conv(x.view(b, self.c1, 4, a).softmax(1)).view(b, 4, a)
+
+
+class _GridSampleDeformConv2d(nn.Module):
+    """Pure-PyTorch deformable convolution used by the LMSCA head block."""
+
+    def __init__(self, c1: int, c2: int, k: int = 3, padding: int = 1):
+        super().__init__()
+        self.k = k
+        self.padding = padding
+        self.weight = nn.Parameter(torch.empty(c2, c1, k, k))
+        nn.init.kaiming_uniform_(self.weight, a=1)
+
+    def forward(self, x: torch.Tensor, offset: torch.Tensor) -> torch.Tensor:
+        orig_dtype = x.dtype
+        x = x.float()
+        offset = offset.float()
+        b, _, h, w = x.shape
+        k2 = self.k * self.k
+        if offset.shape[1] != 2 * k2:
+            raise ValueError(f"Expected {2 * k2} offset channels, got {offset.shape[1]}")
+        if self.padding:
+            x = F.pad(x, (self.padding, self.padding, self.padding, self.padding))
+        hp, wp = x.shape[-2:]
+        device = x.device
+        yy, xx = torch.meshgrid(
+            torch.arange(h, device=device, dtype=torch.float32),
+            torch.arange(w, device=device, dtype=torch.float32),
+            indexing="ij",
+        )
+        yy, xx = yy.unsqueeze(0), xx.unsqueeze(0)
+        out = x.new_zeros(b, self.weight.shape[0], h, w)
+        for ky in range(self.k):
+            for kx in range(self.k):
+                idx = ky * self.k + kx
+                sample_y = yy + ky + offset[:, 2 * idx]
+                sample_x = xx + kx + offset[:, 2 * idx + 1]
+                grid_y = sample_y.mul(2.0 / max(hp - 1, 1)).sub(1.0)
+                grid_x = sample_x.mul(2.0 / max(wp - 1, 1)).sub(1.0)
+                grid = torch.stack((grid_x, grid_y), dim=-1)
+                sampled = F.grid_sample(x, grid, mode="bilinear", padding_mode="zeros", align_corners=True)
+                out = out + torch.einsum("bchw,oc->bohw", sampled, self.weight[:, :, ky, kx].float())
+        return out.to(orig_dtype)
+
+
+class DeformableHeadConv(nn.Module):
+    """LMSCA deformable refinement block for final detection features."""
+
+    def __init__(self, c1: int, c2: int, k: int = 3, gamma_init: float = 0.0, act: bool = True):
+        super().__init__()
+        if k % 2 == 0:
+            raise ValueError(f"DeformableHeadConv kernel size must be odd, got {k}")
+        self.offset = nn.Conv2d(c1, 2 * k * k, kernel_size=3, stride=1, padding=1)
+        self.deform = _GridSampleDeformConv2d(c1, c2, k=k, padding=autopad(k))
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = Conv.default_act if act else nn.Identity()
+        self.shortcut = c1 == c2
+        self.gamma = nn.Parameter(torch.tensor(float(gamma_init))) if self.shortcut else None
+        self.proj = nn.Identity() if c1 == c2 else Conv(c1, c2, 1, 1, act=False)
+        nn.init.zeros_(self.offset.weight)
+        nn.init.zeros_(self.offset.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = self.act(self.bn(self.deform(x, self.offset(x))))
+        return x + self.gamma * y if self.shortcut else self.proj(x) + y
+
+
+class LDown(nn.Module):
+    """Depthwise spatial reduction followed by pointwise projection."""
+
+    def __init__(self, c1: int, c2: int, k: int = 3, s: int = 2, act: bool = True):
+        super().__init__()
+        self.dw = Conv(c1, c1, k, s, g=c1, act=act)
+        self.pw = Conv(c1, c2, 1, 1, act=act)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.pw(self.dw(x))
+
+
+class IRDCBUnit(nn.Module):
+    """Inverted residual depthwise unit used inside LMSCA IRDCB."""
+
+    def __init__(self, c: int, expansion: float = 2.0, shortcut: bool = True):
+        super().__init__()
+        hidden = max(8, int(c * expansion))
+        self.expand = Conv(c, hidden, 1, 1)
+        self.dw1 = Conv(hidden, hidden, 3, 1, g=hidden)
+        self.dw2 = Conv(hidden, hidden, 3, 1, g=hidden)
+        self.project = Conv(hidden, c, 1, 1, act=False)
+        self.shortcut = shortcut
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = self.project(self.dw2(self.dw1(self.expand(x))))
+        return x + y if self.shortcut else y
+
+
+class IRDCB(nn.Module):
+    """C2f-compatible IRDCB neck block from the reference LMSCA implementation."""
+
+    def __init__(self, c1: int, c2: int, n: int = 1, expansion: float = 2.0, shortcut: bool = True, e: float = 0.5):
+        super().__init__()
+        self.c = int(c2 * e)
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1, 1)
+        self.m = nn.ModuleList(IRDCBUnit(self.c, expansion=expansion, shortcut=shortcut) for _ in range(n))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = list(self.cv1(x).chunk(2, 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+    def forward_split(self, x: torch.Tensor) -> torch.Tensor:
+        y = list(self.cv1(x).split((self.c, self.c), 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+
+class P2LocalToP3(nn.Module):
+    """Inject P2 detail into P3 while keeping P2 out of Detect."""
+
+    def __init__(self, channels: list[int], c2: int, k: int = 3, gamma_init: float = 0.0, gate_scale: float = 1.0):
+        super().__init__()
+        if len(channels) != 2:
+            raise ValueError(f"P2LocalToP3 expects [P2, P3] channels, got {channels}")
+        c_p2, c_p3 = channels
+        self.p2_proj = Conv(c_p2, c2, 1, 1)
+        self.p3_proj = Conv(c_p3, c2, 1, 1)
+        self.gate = nn.Sequential(Conv(2 * c2, c2, k, 1, g=c2), nn.Conv2d(c2, c2, 1), nn.Sigmoid())
+        self.context_down = LDown(c2, c2, k=3, s=2)
+        self.gamma = nn.Parameter(torch.tensor(float(gamma_init)))
+        self.gate_scale = float(gate_scale)
+
+    @staticmethod
+    def _resize_to(x: torch.Tensor, size: tuple[int, int]) -> torch.Tensor:
+        return x if x.shape[-2:] == size else F.interpolate(x, size=size, mode="bilinear", align_corners=False)
+
+    def _to_p3_size(self, x: torch.Tensor, target_size: tuple[int, int]) -> torch.Tensor:
+        if x.shape[-2:] == target_size:
+            return x
+        if x.shape[-2] == target_size[0] * 2 and x.shape[-1] == target_size[1] * 2:
+            return self.context_down(x)
+        return F.interpolate(x, size=target_size, mode="bilinear", align_corners=False)
+
+    def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
+        p2, p3 = x
+        target_size = p3.shape[-2:]
+        p3_base = self.p3_proj(p3)
+        p2_detail = self.p2_proj(p2)
+        p3_up = self._resize_to(p3_base, p2_detail.shape[-2:])
+        gate = self.gate(torch.cat((p2_detail, p3_up), dim=1))
+        context = self._to_p3_size(gate * p2_detail, target_size)
+        return p3_base + self.gamma * self.gate_scale * context
 
 
 class WeightedAdd(nn.Module):

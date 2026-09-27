@@ -68,6 +68,7 @@ from ultralytics.nn.modules import (
     ConvTranspose,
     Detect,
     DetectClsAttention,
+    DeformableHeadConv,
     HVDecoupledDetect,
     P2NUDFLDetect,
     P3NUDFLDetect,
@@ -84,6 +85,7 @@ from ultralytics.nn.modules import (
     HGBlock,
     HGStem,
     ImagePoolingAttn,
+    IRDCB,
     Index,
     FullSelfAttention,
     GlobalChannelContextCalibration,
@@ -92,6 +94,7 @@ from ultralytics.nn.modules import (
     SpatialAttention,
     KVCompressedAttentionPartial,
     KVCompressedTransformerEncoder,
+    LDown,
     ChannelKVCompressedAttention,
     LRPCHead,
     LocalDetailRepC2f,
@@ -100,6 +103,7 @@ from ultralytics.nn.modules import (
     P1GER,
     P1PlainFusion,
     P1DRR,
+    P2LocalToP3,
     M3NATFuse,
     NATBlock,
     Pose,
@@ -2325,6 +2329,8 @@ def parse_model(d, ch, verbose=True):
             C2fCBAM,
             C2fKV,
             C2fNAT,
+            IRDCB,
+            LDown,
             C3k2,
             RepNCSPELAN4,
             ELAN1,
@@ -2348,6 +2354,7 @@ def parse_model(d, ch, verbose=True):
             C2fCIB,
             A2C2f,
             BiLevelRoutingAttention,
+            DeformableHeadConv,
             FullSelfAttention,
             GlobalChannelContextCalibration,
             KVCompressedAttention,
@@ -2371,6 +2378,7 @@ def parse_model(d, ch, verbose=True):
             C2fCBAM,
             C2fKV,
             C2fNAT,
+            IRDCB,
             C3k2,
             C2fAttn,
             C3,
@@ -2476,6 +2484,9 @@ def parse_model(d, ch, verbose=True):
             c2 = ch[f[0]] if isinstance(f, list) else ch[f]
         elif m is AIFI:
             args = [ch[f], *args]
+        elif m is P2LocalToP3:
+            c2 = make_divisible(min(args[0], max_channels) * width, 8)
+            args = [[ch[x] for x in f], c2, *args[1:]]
         elif m in frozenset({HGStem, HGBlock}):
             c1, cm, c2 = ch[f], args[0], args[1]
             args = [c1, cm, c2, *args[2:]]
@@ -2558,7 +2569,7 @@ def parse_model(d, ch, verbose=True):
                         ]
                     )
                     if m is Detect:
-                        args.extend([ftsc, hbs, ghm])
+                        args.extend([ftsc, hbs, ghm, d.get("disable_experimental_detect_heads", False)])
             if m is Segment or m is YOLOESegment or m is Segment26 or m is YOLOESegment26:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
             if m in {
