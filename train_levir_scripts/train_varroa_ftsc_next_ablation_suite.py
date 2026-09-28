@@ -542,6 +542,7 @@ def _metric_aliases(metrics: dict[str, Any]) -> dict[str, Any]:
 
 def write_summaries(args: argparse.Namespace) -> bool:
     """Write future metric summaries only for a complete selected matrix."""
+    from evaluate_test.standard_detection_metrics import load_merged_metrics, same_benchmark_fingerprint
     source = source_preflight()
     models = model_preflight()
     rows: list[dict[str, Any]] = []
@@ -550,9 +551,9 @@ def write_summaries(args: argparse.Namespace) -> bool:
         for seed in args.seeds:
             run_dir = _run_dir(args, case, seed)
             path = run_dir / "evaluation_metrics.json"
-            if not path.is_file():
+            if not path.is_file() and not (run_dir / "evaluation_metrics_extended.json").is_file():
                 return False
-            metrics = json.loads(path.read_text(encoding="utf-8"))
+            metrics = load_merged_metrics(run_dir)
             augmentation = source["cases"][case]["augmentation"]
             model = models[case]
             rows.append({
@@ -589,10 +590,15 @@ def write_summaries(args: argparse.Namespace) -> bool:
         group = [row for row in rows if row["variant"] == case]
         _require(len(group) == len(args.seeds), f"partial aggregate for {case}")
         record: dict[str, Any] = {"variant": case, "runs": len(group)}
+        comparable_speed = same_benchmark_fingerprint(group)
+        if not comparable_speed:
+            record["benchmark/speed_aggregate"] = "mixed hardware / non-comparable"
         for key in metadata:
             record[key] = group[0][key]
         common = set.intersection(*(set(row) for row in group)) - {"variant", "seed", "run_dir", "checkpoint_used"} - metadata
         for key in sorted(common):
+            if not comparable_speed and key.startswith("test_speed/"):
+                continue
             values = [row[key] for row in group]
             if all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values):
                 numeric = [float(value) for value in values]

@@ -203,32 +203,39 @@ def smoke_amp(model_name: str, mechanism: str, data_yaml: Path, args: argparse.N
 
 def evaluate(run_dir: Path, args: argparse.Namespace) -> dict[str, float]:
     output = run_dir / "evaluation_metrics.json"
-    if output.is_file():
-        return json.loads(output.read_text(encoding="utf-8"))
+    extended = run_dir / "evaluation_metrics_extended.json"
+    if output.is_file() and extended.is_file():
+        from evaluate_test.standard_detection_metrics import load_merged_metrics
+        return load_merged_metrics(run_dir)
     local_ultralytics()
     from ultralytics import YOLO
 
-    metrics: dict[str, float] = {}
-    for split in ("val", "test"):
-        result = YOLO(run_dir / "weights/best.pt").val(
-            data=str(args.data_yaml), split=split, imgsz=args.imgsz, batch=args.batch_size,
-            device=args.device, workers=args.workers, plots=False,
-            project=str(run_dir / "evaluation"), name=split, exist_ok=True,
-        )
-        metrics.update({f"{split}/{key}": float(value) for key, value in result.results_dict.items()})
-        metrics[f"{split}/metrics/mAP75(B)"] = float(result.box.map75)
-    output.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return metrics
+    metrics: dict[str, float] = json.loads(output.read_text(encoding="utf-8")) if output.is_file() else {}
+    if not metrics:
+        for split in ("val", "test"):
+            result = YOLO(run_dir / "weights/best.pt").val(
+                data=str(args.data_yaml), split=split, imgsz=args.imgsz, batch=args.batch_size,
+                device=args.device, workers=args.workers, plots=False,
+                project=str(run_dir / "evaluation"), name=split, exist_ok=True,
+            )
+            metrics.update({f"{split}/{key}": float(value) for key, value in result.results_dict.items()})
+            metrics[f"{split}/metrics/mAP75(B)"] = float(result.box.map75)
+        output.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    from evaluate_test.standard_detection_metrics import evaluate_run
+    extended_metrics = evaluate_run(run_dir, args.data_yaml, dataset="varroa", imgsz=args.imgsz,
+                                    batch=args.batch_size, device=args.device, workers=args.workers, nms_iou=0.7)
+    return {**metrics, **extended_metrics}
 
 
 def write_summaries(args: argparse.Namespace) -> None:
+    from evaluate_test.standard_detection_metrics import load_merged_metrics, same_benchmark_fingerprint
     rows = []
     for model_name in args.models:
         for mechanism in args.mechanisms:
             for seed in args.seeds:
                 path = args.project / model_name / mechanism / f"seed_{seed}" / "evaluation_metrics.json"
-                if path.is_file():
-                    rows.append({"model": model_name, "mechanism": mechanism, "seed": seed, **json.loads(path.read_text())})
+                if path.is_file() or (path.parent / "evaluation_metrics_extended.json").is_file():
+                    rows.append({"model": model_name, "mechanism": mechanism, "seed": seed, **load_merged_metrics(path.parent)})
     if not rows:
         return
 
@@ -248,8 +255,15 @@ def write_summaries(args: argparse.Namespace) -> None:
             if not group:
                 continue
             record: dict[str, object] = {"model": model_name, "mechanism": mechanism, "runs": len(group)}
+            comparable_speed = same_benchmark_fingerprint(group)
+            if not comparable_speed:
+                record["benchmark/speed_aggregate"] = "mixed hardware / non-comparable"
             metric_keys = set.intersection(*(set(row) for row in group)) - {"model", "mechanism", "seed"}
             for key in sorted(metric_keys):
+                if not comparable_speed and key.startswith("test_speed/"):
+                    continue
+                if not all(isinstance(row[key], (int, float)) and not isinstance(row[key], bool) for row in group):
+                    continue
                 values = [float(row[key]) for row in group]
                 record[f"{key}/mean"] = statistics.fmean(values)
                 record[f"{key}/std"] = statistics.stdev(values) if len(values) > 1 else 0.0

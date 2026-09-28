@@ -468,12 +468,13 @@ def train_one(args: argparse.Namespace, case: str, seed: int, data_yaml: Path) -
 
 
 def aggregate(args: argparse.Namespace) -> None:
+    from evaluate_test.standard_detection_metrics import load_merged_metrics, same_benchmark_fingerprint
     rows: list[dict[str, object]] = []
     for case in args.cases:
         for seed in args.seeds:
             path = args.project / case / f"seed_{seed}" / "evaluation_metrics.json"
-            if path.is_file():
-                rows.append({"case": case, "seed": seed, **json.loads(path.read_text(encoding="utf-8"))})
+            if path.is_file() or (path.parent / "evaluation_metrics_extended.json").is_file():
+                rows.append({"case": case, "seed": seed, **load_merged_metrics(path.parent)})
     if not rows:
         return
     args.project.mkdir(parents=True, exist_ok=True)
@@ -486,7 +487,12 @@ def aggregate(args: argparse.Namespace) -> None:
         if not group:
             continue
         record: dict[str, object] = {"case": case, "runs": len(group)}
+        comparable_speed = same_benchmark_fingerprint(group)
+        if not comparable_speed:
+            record["benchmark/speed_aggregate"] = "mixed hardware / non-comparable"
         for key in sorted(set.intersection(*(set(row) for row in group)) - {"case", "seed"}):
+            if not comparable_speed and key.startswith("test_speed/"):
+                continue
             try:
                 values = [float(row[key]) for row in group]
             except (TypeError, ValueError):
@@ -553,6 +559,9 @@ def main(argv: list[str] | None = None) -> None:
         for case in args.cases:
             run_dir = train_one(args, case, seed, data_yaml)
             workflow.evaluate(run_dir, data_yaml, args)
+            from evaluate_test.standard_detection_metrics import evaluate_run
+            evaluate_run(run_dir, data_yaml, dataset="levir", imgsz=args.imgsz, batch=args.batch_size,
+                         device=args.device, workers=args.workers, nms_iou=0.5)
             aggregate(args)
 
 

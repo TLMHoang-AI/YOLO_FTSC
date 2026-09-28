@@ -59,7 +59,7 @@ def evaluate_checkpoint(
         imgsz=imgsz, batch=batch, device=device, workers=workers,
     )
     metrics.update(evaluate_native_test_size_buckets(
-        run_dir, data_yaml, imgsz=imgsz, batch=batch, device=device, workers=workers,
+        run_dir, data_yaml, imgsz=imgsz, batch=batch, device=device, workers=workers, dataset="visdrone",
     ))
     (run_dir / "evaluation_metrics.json").write_text(
         json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8"

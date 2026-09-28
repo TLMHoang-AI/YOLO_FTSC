@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 AREA_LABELS = ("all", "tiny", "tiny1", "tiny2", "tiny3", "small", "medium", "reasonable")
+MAX_SOURCE_LIST_CHUNK = 100  # VisDrone 1536 OOM guard; IDs remain global across chunks.
 AREA_RANGES = (
     (1**2, 1e5**2),
     (1**2, 20**2),
@@ -124,27 +125,23 @@ def _predictions(
 ) -> list[dict[str, Any]]:
     """Run partner-matched prediction settings and collapse all classes to category 1."""
     detections = []
-    results = model.predict(
-        source=[str(path) for path in image_paths],
-        imgsz=imgsz,
-        batch=batch,
-        device=device,
-        workers=workers,
-        iou=0.5,
-        verbose=False,
-        stream=True,
-    )
-    for image_id, result in enumerate(results, 1):
-        boxes = result.boxes
-        xyxy = boxes.xyxy.detach().cpu().tolist() if boxes is not None else []
-        scores = boxes.conf.detach().cpu().tolist() if boxes is not None else []
-        for (x1, y1, x2, y2), score in zip(xyxy, scores):
-            detections.append({
-                "image_id": image_id,
-                "category_id": 1,
-                "bbox": [x1, y1, max(0.0, x2 - x1), max(0.0, y2 - y1)],
-                "score": float(score),
-            })
+    # Chunking changes only source-list residency.  In particular, image IDs
+    # are offset by the original list position rather than restarted per chunk.
+    for start in range(0, len(image_paths), MAX_SOURCE_LIST_CHUNK):
+        chunk = image_paths[start : start + MAX_SOURCE_LIST_CHUNK]
+        results = model.predict(
+            source=[str(path) for path in chunk], imgsz=imgsz, batch=batch,
+            device=device, workers=workers, iou=0.5, verbose=False, stream=True,
+        )
+        for offset, result in enumerate(results):
+            boxes = result.boxes
+            xyxy = boxes.xyxy.detach().cpu().tolist() if boxes is not None else []
+            scores = boxes.conf.detach().cpu().tolist() if boxes is not None else []
+            for (x1, y1, x2, y2), score in zip(xyxy, scores):
+                detections.append({
+                    "image_id": start + offset + 1, "category_id": 1,
+                    "bbox": [x1, y1, max(0.0, x2 - x1), max(0.0, y2 - y1)], "score": float(score),
+                })
     return detections
 
 
@@ -218,6 +215,7 @@ def evaluate_native_test_size_buckets(
     batch: int,
     device: str,
     workers: int,
+    dataset: str = "native_yolo",
 ) -> dict[str, float | str]:
     from ultralytics import YOLO
 
@@ -239,7 +237,7 @@ def evaluate_native_test_size_buckets(
         "TinyBenchmark area buckets on native YOLO test images; "
         "class-agnostic; IoU=0.50:0.05:0.75; maxDets=200"
     )
-    metrics["test_size/dataset"] = "visdrone"
+    metrics["test_size/dataset"] = dataset
     return metrics
 
 
