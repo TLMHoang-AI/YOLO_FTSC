@@ -57,6 +57,52 @@ def test_mixed_hardware_is_not_speed_aggregate_comparable():
     assert not metrics.same_benchmark_fingerprint([common, changed])
 
 
+def test_gflops_primary_positive_is_used_with_method_provenance():
+    value, method = metrics._measure_gflops(object(), 512, lambda *_args, **_kwargs: 6.7, lambda *_args, **_kwargs: 9.9)
+    assert (value, method) == (6.7, "thop")
+
+
+def test_gflops_zero_or_primary_failure_uses_non_mutating_profiler_fallback():
+    class Inner: pass
+    original = Inner()
+    received = []
+    def profiler(clone, **_kwargs):
+        received.append(clone)
+        return 7.1
+    value, method = metrics._measure_gflops(original, 512, lambda *_args, **_kwargs: 0.0, profiler)
+    assert (value, method) == (7.1, "torch_profiler")
+    assert received[0] is not original
+    value, method = metrics._measure_gflops(original, 512, lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("thop")), profiler)
+    assert (value, method) == (7.1, "torch_profiler")
+
+
+def test_gflops_never_silently_records_zero_when_both_backends_fail():
+    try:
+        metrics._measure_gflops(object(), 512, lambda *_args, **_kwargs: 0.0, lambda *_args, **_kwargs: 0.0)
+    except RuntimeError as error:
+        assert "positive finite GFLOPs" in str(error)
+    else:
+        raise AssertionError("zero GFLOPs must fail closed")
+
+
+def test_complexity_is_measured_before_validation_or_prediction(monkeypatch, tmp_path):
+    events = []
+    class YOLO:
+        def __init__(self, _checkpoint): self.model = object()
+        def val(self, **_kwargs): events.append("val"); return types.SimpleNamespace(speed={})
+    monkeypatch.setattr(metrics, "ensure_local_ultralytics", lambda: "local")
+    monkeypatch.setattr(metrics, "model_complexity", lambda *_args: events.append("complexity") or {"model/GFLOPs": 1})
+    monkeypatch.setattr(metrics, "standard_metrics", lambda *_args: {})
+    monkeypatch.setattr(metrics, "actual_precision", lambda *_args: "FP32")
+    monkeypatch.setattr(metrics, "speed_metrics", lambda *_args: {})
+    monkeypatch.setattr(metrics, "benchmark_provenance", lambda **_kwargs: {})
+    monkeypatch.setattr(metrics, "coco_area_metrics", lambda *_args, **_kwargs: {})
+    monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=YOLO))
+    (tmp_path / "weights").mkdir(); (tmp_path / "weights/best.pt").touch()
+    metrics.evaluate_run(tmp_path, tmp_path / "split.yaml", dataset="levir", imgsz=512, batch=8, device="cpu", workers=0, include_size=False)
+    assert events[0] == "complexity"
+
+
 def test_extended_artifact_does_not_overwrite_legacy_metrics(tmp_path):
     legacy = {"test/metrics/mAP50(B)": .7}; extra = {"test_coco/AP_small": .2}
     (tmp_path / "evaluation_metrics.json").write_text(__import__("json").dumps(legacy))

@@ -8,8 +8,10 @@ and the existing TinyBenchmark evaluator (``test_size/*``).
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib
 import json
+import math
 import platform
 import sys
 from pathlib import Path
@@ -107,13 +109,53 @@ def benchmark_provenance(*, device: str, imgsz: int, batch: int, workers: int, p
     }
 
 
-def model_complexity(model: Any, imgsz: int) -> dict[str, float | int]:
+def _usable_gflops(value: Any) -> float | None:
+    """Return a finite positive FLOPs value, rejecting profiling sentinels."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and value > 0.0 else None
+
+
+def _measure_gflops(inner: Any, imgsz: int, primary: Any, profiler: Any) -> tuple[float, str]:
+    """Use THOP first, then a non-mutating profiler fallback."""
+    try:
+        measured = _usable_gflops(primary(inner, imgsz=imgsz))
+    except Exception:
+        measured = None
+    if measured is not None:
+        return measured, "thop"
+    try:
+        measured = _usable_gflops(profiler(copy.deepcopy(inner), imgsz=imgsz))
+    except Exception as error:
+        raise RuntimeError(
+            f"unable to measure positive finite GFLOPs at imgsz={imgsz}: "
+            "THOP returned no usable value and torch profiler failed"
+        ) from error
+    if measured is None:
+        raise RuntimeError(
+            f"unable to measure positive finite GFLOPs at imgsz={imgsz}: "
+            "THOP and torch profiler both returned zero or invalid values"
+        )
+    return measured, "torch_profiler"
+
+
+def model_complexity(model: Any, imgsz: int) -> dict[str, float | int | str]:
+    """Profile complexity without ever presenting an unavailable FLOPs value as zero.
+
+    ``get_flops`` intentionally returns zero when THOP is absent or fails.  That
+    sentinel is not a measurement, so try the torch-profiler implementation on
+    a deep copy before failing closed.  The copy is important: profiler forwards
+    must not change the model later used for validation/prediction.
+    """
     ensure_local_ultralytics()
-    from ultralytics.utils.torch_utils import get_flops, get_num_params
+    from ultralytics.utils.torch_utils import get_flops, get_flops_with_torch_profiler, get_num_params
     inner = model.model
     params = int(get_num_params(inner))
+    measured, method = _measure_gflops(inner, imgsz, get_flops, get_flops_with_torch_profiler)
     return {"model/parameters": params, "model/parameters_M": params / 1e6,
-            "model/GFLOPs": float(get_flops(inner, imgsz=imgsz) or 0.0), "model/GFLOPs_imgsz": int(imgsz)}
+            "model/GFLOPs": measured, "model/GFLOPs_imgsz": int(imgsz), "model/GFLOPs_method": method}
 
 
 def _test_images(data_yaml: Path) -> list[Path]:
