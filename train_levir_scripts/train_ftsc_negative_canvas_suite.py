@@ -114,7 +114,7 @@ def _label_path(image_path: Path) -> Path:
     return Path(*parts).with_suffix(".txt")
 
 
-def dataset_eligibility(data_yaml: Path) -> dict[str, int]:
+def dataset_eligibility(data_yaml: Path, *, require_negative: bool = True, require_eligible_small: bool = True) -> dict[str, int | float]:
     """Count original train positives/negatives, donors, and <=20 px targets."""
     train = _resolve_split(data_yaml, "train")
     if not train.is_dir():
@@ -142,14 +142,15 @@ def dataset_eligibility(data_yaml: Path) -> dict[str, int]:
             size = ((normalized_width * width) * (normalized_height * height)) ** 0.5
             donor_objects += 1
             eligible_small += int(size <= 20.0)
-    if negative_images == 0:
+    if require_negative and negative_images == 0:
         raise RuntimeError(f"Negative-canvas preflight failed: {data_yaml} has zero original-negative train images")
-    if eligible_small == 0:
+    if require_eligible_small and eligible_small == 0:
         raise RuntimeError(f"Negative-canvas preflight failed: {data_yaml} has zero eligible <=20 px targets")
     return {
         "training_images": len(images),
         "original_positive_images": positive_images,
         "original_negative_images": negative_images,
+        "original_negative_fraction": negative_images / len(images) if images else 0.0,
         "donor_objects": donor_objects,
         "eligible_small_targets_le_20px": eligible_small,
     }

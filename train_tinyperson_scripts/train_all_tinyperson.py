@@ -526,6 +526,7 @@ def evaluate(run_dir: Path, data_yaml: Path, test_out_dir: Path, data_root: Path
             "test_merged/AP-Tiny3",
             "test_merged/AP-Small",
             "test_merged/AP-Medium",
+            "test_speed/inference_ms_per_image",
         ]
         if all(key in cached for key in required_metrics):
             return cached
@@ -550,6 +551,10 @@ def evaluate(run_dir: Path, data_yaml: Path, test_out_dir: Path, data_root: Path
         metrics.update({f"{split}/{key}": float(value) for key, value in result.results_dict.items()})
         metrics[f"{split}/metrics/mAP75(B)"] = float(result.box.map75)
         metrics[f"{split}/metrics/mAP50-75(B)"] = mean_ap50_75(result)
+        if split == "test" and getattr(result, "speed", None):
+            # Validation already measures inference; persist it rather than
+            # issuing a second test pass solely to obtain latency.
+            metrics["test_speed/inference_ms_per_image"] = float(result.speed.get("inference", float("nan")))
     metrics.update(evaluate_merged_test(run_dir, test_out_dir, data_root, args))
     output.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return metrics

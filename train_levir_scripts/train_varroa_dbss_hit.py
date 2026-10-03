@@ -206,11 +206,20 @@ def evaluate(run_dir: Path, args: argparse.Namespace) -> dict[str, float]:
     extended = run_dir / "evaluation_metrics_extended.json"
     if output.is_file() and extended.is_file():
         from evaluate_test.standard_detection_metrics import load_merged_metrics
-        return load_merged_metrics(run_dir)
+        cached = load_merged_metrics(run_dir)
+        required = (
+            "test/metrics/mAP50(B)", "test/metrics/mAP50-95(B)", "test/metrics/mAP75(B)",
+            "test/metrics/precision(B)", "test/metrics/recall(B)", "val/metrics/mAP50(B)",
+            "val/metrics/mAP50-95(B)", "val/metrics/mAP75(B)", "val/metrics/precision(B)",
+            "val/metrics/recall(B)", "test_size/AP50-Small", "model/parameters", "model/GFLOPs",
+            "test_speed/inference_ms_per_image",
+        )
+        if all(key in cached for key in required): return cached
     local_ultralytics()
     from ultralytics import YOLO
 
     metrics: dict[str, float] = json.loads(output.read_text(encoding="utf-8")) if output.is_file() else {}
+    if output.is_file() and extended.is_file(): metrics = {}
     if not metrics:
         for split in ("val", "test"):
             result = YOLO(run_dir / "weights/best.pt").val(
