@@ -108,11 +108,12 @@ def _dataset_contract(data_yaml: Path, seed: int) -> dict[str, Any]:
     root=data_yaml.parent; manifest=root/"corner_manifest.json"
     if not manifest.is_file(): raise FileNotFoundError(f"TinyPerson corner manifest missing: {manifest}")
     payload=json.loads(manifest.read_text(encoding="utf-8"))
-    train={item if isinstance(item,str) else item.get("file_name") for item in payload.get("train_source_images",payload.get("train",[]))}; val={item if isinstance(item,str) else item.get("file_name") for item in payload.get("val_source_images",payload.get("val",[]))}
+    train_records=payload.get("train",[]); val_records=payload.get("val",[])
+    train={item if isinstance(item,str) else item.get("file_name") for item in payload.get("train_source_images",train_records)}; val={item if isinstance(item,str) else item.get("file_name") for item in payload.get("val_source_images",val_records)}
     if not train or not val or train & val: raise RuntimeError("TinyPerson source train/val contract is empty or overlapping")
-    for split, sources in (("train",train),("val",val)):
+    for split, records in (("train",train_records),("val",val_records)):
         images=list((root/"images"/split).glob("*")); labels=list((root/"labels"/split).glob("*.txt"))
-        if len(images)!=len(labels) or len(images)!=len(sources): raise RuntimeError(f"TinyPerson {split} image/label/manifest counts disagree")
+        if len(images)!=len(labels) or len(images)!=len(records): raise RuntimeError(f"TinyPerson {split} image/label/manifest counts disagree")
     return {"schema":"ftsc_tinyperson_dataset_contract_v1","seed":seed,"data_yaml":str(data_yaml.resolve()),"corner_manifest":str(manifest.resolve()),"train_sources":len(train),"val_sources":len(val)}
 
 def _complete(metrics: dict[str,Any]) -> None:
