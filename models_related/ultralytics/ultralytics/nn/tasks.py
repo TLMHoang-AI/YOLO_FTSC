@@ -1024,7 +1024,17 @@ class DetectionModel(BaseModel):
 
     def init_criterion(self):
         """Initialize the loss criterion for the DetectionModel."""
-        return E2ELoss(self) if getattr(self, "end2end", False) else v8DetectionLoss(self)
+        if not getattr(self, "end2end", False):
+            return v8DetectionLoss(self)
+        # v10Detect retains the native generic E2ELoss weighting/decay path.
+        # FTSC is a post-TAL calibration of one-to-many supervision only.
+        if isinstance(self.model[-1], v10Detect):
+            return E2ELoss(
+                self,
+                one2many_loss_kwargs={"enable_ftsc": True},
+                one2one_loss_kwargs={"enable_ftsc": False},
+            )
+        return E2ELoss(self)
 
 
 class OBBModel(DetectionModel):
@@ -2593,6 +2603,11 @@ def parse_model(d, ch, verbose=True):
             args.append([ch[x] for x in f])  # nc, ch tuple
         elif m in {v10Detect, v10P3NUDFLDetect}:
             args.append([ch[x] for x in f])
+            # v10Detect historically received only nc/ch, silently dropping
+            # top-level FTSC.  Its constructor now accepts this optional
+            # configuration while stock YAMLs continue to pass None.
+            if m is v10Detect:
+                args.append(ftsc)
         elif m in {v10GCTSDetect, v10GCTSP3NUDFLDetect}:
             args.append([ch[x] for x in f])
         elif m is ImagePoolingAttn:

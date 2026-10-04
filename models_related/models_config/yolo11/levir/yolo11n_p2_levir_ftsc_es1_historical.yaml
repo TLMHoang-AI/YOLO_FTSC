@@ -1,0 +1,7 @@
+ftsc: {enabled: true, policy: f5, evidence: [position_gaussian, dfl_distribution], position_alpha: 6.0, dfl_entropy_tau: 1.0, dfl_variance_tau: 0.0, dfl_detach: true, dfl_apply_cls: true, dfl_apply_box: false, dfl_apply_dfl: false, log_clip: 0.35, per_gt_norm: true, apply_cls: true, apply_box: true, apply_dfl: true, warmup_epochs: 5, ramp_epochs: 10, strength_init: 1.0, strength_max: 2.0, strength_reg_weight: 0.0001, fixed_strengths: {dfl_distribution: 1.0}}
+nc: 1
+scale: n
+scales: {n: [.5, .25, 1024]}
+backbone: [[-1, 1, Conv, [64, 3, 2]], [-1, 1, Conv, [128, 3, 2]], [-1, 2, C3k2, [256, false, .25]], [-1, 1, Conv, [256, 3, 2]], [-1, 2, C3k2, [512, false, .25]], [-1, 1, Conv, [512, 3, 2]], [-1, 2, C3k2, [512, true]], [-1, 1, Conv, [1024, 3, 2]], [-1, 2, C3k2, [1024, true]], [-1, 1, SPPF, [1024, 5]], [-1, 2, C2PSA, [1024]]]
+head: [[-1, 1, nn.Upsample, [null, 2, nearest]], [[-1, 6], 1, Concat, [1]], [-1, 2, C3k2, [512, false]], [-1, 1, nn.Upsample, [null, 2, nearest]], [[-1, 4], 1, Concat, [1]], [-1, 2, C3k2, [256, false]], [-1, 1, nn.Upsample, [null, 2, nearest]], [[-1, 2], 1, Concat, [1]], [-1, 2, C3k2, [128, false]], [-1, 1, nn.Identity, []], [-1, 1, P2EdgeCueFusion, [32, .25, constant, 5, 15, learned]], [-1, 1, Conv, [128, 3, 2]], [[-1, 16], 1, Concat, [1]], [-1, 2, C3k2, [256, false]], [[19, 24], 1, Detect, [nc]]]
+edge_stability: {case: ES1, historical_graph: true, residual_scale: .25, residual_schedule: constant, ramp_start_epoch: 5, ramp_end_epoch: 15, orientation_gate_mode: learned, hidden: 32}

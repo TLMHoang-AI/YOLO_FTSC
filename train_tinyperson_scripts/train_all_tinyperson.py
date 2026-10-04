@@ -188,11 +188,19 @@ def prepare_test_set(data_root: Path, output_dir: Path) -> Path:
     test_out_dir = output_dir / "tinyperson_test_corner_sw640_sh512"
     test_images_dir = test_out_dir / "images"
     test_labels_dir = test_out_dir / "labels"
+    manifest_path = test_out_dir / "corner_manifest.json"
 
-    # If already prepared, skip
-    if test_images_dir.exists() and test_labels_dir.exists() and list(test_labels_dir.glob("*.txt")):
-        print("Test set already prepared.", flush=True)
-        return test_out_dir
+    # A directory alone is not a reusable test-set cache: merged evaluation
+    # requires the corner manifest to map window predictions back to sources.
+    if manifest_path.is_file() and test_images_dir.exists() and test_labels_dir.exists():
+        try:
+            cached = json.loads(manifest_path.read_text(encoding="utf-8"))
+            records = cached.get("images", [])
+            if records and len(records) == len(list(test_images_dir.glob("*"))) == len(list(test_labels_dir.glob("*.txt"))):
+                print("Test set already prepared.", flush=True)
+                return test_out_dir
+        except (OSError, ValueError, TypeError):
+            pass
 
     print("Preparing test set...", flush=True)
     test_images_dir.mkdir(parents=True, exist_ok=True)
@@ -219,7 +227,7 @@ def prepare_test_set(data_root: Path, output_dir: Path) -> Path:
             "height": img_info["height"],
         })
 
-    (test_out_dir / "corner_manifest.json").write_text(
+    manifest_path.write_text(
         json.dumps({"corner_annotations": str(test_json_path), "images": records}, indent=2) + "\n",
         encoding="utf-8",
     )

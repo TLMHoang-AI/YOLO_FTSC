@@ -2279,14 +2279,17 @@ class v10Detect(Detect):
 
     end2end = True
 
-    def __init__(self, nc: int = 80, ch: tuple = ()):
+    def __init__(self, nc: int = 80, ch: tuple = (), ftsc: dict | None = None):
         """Initialize the v10Detect object with the specified number of classes and input channels.
 
         Args:
             nc (int): Number of classes.
             ch (tuple): Tuple of channel sizes from backbone feature maps.
         """
-        super().__init__(nc, end2end=True, ch=ch)
+        # FTSC belongs to the one-to-many supervision path.  The E2E loss
+        # explicitly disables it for one-to-one below; keeping ownership on
+        # this head preserves the normal Detect configuration contract.
+        super().__init__(nc, end2end=True, ch=ch, ftsc=ftsc)
         c3 = max(ch[0], min(self.nc, 100))  # channels
         # Light cls head
         self.cv3 = nn.ModuleList(

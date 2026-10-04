@@ -1,0 +1,48 @@
+ftsc: &ftsc
+  enabled: true
+  policy: f5
+  evidence: [position_gaussian, dfl_distribution]
+  position_alpha: 6.0
+  dfl_entropy_tau: 1.0
+  dfl_variance_tau: 0.0
+  dfl_detach: true
+  dfl_apply_cls: true
+  dfl_apply_box: false
+  dfl_apply_dfl: false
+  log_clip: 0.35
+  per_gt_norm: true
+  apply_cls: true
+  apply_box: true
+  apply_dfl: true
+  warmup_epochs: 5
+  ramp_epochs: 10
+  strength_init: 1.0
+  strength_max: 2.0
+  strength_reg_weight: 0.0001
+  fixed_strengths: {dfl_distribution: 1.0}
+nc: 1
+backbone:
+  - [-1, 1, Conv, [16, 3, 2]]
+  - [-1, 1, Conv, [32, 3, 2]]
+  - [-1, 1, ELAN1, [32, 32, 16]]
+  - [-1, 1, AConv, [64]]
+  - [-1, 1, RepNCSPELAN4, [64, 64, 32, 3]]
+  - [-1, 1, AConv, [96]]
+  - [-1, 1, RepNCSPELAN4, [96, 96, 48, 3]]
+  - [-1, 1, AConv, [128]]
+  - [-1, 1, RepNCSPELAN4, [128, 128, 64, 3]]
+  - [-1, 1, SPPELAN, [128, 64]]
+head:
+  - [-1, 1, nn.Upsample, [None, 2, nearest]]
+  - [[-1, 6], 1, Concat, [1]]
+  - [-1, 1, RepNCSPELAN4, [96, 96, 48, 3]]
+  - [-1, 1, nn.Upsample, [None, 2, nearest]]
+  - [[-1, 4], 1, Concat, [1]]
+  - [-1, 1, RepNCSPELAN4, [64, 64, 32, 3]]
+  - [-1, 1, nn.Upsample, [None, 2, nearest]]
+  - [[-1, 2], 1, Concat, [1]]
+  - [-1, 1, RepNCSPELAN4, [32, 32, 16, 3]]
+  - [-1, 1, AConv, [48]]
+  - [[-1, 15], 1, Concat, [1]]
+  - [-1, 1, RepNCSPELAN4, [64, 64, 32, 3]]
+  - [[18, 21], 1, Detect, [nc]]

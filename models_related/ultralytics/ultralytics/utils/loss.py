@@ -3342,8 +3342,11 @@ class E2EDetectLoss:
 
     def __init__(self, model: torch.nn.Module):
         """Initialize E2EDetectLoss with one-to-many and one-to-one detection losses using the provided model."""
-        self.one2many = v8DetectionLoss(model, tal_topk=10)
-        self.one2one = v8DetectionLoss(model, tal_topk=1)
+        # FTSC is a post-TAL calibration for YOLOv10's native one-to-many
+        # branch only.  Applying it to both branches changes the dual-
+        # assignment objective and duplicates its strength regularization.
+        self.one2many = v8DetectionLoss(model, tal_topk=10, enable_ftsc=True)
+        self.one2one = v8DetectionLoss(model, tal_topk=1, enable_ftsc=False)
 
     def __call__(self, preds: Any, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         """Calculate the sum of the loss for box, cls and dfl multiplied by batch size."""
@@ -3358,10 +3361,19 @@ class E2EDetectLoss:
 class E2ELoss:
     """Criterion class for computing training losses for end-to-end detection."""
 
-    def __init__(self, model: torch.nn.Module, loss_fn=v8DetectionLoss):
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        loss_fn=v8DetectionLoss,
+        one2many_loss_kwargs: dict[str, Any] | None = None,
+        one2one_loss_kwargs: dict[str, Any] | None = None,
+    ):
         """Initialize E2ELoss with one-to-many and one-to-one detection losses using the provided model."""
-        self.one2many = loss_fn(model, tal_topk=10)
-        self.one2one = loss_fn(model, tal_topk=7, tal_topk2=1)
+        # Empty kwargs retain the historical behavior for every existing E2E
+        # consumer (OBB, pose, segmentation, prompt heads).  YOLOv10 opts in
+        # below to FTSC on its one-to-many branch only.
+        self.one2many = loss_fn(model, tal_topk=10, **(one2many_loss_kwargs or {}))
+        self.one2one = loss_fn(model, tal_topk=7, tal_topk2=1, **(one2one_loss_kwargs or {}))
         self.updates = 0
         self.total = 1.0
         # init gain
@@ -3371,13 +3383,46 @@ class E2ELoss:
         # final gain
         self.final_o2m = 0.1
 
+    @property
+    def epoch(self) -> int:
+        """Expose the trainer epoch and keep nested criteria synchronized."""
+        return int(getattr(self.one2many, "epoch", 0))
+
+    @epoch.setter
+    def epoch(self, value: int) -> None:
+        if hasattr(self.one2many, "epoch"):
+            self.one2many.epoch = value
+        if hasattr(self.one2one, "epoch"):
+            self.one2one.epoch = value
+
+    @property
+    def ftsc_metrics(self) -> dict[str, float]:
+        """Surface only the one-to-many FTSC diagnostics to DetectionModel."""
+        return getattr(self.one2many, "ftsc_metrics", {})
+
+    @property
+    def localization_distill_metrics(self) -> dict[str, float]:
+        return getattr(self.one2many, "localization_distill_metrics", {})
+
+    @property
+    def positive_confidence_rescue_metrics(self) -> dict[str, float]:
+        return getattr(self.one2many, "positive_confidence_rescue_metrics", {})
+
+    @property
+    def consensus_metrics(self) -> dict[str, float]:
+        return getattr(self.one2many, "consensus_metrics", {})
+
+    @property
+    def psd_metrics(self) -> dict[str, float]:
+        return getattr(self.one2many, "psd_metrics", {})
+
     def __call__(self, preds: Any, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         """Calculate the sum of the loss for box, cls and dfl multiplied by batch size."""
         preds = self.one2many.parse_output(preds)
         one2many, one2one = preds["one2many"], preds["one2one"]
         loss_one2many = self.one2many.loss(one2many, batch)
         loss_one2one = self.one2one.loss(one2one, batch)
-        self.dbss_assignment_context = self.one2many.dbss_assignment_context
+        self.dbss_assignment_context = getattr(self.one2many, "dbss_assignment_context", {})
         return loss_one2many[0] * self.o2m + loss_one2one[0] * self.o2o, loss_one2one[1]
 
     def update(self) -> None:
