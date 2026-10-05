@@ -47,6 +47,11 @@ def test_repository_override_and_token_metadata_are_rejected(tmp_path):
         with pytest.raises(ValueError):
             instance.publish_run(namespace="ns", case="case", seed=42, run_dir=tmp_path, required_artifacts=("results.csv",), summary_metadata={"nested": {"token": "no"}})
 
+def test_snapshot_download_timeout_options_are_forwarded(tmp_path):
+    with patch.object(uploader, "HFResultArchive") as archive:
+        uploader.FTSCResultsUploader(token="caller-token", cache_dir=tmp_path, snapshot_download_kwargs={"etag_timeout": 60})
+        assert archive.call_args.kwargs["snapshot_download_kwargs"] == {"etag_timeout": 60}
+
 
 def test_wrapper_source_has_no_secret_or_repository_override_path():
     source = uploader.__file__

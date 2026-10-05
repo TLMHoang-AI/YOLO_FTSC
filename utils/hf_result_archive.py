@@ -122,6 +122,7 @@ class HFResultArchive:
         snapshot_download_fn: Callable[..., str | Path] | None = None,
         retries: int = 3,
         retry_backoff_seconds: float = 0.25,
+        snapshot_download_kwargs: Mapping[str, Any] | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if not isinstance(repo_id, str) or not repo_id.strip():
@@ -147,6 +148,7 @@ class HFResultArchive:
         self._snapshot_download_fn = snapshot_download_fn
         self.retries = retries
         self.retry_backoff_seconds = retry_backoff_seconds
+        self.snapshot_download_kwargs = dict(snapshot_download_kwargs or {})
         self._sleep = sleep
 
     @staticmethod
@@ -451,6 +453,7 @@ class HFResultArchive:
                     token=self.token,
                     allow_patterns=[f"{dataset_slug}/**"],
                     local_dir=str(cache_dir),
+                    **self.snapshot_download_kwargs,
                 )
             )
         ).resolve()
