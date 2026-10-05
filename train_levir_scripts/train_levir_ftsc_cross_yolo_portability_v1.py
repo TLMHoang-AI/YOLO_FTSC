@@ -217,6 +217,8 @@ def run_status(run_dir: Path, manifest: dict[str, Any], pretrained: dict[str, An
     if metrics_complete(run_dir): return "COMPLETE"
     if (run_dir / "weights/best.pt").is_file(): return "EVAL_BACKFILL_REQUIRED"
     if (run_dir / "weights/last.pt").is_file(): return "RESUME_REQUIRED"
+    if {child.name for child in run_dir.iterdir()} == {"experiment_manifest.json"}:
+        return "NEW_RUN_REQUIRED"
     raise RuntimeError(f"Refusing incomplete run with no resumable checkpoint: {run_dir}")
 
 def train_kwargs(args: argparse.Namespace, family: str, case: str, seed: int, data_yaml: Path) -> dict[str, Any]:
@@ -249,7 +251,10 @@ def train_one(args: argparse.Namespace, family: str, case: str, seed: int, data_
     from ultralytics import YOLO
     model = YOLO(config, task="detect")
     model.load(pretrained["canonical_path"], smart_transfer=True)
-    model.train(**train_kwargs(args, family, case, seed, data_yaml), project=str(run_dir.parent), name=run_dir.name, exist_ok=False)
+    # ``ensure_manifest`` intentionally creates the canonical run directory
+    # before Ultralytics starts.  Reusing that manifest-only directory is safe;
+    # ``exist_ok=False`` would otherwise silently redirect training to name-2.
+    model.train(**train_kwargs(args, family, case, seed, data_yaml), project=str(run_dir.parent), name=run_dir.name, exist_ok=True)
     required = (run_dir / "weights/best.pt", run_dir / "weights/last.pt", run_dir / "results.csv")
     require(all(path.is_file() for path in required), f"Incomplete training artifacts: {run_dir}")
     return run_dir

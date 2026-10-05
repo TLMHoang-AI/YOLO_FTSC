@@ -102,6 +102,8 @@ def test_status_machine_requires_extended_evaluation_and_both_checkpoints(tmp_pa
     except RuntimeError: pass
     else: raise AssertionError("non-empty run without manifest accepted")
     (run_dir / "experiment_manifest.json").write_text(json.dumps(manifest))
+    (run_dir / "orphan.txt").unlink()
+    assert suite.run_status(run_dir, manifest, pretrained, data) == "NEW_RUN_REQUIRED"
     weights = run_dir / "weights"; weights.mkdir(); (weights / "last.pt").write_bytes(b"last")
     assert suite.run_status(run_dir, manifest, pretrained, data) == "RESUME_REQUIRED"
     (weights / "best.pt").write_bytes(b"best")
