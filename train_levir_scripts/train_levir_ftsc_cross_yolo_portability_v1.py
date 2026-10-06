@@ -217,7 +217,13 @@ def run_status(run_dir: Path, manifest: dict[str, Any], pretrained: dict[str, An
     if metrics_complete(run_dir): return "COMPLETE"
     if (run_dir / "weights/best.pt").is_file(): return "EVAL_BACKFILL_REQUIRED"
     if (run_dir / "weights/last.pt").is_file(): return "RESUME_REQUIRED"
-    if {child.name for child in run_dir.iterdir()} == {"experiment_manifest.json"}:
+    # Ultralytics may leave args.yaml and an empty weights directory after
+    # writing the manifest but before the first checkpoint.  This is still a
+    # fresh run, not a resumable interruption.
+    _children = {child.name for child in run_dir.iterdir()}
+    _weights_dir = run_dir / "weights"
+    _has_checkpoint = _weights_dir.is_dir() and any(child.is_file() for child in _weights_dir.iterdir())
+    if _children <= {"experiment_manifest.json", "args.yaml", "weights"} and not _has_checkpoint:
         return "NEW_RUN_REQUIRED"
     raise RuntimeError(f"Refusing incomplete run with no resumable checkpoint: {run_dir}")
 
