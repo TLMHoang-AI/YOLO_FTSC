@@ -9,25 +9,19 @@ TINY = (ROOT / "current_live_training_notebok_TinyPerson.ipynb").read_text(encod
 VARROA = (ROOT / "current_live_training_notebok_Varroa.ipynb").read_text(encoding="utf-8")
 
 
-def test_levir_cross_yolo_is_disabled_and_has_one_job_archive_recovery_flow():
-    assert "RUN_LEVIR_FTSC_CROSS_YOLO_PORTABILITY = False" in LEVIR
-    assert "FTSCResultsUploader(token=HF_TOKEN" in LEVIR
-    assert "tuple(cross_yolo.CASES)" in LEVIR
-    assert "restore_completed_runs(namespace=_namespace" in LEVIR
-    assert "cross_yolo.dispatch(_job_args, _rows)" in LEVIR
-    assert "cross_uploader.publish_run(namespace=_namespace" in LEVIR
-    assert "cross_yolo.write_summaries" in LEVIR
-    assert "cross_yolo.dispatch(_cross_args, _cross_rows)" not in LEVIR
-    assert "cross_yolo.write_summaries(cross_yolo.parse_args([]), _cross_all_rows)" not in LEVIR
-    assert "_summary_args.families = list(LEVIR_CROSS_YOLO_SELECTION['families'])" in LEVIR
-    assert "_cross_terminal_rows" in LEVIR and "_cross_summary_rows" in LEVIR
-    assert "_cross_download_asset(str(_expected_checkpoint))" in LEVIR
-    assert "_returned_checkpoint" not in LEVIR
+def test_levir_v8_backfill_is_the_single_active_report_gate():
+    assert "RUN_LEVIR_V8_P23_PORTABILITY_BACKFILL = False" in LEVIR
+    assert "RUN_LEVIR_FTSC_CROSS_YOLO_PORTABILITY" not in LEVIR
+    for marker in (
+        "V8_B1_P23_NOFTSC", "V8_H2_P23_FTSC", "42", "43",
+        "FTSCResultsUploader", "levir_v8_p23_portability_backfill_v1",
+    ):
+        assert marker in LEVIR
 
 
 def test_each_notebook_has_exactly_one_current_disabled_run_gate():
     expected = {
-        "LEVIR": (LEVIR, "RUN_LEVIR_FTSC_CROSS_YOLO_PORTABILITY = False"),
+        "LEVIR": (LEVIR, "RUN_LEVIR_V8_P23_PORTABILITY_BACKFILL = False"),
         "TinyPerson": (TINY, "RUN_TINYPERSON_FTSC_CAUSAL_SUITE = False"),
         "Varroa": (VARROA, "RUN_VARROA_FTSC_NEXT_ABLATION = False"),
     }
@@ -36,8 +30,7 @@ def test_each_notebook_has_exactly_one_current_disabled_run_gate():
         assert assignment in text
         assert re.findall(r"RUN_[A-Z0-9_]+\s*=", text) == [assignment.split(" =")[0] + " ="]
         assert not any(name in text for name in obsolete)
-    for marker in ("yolov9t_levir_b0_stock.yaml", "yolov10n_levir_b0_stock.yaml", "yolo11n_levir_b0_stock.yaml"):
-        assert marker in LEVIR
+    assert "train_levir_v8_p23_portability_backfill_v1.py" in LEVIR
 
 
 def test_deferred_notebooks_keep_current_static_runner_contracts_without_completion_flow():
