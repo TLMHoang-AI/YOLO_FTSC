@@ -218,14 +218,51 @@ class HierarchicalBackgroundSmoothing(nn.Module):
 
 
 class PositionGaussianEvidence(nn.Module):
-    """Return stable log-evidence from an anchor point's position inside its assigned GT box."""
+    """Return stable log-evidence from an anchor point's position inside its assigned GT box.
 
-    def __init__(self, alpha: float = 6.0, eps: float = 1e-9) -> None:
+    ``size_adaptive`` is deliberately a target-derived, post-TAL policy.  It
+    does not predict alpha, alter assignment, or exist on the inference path.
+    """
+
+    SUPPORTED_ALPHA_MODES = {"fixed", "size_adaptive"}
+
+    def __init__(self, alpha: float = 6.0, alpha_mode: str = "fixed", eps: float = 1e-9) -> None:
         super().__init__()
         if alpha <= 0:
             raise ValueError("FTSC position alpha must be positive.")
+        alpha_mode = str(alpha_mode).lower()
+        if alpha_mode not in self.SUPPORTED_ALPHA_MODES:
+            raise ValueError(f"FTSC position_alpha_mode must be one of {sorted(self.SUPPORTED_ALPHA_MODES)}.")
         self.alpha = float(alpha)
+        self.alpha_mode = alpha_mode
         self.eps = float(eps)
+        self.last_alpha: torch.Tensor | None = None
+        self.last_size_px: torch.Tensor | None = None
+        self.last_invalid_box_mask: torch.Tensor | None = None
+
+    def _adaptive_alpha(self, boxes: torch.Tensor) -> torch.Tensor:
+        """Map each positive target box to its specified apparent-size alpha.
+
+        Boxes are the matched, post-augmentation pixel-coordinate targets
+        selected by ``fg_mask``.  The comparison boundaries intentionally use
+        the exact [8, 16, 32] policy, including alpha=4 for valid boxes below
+        two pixels; diagnostics retain that subgroup separately.
+        """
+        raw_sizes = boxes[:, 2:] - boxes[:, :2]
+        valid = torch.isfinite(raw_sizes).all(-1) & (raw_sizes > 0).all(-1)
+        size_px = (raw_sizes[:, 0].clamp_min(0) * raw_sizes[:, 1].clamp_min(0)).sqrt()
+        alpha = torch.full_like(size_px, 10.0)
+        alpha = torch.where(size_px < 32.0, torch.full_like(alpha, 8.0), alpha)
+        alpha = torch.where(size_px < 16.0, torch.full_like(alpha, 6.0), alpha)
+        alpha = torch.where(size_px < 8.0, torch.full_like(alpha, 4.0), alpha)
+        # Invalid/degenerate boxes cannot have a meaningful apparent size.  A
+        # finite fallback preserves loss stability; their count is surfaced in
+        # diagnostics and they are not silently treated as a scientific bin.
+        alpha = torch.where(valid, alpha, torch.full_like(alpha, self.alpha))
+        self.last_alpha = alpha.detach()
+        self.last_size_px = size_px.detach()
+        self.last_invalid_box_mask = (~valid).detach()
+        return alpha
 
     def forward(
         self,
@@ -236,9 +273,24 @@ class PositionGaussianEvidence(nn.Module):
         """Compute log Position-Gaussian evidence for TAL positives only."""
         points = anchor_points_px.unsqueeze(0).expand(target_bboxes_px.shape[0], -1, -1)[fg_mask]
         boxes = target_bboxes_px[fg_mask]
+        # TAL positives must have finite, nondegenerate targets. A fallback alpha
+        # cannot repair NaN coordinates: fail closed without changing valid boxes.
+        raw_sizes = boxes[:, 2:] - boxes[:, :2]
+        if not bool(torch.isfinite(boxes).all().item()) or not bool((raw_sizes > 0).all().item()):
+            raise ValueError("FTSC Position Gaussian received invalid matched GT boxes")
         centers = (boxes[:, :2] + boxes[:, 2:]) * 0.5
-        sizes = (boxes[:, 2:] - boxes[:, :2]).clamp_min(self.eps)
-        normalized_offset = (points - centers) / (sizes / self.alpha).clamp_min(self.eps)
+        sizes = raw_sizes.clamp_min(self.eps)
+        # Keep the historical fixed-alpha calculation textually and
+        # numerically identical.  This is the compatibility path for every
+        # existing YAML that omits position_alpha_mode.
+        if self.alpha_mode == "fixed":
+            self.last_alpha = boxes.new_full((boxes.shape[0],), self.alpha).detach()
+            self.last_size_px = (sizes[:, 0] * sizes[:, 1]).sqrt().detach()
+            self.last_invalid_box_mask = ((boxes[:, 2:] - boxes[:, :2]) <= 0).any(-1).detach()
+            normalized_offset = (points - centers) / (sizes / self.alpha).clamp_min(self.eps)
+        else:
+            alpha = self._adaptive_alpha(boxes).to(dtype=sizes.dtype)
+            normalized_offset = (points - centers) / (sizes / alpha.unsqueeze(-1)).clamp_min(self.eps)
         return -0.5 * normalized_offset.square().sum(-1)
 
 
@@ -579,7 +631,10 @@ class AnchorFreeFTSCCalibrator(nn.Module):
 
         providers = {}
         if "position_gaussian" in self.evidence_names:
-            providers["position_gaussian"] = PositionGaussianEvidence(float(config.get("position_alpha", 6.0)))
+            providers["position_gaussian"] = PositionGaussianEvidence(
+                float(config.get("position_alpha", 6.0)),
+                alpha_mode=str(config.get("position_alpha_mode", "fixed")),
+            )
         if "fcos_centerness" in self.evidence_names:
             providers["fcos_centerness"] = FCOSCenternessEvidence()
         if "dcfl_dgmm_quality" in self.evidence_names:
@@ -1110,6 +1165,7 @@ class AnchorFreeFTSCCalibrator(nn.Module):
         }
         for name, values in centered.items():
             metrics.update(self._stats(f"ftsc_{name}", values))
+            metrics.update(self._stats(f"ftsc_{name}_raw", raw_evidence[name]))
             if name in self.POSITION_EVIDENCE and self.position_task_specific_strength:
                 task_strengths = []
                 for task in self.position_tasks:
@@ -1119,6 +1175,29 @@ class AnchorFreeFTSCCalibrator(nn.Module):
                 metrics[f"ftsc_strength_{name}"] = float(torch.stack(task_strengths).mean().item())
             else:
                 metrics[f"ftsc_strength_{name}"] = float(self.strength(name, reference).detach().item())
+        position_provider = self.providers["position_gaussian"] if "position_gaussian" in self.providers else None
+        if position_provider is not None:
+            alpha = position_provider.last_alpha
+            size_px = position_provider.last_size_px
+            invalid = position_provider.last_invalid_box_mask
+            metrics["ftsc_position_alpha_mode_size_adaptive"] = float(position_provider.alpha_mode == "size_adaptive")
+            metrics.update(self._stats("ftsc_position_alpha_effective", alpha))
+            metrics.update(self._stats("ftsc_position_gt_size_px", size_px))
+            metrics["ftsc_position_invalid_or_degenerate_gt_fraction"] = float(invalid.float().mean().item())
+            # These are positive-weighted operational diagnostics.  The runner
+            # separately audits canonical train labels without TAL sampling.
+            valid = ~invalid
+            metrics["ftsc_position_gt_size_lt2_fraction"] = float(((size_px < 2.0) & valid).float().mean().item())
+            metrics["ftsc_position_gt_size_2_to_8_fraction"] = float(
+                ((size_px >= 2.0) & (size_px < 8.0) & valid).float().mean().item()
+            )
+            metrics["ftsc_position_gt_size_8_to_16_fraction"] = float(
+                ((size_px >= 8.0) & (size_px < 16.0) & valid).float().mean().item()
+            )
+            metrics["ftsc_position_gt_size_16_to_32_fraction"] = float(
+                ((size_px >= 16.0) & (size_px < 32.0) & valid).float().mean().item()
+            )
+            metrics["ftsc_position_gt_size_ge32_fraction"] = float(((size_px >= 32.0) & valid).float().mean().item())
         for task, values in weights.items():
             metrics.update(self._stats(f"ftsc_weight_{task}", values))
             metrics[f"ftsc_{task}_clamp_low_fraction"] = float(
