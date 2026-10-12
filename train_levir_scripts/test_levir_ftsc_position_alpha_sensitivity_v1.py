@@ -353,6 +353,186 @@ def test_historical_reference_respects_selected_seeds():
     assert len(rows) == 1 and rows[0]["seed"] == 43
 
 
+
+def _contract_recovery_fixture(tmp_path):
+    old_source = {
+        "state": "VERIFIED", "dirty_paths_present": False,
+        "commit": "d3e60b1e59d2f42d2e218f57d4d6871000000000",
+        "source_sha256": {
+            alpha.RUNNER_SOURCE: "original-vendored-runner-hash",
+            "models_related/ultralytics/ultralytics/utils/loss.py": "same-loss-sha",
+            "models_related/ultralytics/ultralytics/utils/tal.py": "same-tal-sha",
+        },
+    }
+    new_source = {
+        **old_source,
+        "commit": "a0101010101010101010101010101010101010101",
+        "source_sha256": {
+            **old_source["source_sha256"],
+            alpha.RUNNER_SOURCE: "fixed-json-contract-runner-sha",
+        },
+    }
+    old = {
+        "case": "ALPHA4_rerun", "training_seed": 42,
+        "alpha_policy": {"mode": "fixed", "alpha": 4.0},
+        "dataset": {"class_mapping": {0: "ship"}, "split_seed": 42},
+        "model_yaml_sha256": "identical-h2-config",
+        "pretrained_sha256": "same-yolov8n-weights",
+        "evaluation": {"evaluator_sha256": "same-evaluator"},
+        "train_args": {"optimizer": "auto", "epochs": 100},
+        "source": old_source,
+    }
+    expected = {**old, "source": new_source}
+    run = tmp_path / "ALPHA4_rerun" / "seed_42"
+    run.mkdir(parents=True)
+    alpha.write_json(run / "run_contract.json", old)
+    alpha.write_json(run / "experiment_manifest.json", old)
+    return run, old, expected
+
+
+def test_json_contract_roundtrip_does_not_change_scientific_identity(tmp_path):
+    run, old, _ = _contract_recovery_fixture(tmp_path)
+    # Old code wrote an int map key in RAM, which JSON necessarily stringifies.
+    assert alpha.read_json(run / "run_contract.json") != old
+    assert alpha.canonical_contract(old) == alpha.read_json(run / "run_contract.json")
+    assert alpha._matches_contract(run, old)
+
+
+def test_completed_legacy_run_recovers_only_known_runner_bugfix(tmp_path):
+    run, old, expected = _contract_recovery_fixture(tmp_path)
+    alpha.write_json(run / "completion.json", {"state": "COMPLETE"})
+    assert not alpha._matches_contract(run, expected)  # Strict mode stays strict.
+    assert alpha._matches_contract(run, expected, allow_known_completed_bugfix=True)
+    # This was the old bug: roundtrip JSON plus a later runner-only fix.
+    assert alpha.read_json(run / "run_contract.json")["dataset"]["class_mapping"] == {"0": "ship"}
+
+
+def test_incomplete_legacy_run_must_not_resume_under_changed_source(tmp_path):
+    run, old, expected = _contract_recovery_fixture(tmp_path)
+    assert not alpha._matches_contract(run, expected, allow_known_completed_bugfix=True)
+    # A partial run has no trusted 'COMPLETE' marker; do not silently resume.
+    assert (run / "completion.json").exists() is False
+
+
+@pytest.mark.parametrize("alter", ["case", "seed", "alpha", "model", "weights", "dataset",
+                                    "train", "evaluator", "tal", "unknown_origin", "dirty"])
+def test_legacy_recovery_rejects_scientific_drift(tmp_path, alter):
+    run, old, expected = _contract_recovery_fixture(tmp_path)
+    alpha.write_json(run / "completion.json", {"state": "COMPLETE"})
+    expected = json.loads(json.dumps(alpha.canonical_contract(expected)))
+    if alter == "case":
+        expected["case"] = "ALPHA8_rerun"
+    elif alter == "seed":
+        expected["training_seed"] = 44
+    elif alter == "alpha":
+        expected["alpha_policy"]["alpha"] = 8.0
+    elif alter == "model":
+        expected["model_yaml_sha256"] = "different-model"
+    elif alter == "weights":
+        expected["pretrained_sha256"] = "different-pretrained"
+    elif alter == "dataset":
+        expected["dataset"]["split_seed"] = 99
+    elif alter == "train":
+        expected["train_args"]["optimizer"] = "SGD"
+    elif alter == "evaluator":
+        expected["evaluation"]["evaluator_sha256"] = "different-evaluator"
+    elif alter == "tal":
+        expected["source"]["source_sha256"]["models_related/ultralytics/ultralytics/utils/tal.py"] = "changed-tal"
+    elif alter == "unknown_origin":
+        old["source"]["commit"] = "abcdef0101010101010101010101010101010101"
+        old["source"]["source_sha256"][alpha.RUNNER_SOURCE] = "unknown-runner"
+        alpha.write_json(run / "run_contract.json", old)
+        alpha.write_json(run / "experiment_manifest.json", old)
+    elif alter == "dirty":
+        expected["source"]["dirty_paths_present"] = True
+    assert not alpha._matches_contract(run, expected, allow_known_completed_bugfix=True)
+
+
+def test_legacy_complete_run_requires_all_artifact_checksums(tmp_path, monkeypatch):
+    run, old, expected = _contract_recovery_fixture(tmp_path)
+    for artifact in alpha.TRAIN_ARTIFACTS + alpha.EVALUATION_ARTIFACTS + (alpha.TRAINING_FINALIZATION,):
+        path = run / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if artifact == "evaluation_metrics_extended.json":
+            metrics = {key: 0.5 for key in alpha.METRICS_REQUIRED}
+            metrics.update({
+                "evaluation/checkpoint": "weights/best.pt",
+                "evaluation/dataset": "levir",
+                "evaluation/nms_iou": 0.5,
+                "benchmark/imgsz": 512, "benchmark/batch": 8,
+            })
+            alpha.write_json(path, metrics)
+        else:
+            path.write_bytes(b"synthetic-immutable-fixture")
+    fingerprints = {
+        artifact: alpha.sha(run / artifact)
+        for artifact in alpha.TRAIN_ARTIFACTS + alpha.EVALUATION_ARTIFACTS + alpha.IDENTITY_ARTIFACTS
+    }
+    alpha.write_json(run / "completion.json", {
+        "state": "COMPLETE", "contract_sha256": alpha.sha(run / "run_contract.json"),
+        "artifact_sha256": fingerprints,
+        "evaluated_best_sha256": alpha.sha(run / "weights/best.pt"),
+    })
+    monkeypatch.setattr(alpha, "validate_training_completion", lambda *unused: True)
+    assert alpha.validate_completed_run(run, expected)  # No rewrite/migration of frozen JSON.
+    assert alpha.read_json(run / "run_contract.json")["source"]["commit"].startswith("d3e60b1e59d2")
+    (run / "weights/best.pt").write_bytes(b"tampered")
+    with pytest.raises(RuntimeError, match="ARTIFACT_HASH_MISMATCH"):
+        alpha.validate_completed_run(run, expected)
+
+
+def test_completed_legacy_reuse_never_retrains(tmp_path, monkeypatch):
+    args = fake_args(tmp_path)
+    run = args.project / "ALPHA4_rerun" / "seed_42"
+    run.mkdir(parents=True)
+    _, old, new = _contract_recovery_fixture(tmp_path / "fixtures")
+    alpha.write_json(run / "run_contract.json", old)
+    alpha.write_json(run / "experiment_manifest.json", old)
+    alpha.write_json(run / "completion.json", {"state": "COMPLETE"})
+    monkeypatch.setattr(alpha, "contract", lambda *unused: new)
+    monkeypatch.setattr(alpha, "validate_completed_run", lambda *unused: {})
+    monkeypatch.setattr(alpha, "_resume", lambda *unused: pytest.fail("NEVER resume completed run"))
+    monkeypatch.setattr(alpha, "model_for", lambda *unused: pytest.fail("NEVER retrain completed run"))
+    assert alpha.run_one(args, "ALPHA4_rerun", 42, tmp_path / "dataset.yaml",
+                         {}, {"state": "VERIFIED"}) == run
+
+
+def test_new_commit_namespace_is_blocked_when_old_results_exist(tmp_path):
+    args = fake_args(tmp_path)
+    args.project = tmp_path / "runs" / "levir_ftsc_position_alpha_historical_h2_v1_rerun_deadbeef2026"
+    existing = tmp_path / "runs" / alpha.RECOVERABLE_LIVE_NAMESPACE / "ALPHA4_rerun" / "seed_42"
+    existing.mkdir(parents=True)
+    with pytest.raises(RuntimeError, match="RUN_NAMESPACE_CHANGED_AFTER_GIT_PUSH"):
+        alpha._prevent_accidental_new_commit_namespace(args)
+    # The guard neither creates the new run nor touches old checkpoints.
+    assert existing.is_dir()
+    assert not args.project.exists()
+
+
+def test_original_namespace_is_allowed_with_existing_checkpoint(tmp_path):
+    args = fake_args(tmp_path)
+    args.project = tmp_path / "runs" / alpha.RECOVERABLE_LIVE_NAMESPACE
+    (args.project / "ALPHA4_rerun" / "seed_42").mkdir(parents=True)
+    alpha._prevent_accidental_new_commit_namespace(args)
+
+
+def test_unrecognized_other_run_is_not_reused_by_new_namespace_guard(tmp_path):
+    args = fake_args(tmp_path)
+    args.project = tmp_path / "runs" / "entirely_different_scientific_cohort"
+    alpha._prevent_accidental_new_commit_namespace(args)
+
+
+def test_notebook_namespace_pinned_to_existing_seed42_run():
+    notebook = Path(__file__).resolve().parents[2] / "current_live_training_notebok_LEV.ipynb"
+    if not notebook.exists():
+        pytest.skip("Notebook distributed outside Git repository")
+    cells = json.loads(notebook.read_text(encoding="utf-8"))["cells"]
+    alpha_cell = next(c for c in cells if c["id"] == "nWHF")
+    content = "".join(alpha_cell["source"])
+    assert 'levir_ftsc_position_alpha_historical_h2_v1_rerun_d3e60b1e59d2' in content
+    assert "_alpha_commit" not in content
+    assert '["ALPHA4_rerun", "ALPHA8_rerun"]' in content
+
 def test_alpha6_yaml_parity_with_historical_source():
     import yaml
     old = yaml.safe_load(alpha.H2.read_text(encoding="utf-8"))

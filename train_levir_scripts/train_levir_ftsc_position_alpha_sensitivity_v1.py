@@ -32,6 +32,16 @@ CONFIG_ROOT = REPO / "models_related/models_config/yolov8/levir"
 H2 = CONFIG_ROOT / "yolov8n_p2_levir_ftsc_nomosaic_h2_p2_p3.yaml"
 EXPERIMENT = "LEVIR_FTSC_POSITION_ALPHA_HISTORICAL_H2_V1"
 NAMESPACE = "levir_ftsc_position_alpha_historical_h2_v1"
+# Exactly the runner SHA from the pre-fix source that produced the reported
+# completed seed_42. Only this known JSON-roundtrip repair may be bridged.
+KNOWN_JSON_CONTRACT_BUG_RUNNER_SHA256 = frozenset({
+    "e03648181cca6ef8d4a98da5f04cb844a9a982e52921116b62cb6ae8a95b388e",
+})
+# The live failing run was written from this immutable, clean Git generation.
+# Accept it only when EVERY other scientific source hash matches.
+KNOWN_JSON_CONTRACT_BUG_GIT_PREFIXES = ("d3e60b1e59d2",)
+RUNNER_SOURCE = "train_levir_scripts/train_levir_ftsc_position_alpha_sensitivity_v1.py"
+RECOVERABLE_LIVE_NAMESPACE = "levir_ftsc_position_alpha_historical_h2_v1_rerun_d3e60b1e59d2"
 HISTORICAL_REFERENCE = REPO / "reference/levir_h2_historical_head_pruning_seed42_43_44.csv"
 HISTORICAL_REFERENCE_SOURCE_SHA256 = "03c81c0800b499552311b62d965aa692bf156cffed50f061bd2065812af77779"
 HISTORICAL_REFERENCE_SHA256 = "03cbe509b3e59c282bf840cdeb82a9765b8f7ffd848004b5df6f493ed80a4f88"
@@ -202,7 +212,7 @@ def validate_dataset(data_yaml: Path, data_root: Path) -> dict[str, Any]:
     # Path-only differences in generated levir_ship.yaml are operational;
     # the deterministic membership and exact label bytes are scientific.
     return {"split_seed": 42, "split_algorithm": "sorted_stems_random.Random(42).shuffle",
-            "split_fingerprints": fingerprints, "class_mapping": {0: "ship"},
+            "split_fingerprints": fingerprints, "class_mapping": {"0": "ship"},
             "counts": {"train": 2320, "val": 788, "test": 788}}
 
 
@@ -327,10 +337,79 @@ def contract(args: argparse.Namespace, case: str, seed: int, data_yaml: Path,
     }
 
 
-def _matches_contract(run: Path, expected: dict[str, Any]) -> bool:
+def canonical_contract(value: dict[str, Any]) -> dict[str, Any]:
+    """Normalize JSON key types exactly as immutable run_contract.json stores them."""
+    require(isinstance(value, dict), "SCIENTIFIC_CONTRACT_MUST_BE_OBJECT")
+    return json.loads(json.dumps(value, sort_keys=True, allow_nan=False))
+
+
+def _known_completed_runner_bugfix(saved: dict[str, Any],
+                                   expected: dict[str, Any]) -> bool:
+    """One-way, completed-only compatibility for the known JSON key-type defect.
+
+    Preserve original run_contract/experiment_manifest bytes and checksum.
+    Never approve changes in model, dataset, weights, evaluator, FTSC/TAL or
+    scientific hyperparameters. Only a known old *runner* SHA and Git commit
+    may differ from the current source. This does NOT authorize resume.
+    """
+    old = canonical_contract(saved)
+    new = canonical_contract(expected)
+    previous = old.get("source")
+    current = new.get("source")
+    if not isinstance(previous, dict) or not isinstance(current, dict):
+        return False
+    if previous.get("state") != "VERIFIED" or current.get("state") != "VERIFIED":
+        return False
+    if previous.get("dirty_paths_present") is not False or current.get("dirty_paths_present") is not False:
+        return False
+    old_hashes = previous.get("source_sha256")
+    new_hashes = current.get("source_sha256")
+    if not isinstance(old_hashes, dict) or not isinstance(new_hashes, dict):
+        return False
+    if set(old_hashes) != set(new_hashes) or RUNNER_SOURCE not in old_hashes:
+        return False
+    old_commit, new_commit = previous.get("commit"), current.get("commit")
+    if not isinstance(old_commit, str) or not isinstance(new_commit, str):
+        return False
+    recognized_old = (
+        old_hashes[RUNNER_SOURCE] in KNOWN_JSON_CONTRACT_BUG_RUNNER_SHA256
+        or any(old_commit.startswith(prefix) for prefix in KNOWN_JSON_CONTRACT_BUG_GIT_PREFIXES)
+    )
+    if not recognized_old:
+        return False
+    if any(old_hashes[key] != new_hashes[key] for key in old_hashes if key != RUNNER_SOURCE):
+        return False
+    # Every field outside the source audit must still be bit-for-bit equal in
+    # canonical JSON. Do not silently accept changed scientific settings.
+    old.pop("source")
+    new.pop("source")
+    return old == new
+
+
+def _contract_mismatch_reason(run: Path, expected: dict[str, Any]) -> str:
     try:
-        return read_json(run / "run_contract.json") == expected and read_json(run / "experiment_manifest.json") == expected
-    except (OSError, ValueError, json.JSONDecodeError):
+        saved = read_json(run / "run_contract.json")
+        expected_json = canonical_contract(expected)
+        sections = sorted(str(key) for key in set(saved) | set(expected_json)
+                          if saved.get(key) != expected_json.get(key))
+        return f"top_level_differences={sections}"
+    except (OSError, ValueError, TypeError, RuntimeError, json.JSONDecodeError) as exc:
+        return f"invalid_contract={type(exc).__name__}"
+
+
+def _matches_contract(run: Path, expected: dict[str, Any], *,
+                      allow_known_completed_bugfix: bool = False) -> bool:
+    try:
+        saved = read_json(run / "run_contract.json")
+        manifest = read_json(run / "experiment_manifest.json")
+        if saved != manifest:
+            return False
+        if saved == canonical_contract(expected):
+            return True
+        return (allow_known_completed_bugfix
+                and (run / "completion.json").is_file()
+                and _known_completed_runner_bugfix(saved, expected))
+    except (OSError, ValueError, TypeError, RuntimeError, json.JSONDecodeError):
         return False
 
 
@@ -489,7 +568,8 @@ def validate_training_completion(run: Path, expected: dict[str, Any]) -> bool:
 
 
 def validate_completed_run(run: Path, expected: dict[str, Any]) -> dict[str, Any]:
-    require(_matches_contract(run, expected), f"CONTRACT_MISMATCH: {run}")
+    require(_matches_contract(run, expected, allow_known_completed_bugfix=True),
+            f"CONTRACT_MISMATCH: {run} ({_contract_mismatch_reason(run, expected)}; scientific drift or unknown runner; existing artifacts preserved)")
     for item in COMPLETE_ARTIFACTS:
         require((run / item).is_file(), f"MISSING_COMPLETION_ARTIFACT: {run / item}")
     completion = read_json(run / "completion.json")
@@ -535,13 +615,17 @@ def run_one(args: argparse.Namespace, case: str, seed: int, data_yaml: Path,
     run = args.project / case / f"seed_{seed}"
     require(source["state"] == "VERIFIED", "SOURCE_NOT_CLEAN_OR_UNAVAILABLE")
     if run.exists():
-        require(_matches_contract(run, expected), f"CONTRACT_MISMATCH: {run}")
+        require(_matches_contract(
+            run, expected,
+            allow_known_completed_bugfix=(run / "completion.json").is_file(),
+        ), f"CONTRACT_MISMATCH: {run} ({_contract_mismatch_reason(run, expected)}; no overwrite/retrain)")
     else:
         run.mkdir(parents=True, exist_ok=False)
         write_json(run / "run_contract.json", expected)
         write_json(run / "experiment_manifest.json", expected)
     if (run / "completion.json").exists():
         validate_completed_run(run, expected)
+        print(f"[FTSC ALPHA] VERIFIED COMPLETED RUN REUSED WITHOUT TRAINING: {case}/seed_{seed}")
         return run
     if not validate_training_completion(run, expected):
         set_state(run, "TRAINING")
@@ -728,9 +812,27 @@ def publish_completed(args: argparse.Namespace, uploader, case: str, seed: int,
     return metrics
 
 
+def _prevent_accidental_new_commit_namespace(args: argparse.Namespace) -> None:
+    """Bug-fix commits must not silently create a new experimental generation."""
+    prefix = "levir_ftsc_position_alpha_historical_h2_v1_rerun_"
+    if args.project.name == RECOVERABLE_LIVE_NAMESPACE or not args.project.name.startswith(prefix):
+        return
+    original = args.project.parent / RECOVERABLE_LIVE_NAMESPACE
+    if any((original / case / f"seed_{seed}").exists()
+           for case in CASES for seed in SEEDS):
+        raise RuntimeError(
+            "RUN_NAMESPACE_CHANGED_AFTER_GIT_PUSH: Existing alpha rerun artifacts "
+            f"were found under {original}. Your notebook is still generating a "
+            "new namespace from the current Git SHA. Pin _alpha_generation to "
+            f"'{RECOVERABLE_LIVE_NAMESPACE}' before rerunning. "
+            "No checkpoint or existing run was modified."
+        )
+
+
 def run_suite(args: argparse.Namespace, *, uploader=None) -> dict[str, Any]:
     validate_args(args)
     args.project = Path(args.project).expanduser().resolve()
+    _prevent_accidental_new_commit_namespace(args)
     args.pretrained = str(Path(args.pretrained).expanduser().resolve())
     source_report = source_preflight(args)
     data_yaml = Path(args.dataset_root) / "levir_ship_yolo_seed42/levir_ship.yaml"
