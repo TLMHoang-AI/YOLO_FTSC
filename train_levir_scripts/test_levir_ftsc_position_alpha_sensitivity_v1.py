@@ -19,7 +19,7 @@ from ultralytics.nn.modules.ftsc import PositionGaussianEvidence
 
 def fake_args(tmp_path: Path):
     return SimpleNamespace(
-        cases=["ALPHA4"], seeds=[42], split_seed=42, epochs=100, imgsz=512,
+        cases=["ALPHA4_rerun"], seeds=[42], split_seed=42, epochs=100, imgsz=512,
         batch_size=8, patience=20, workers=4, device="cuda",
         data_root=tmp_path, dataset_root=tmp_path, project=tmp_path / "runs",
         pretrained=tmp_path / "yolov8n.pt", confirm_run=True,
@@ -118,7 +118,7 @@ def test_training_marker_uses_finalized_checkpoint_contract(tmp_path, monkeypatc
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text("trained\n", encoding="utf-8")
     (run / "results.csv").write_text("epoch,train/box_loss\n1,0.1\n20,0.01\n", encoding="utf-8")
-    alpha.write_json(run / "run_contract.json", {"case": "ALPHA4", "seed": 42})
+    alpha.write_json(run / "run_contract.json", {"case": "ALPHA4_rerun", "seed": 42})
     expected = {"training_seed": 42, "train_args": {"epochs": 100}}
     monkeypatch.setattr(alpha, "_checkpoint",
                         lambda path, require_resumable: {"epoch": -1, "optimizer": None, "train_results": {"epoch": [1, 20]}})
@@ -132,9 +132,9 @@ def test_training_marker_uses_finalized_checkpoint_contract(tmp_path, monkeypatc
 
 def test_incomplete_training_with_all_three_artifacts_must_resume(tmp_path, monkeypatch):
     args = fake_args(tmp_path)
-    run = args.project / "ALPHA4" / "seed_42"
+    run = args.project / "ALPHA4_rerun" / "seed_42"
     (run / "weights").mkdir(parents=True)
-    expected = {"case": "ALPHA4", "train_args": {"epochs": 100}}
+    expected = {"case": "ALPHA4_rerun", "train_args": {"epochs": 100}}
     for artifact in alpha.TRAIN_ARTIFACTS:
         path = run / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -145,7 +145,7 @@ def test_incomplete_training_with_all_three_artifacts_must_resume(tmp_path, monk
     monkeypatch.setattr(alpha, "validate_training_completion", lambda *unused: False)
     monkeypatch.setattr(alpha, "_resume", lambda *unused: pytest.fail("Resume branch reached safely"))
     with pytest.raises(pytest.fail.Exception, match="Resume branch reached"):
-        alpha.run_one(args, "ALPHA4", 42, tmp_path / "dataset.yaml", {}, {"state": "VERIFIED"})
+        alpha.run_one(args, "ALPHA4_rerun", 42, tmp_path / "dataset.yaml", {}, {"state": "VERIFIED"})
 
 
 def test_completed_run_detects_tampered_checkpoint(tmp_path, monkeypatch):
@@ -154,7 +154,7 @@ def test_completed_run_detects_tampered_checkpoint(tmp_path, monkeypatch):
         target = run / artifact
         target.parent.mkdir(parents=True, exist_ok=True)
         if artifact in ("run_contract.json", "experiment_manifest.json"):
-            alpha.write_json(target, {"case": "ALPHA4"})
+            alpha.write_json(target, {"case": "ALPHA4_rerun"})
         elif artifact == "evaluation_metrics_extended.json":
             metrics = {key: 0.5 for key in alpha.METRICS_REQUIRED}
             metrics.update({"evaluation/checkpoint": "weights/best.pt",
@@ -169,18 +169,18 @@ def test_completed_run_detects_tampered_checkpoint(tmp_path, monkeypatch):
                      {"state": "COMPLETE", "contract_sha256": alpha.sha(run / "run_contract.json"),
                       "artifact_sha256": fingerprints, "evaluated_best_sha256": alpha.sha(run / "weights/best.pt")})
     monkeypatch.setattr(alpha, "validate_training_completion", lambda *unused: True)
-    assert alpha.validate_completed_run(run, {"case": "ALPHA4"})
+    assert alpha.validate_completed_run(run, {"case": "ALPHA4_rerun"})
     (run / "weights/best.pt").write_text("TAMPERED", encoding="utf-8")
     with pytest.raises(RuntimeError, match="ARTIFACT_HASH_MISMATCH"):
-        alpha.validate_completed_run(run, {"case": "ALPHA4"})
+        alpha.validate_completed_run(run, {"case": "ALPHA4_rerun"})
 
 
 def test_aggregate_invokes_authoritative_validator(tmp_path, monkeypatch):
     args = fake_args(tmp_path)
-    run = args.project / "ALPHA4" / "seed_42"
+    run = args.project / "ALPHA4_rerun" / "seed_42"
     run.mkdir(parents=True)
     (run / "completion.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(alpha, "contract", lambda *unused: {"case": "ALPHA4"})
+    monkeypatch.setattr(alpha, "contract", lambda *unused: {"case": "ALPHA4_rerun"})
     def reject(*args):
         raise RuntimeError("ARTIFACT_HASH_MISMATCH")
     monkeypatch.setattr(alpha, "validate_completed_run", reject)
@@ -196,8 +196,8 @@ def test_required_full_levir_metric_is_mandatory():
 
 def test_alpha_case_mapping_locked():
     assert alpha.ALPHA_POLICY == {
-        "ALPHA4": ("fixed", 4.0),
-        "ALPHA6": ("fixed", 6.0),
+        "ALPHA4_rerun": ("fixed", 4.0),
+        "ALPHA6_rerun": ("fixed", 6.0),
         "ALPHA8": ("fixed", 8.0),
         "ALPHA_ADAPTIVE": ("size_adaptive", 6.0),
     }
@@ -278,7 +278,7 @@ def test_source_identity_detects_dirty_tree(monkeypatch):
 
 def test_restore_never_overwrites_partial_local_run(tmp_path, monkeypatch):
     args = fake_args(tmp_path)
-    partial = args.project / "ALPHA4/seed_42"
+    partial = args.project / "ALPHA4_rerun/seed_42"
     partial.mkdir(parents=True)
     (partial / "run_contract.json").write_text("{}", encoding="utf-8")
     class ForbiddenUploader:
@@ -290,16 +290,16 @@ def test_restore_never_overwrites_partial_local_run(tmp_path, monkeypatch):
 
 def test_publication_validates_locally_before_any_upload(tmp_path, monkeypatch):
     args = fake_args(tmp_path)
-    run = args.project / "ALPHA4/seed_42"
+    run = args.project / "ALPHA4_rerun/seed_42"
     run.mkdir(parents=True)
-    monkeypatch.setattr(alpha, "contract", lambda *unused: {"case": "ALPHA4"})
+    monkeypatch.setattr(alpha, "contract", lambda *unused: {"case": "ALPHA4_rerun"})
     monkeypatch.setattr(alpha, "validate_completed_run",
                         lambda *unused: (_ for _ in ()).throw(RuntimeError("ARTIFACT_HASH_MISMATCH")))
     class ForbiddenUploader:
         def publish_run(self, **kwargs):
             pytest.fail("Corrupt runs must not be published")
     with pytest.raises(RuntimeError, match="ARTIFACT_HASH_MISMATCH"):
-        alpha.publish_completed(args, ForbiddenUploader(), "ALPHA4", 42,
+        alpha.publish_completed(args, ForbiddenUploader(), "ALPHA4_rerun", 42,
                                 tmp_path / "dataset.yaml", {}, {"state": "VERIFIED"})
 
 
@@ -321,7 +321,7 @@ def test_read_only_aggregate_rejects_bad_completion(tmp_path, monkeypatch):
 
 def test_historical_h2_is_default_control_not_train_case():
     args = alpha.parse_args([])
-    assert args.cases == ["ALPHA4", "ALPHA8"]
+    assert args.cases == ["ALPHA4_rerun", "ALPHA8"]
     assert args.seeds == [42, 43, 44]
     assert "ALPHA6" not in args.cases
     assert args.allow_alpha6_bridge is False
@@ -330,11 +330,11 @@ def test_historical_h2_is_default_control_not_train_case():
 
 def test_alpha6_train_requires_explicit_bridge(tmp_path):
     args = fake_args(tmp_path)
-    args.cases = ["ALPHA6"]
+    args.cases = ["ALPHA6_rerun"]
     with pytest.raises(RuntimeError, match="Historical H2"):
         alpha.validate_args(args)
     with pytest.raises(RuntimeError, match="Historical H2"):
-        alpha.run_one(args, "ALPHA6", 42, tmp_path / "dataset.yaml", {}, {"state": "VERIFIED"})
+        alpha.run_one(args, "ALPHA6_rerun", 42, tmp_path / "dataset.yaml", {}, {"state": "VERIFIED"})
     args.allow_alpha6_bridge = True
     alpha.validate_args(args)
 
@@ -356,7 +356,7 @@ def test_historical_reference_respects_selected_seeds():
 def test_alpha6_yaml_parity_with_historical_source():
     import yaml
     old = yaml.safe_load(alpha.H2.read_text(encoding="utf-8"))
-    new = yaml.safe_load(alpha.YAMLS["ALPHA6"].read_text(encoding="utf-8"))
+    new = yaml.safe_load(alpha.YAMLS["ALPHA6_rerun"].read_text(encoding="utf-8"))
     assert {k: v for k, v in old.items() if k != "ftsc"} == {
         k: v for k, v in new.items() if k != "ftsc"
     }
@@ -364,5 +364,3 @@ def test_alpha6_yaml_parity_with_historical_source():
     fixed = dict(new["ftsc"])
     assert fixed.pop("position_alpha_mode") == "fixed"
     assert fixed == historic
-
-

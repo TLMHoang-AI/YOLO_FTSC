@@ -4,7 +4,7 @@ ftsc:
   evidence:
   - position_gaussian
   - dfl_distribution
-  position_alpha: 6.0
+  position_alpha: 4.0
   position_alpha_mode: fixed
   dfl_entropy_tau: 1.0
   dfl_variance_tau: 0.0
@@ -158,4 +158,3 @@ head:
   - 1
   - Detect
   - - nc
-

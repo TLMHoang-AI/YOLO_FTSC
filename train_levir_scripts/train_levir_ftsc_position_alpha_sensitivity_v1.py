@@ -35,12 +35,15 @@ NAMESPACE = "levir_ftsc_position_alpha_historical_h2_v1"
 HISTORICAL_REFERENCE = REPO / "reference/levir_h2_historical_head_pruning_seed42_43_44.csv"
 HISTORICAL_REFERENCE_SOURCE_SHA256 = "03c81c0800b499552311b62d965aa692bf156cffed50f061bd2065812af77779"
 HISTORICAL_REFERENCE_SHA256 = "03cbe509b3e59c282bf840cdeb82a9765b8f7ffd848004b5df6f493ed80a4f88"
-CASES = ("ALPHA4", "ALPHA6", "ALPHA8", "ALPHA_ADAPTIVE")
-DEFAULT_CASES = ("ALPHA4", "ALPHA8")
+CASES = ("ALPHA4_rerun", "ALPHA6_rerun", "ALPHA8", "ALPHA_ADAPTIVE")
+DEFAULT_CASES = ("ALPHA4_rerun", "ALPHA8")
 SEEDS = (42, 43, 44)
 ALPHA_POLICY = {
-    "ALPHA4": ("fixed", 4.0),
-    "ALPHA6": ("fixed", 6.0),
+    # This label deliberately differs from the historical ALPHA4 arm so its
+    # run contract, output path, and Hub artifact path cannot collide.
+    "ALPHA4_rerun": ("fixed", 4.0),
+    # Keep a distinct artifact identity for the optional alpha=6 control rerun.
+    "ALPHA6_rerun": ("fixed", 6.0),
     "ALPHA8": ("fixed", 8.0),
     "ALPHA_ADAPTIVE": ("size_adaptive", 6.0),
 }
@@ -142,7 +145,7 @@ def validate_args(args: argparse.Namespace) -> None:
     require(not (args.preflight_only and args.confirm_run), "Preflight-only and confirm-run cannot both be enabled")
     require(not (args.live_preflight and args.confirm_run), "Live-preflight and confirm-run must be separate")
     require(not (args.aggregate_only and args.confirm_run), "Aggregate-only must not train")
-    require("ALPHA6" not in args.cases or args.allow_alpha6_bridge or not args.confirm_run,
+    require("ALPHA6_rerun" not in args.cases or args.allow_alpha6_bridge or not args.confirm_run,
             "Historical H2 is the default alpha=6 control; enable --allow-alpha6-bridge only for a deliberate control replication")
 
 
@@ -526,7 +529,7 @@ def _evaluate(run: Path, data_yaml: Path, args: argparse.Namespace) -> dict[str,
 
 def run_one(args: argparse.Namespace, case: str, seed: int, data_yaml: Path,
             data_identity: dict[str, Any], source: dict[str, Any]) -> Path:
-    require(case != "ALPHA6" or args.allow_alpha6_bridge,
+    require(case != "ALPHA6_rerun" or args.allow_alpha6_bridge,
             "Historical H2 is the alpha6 control; explicit --allow-alpha6-bridge required")
     expected = contract(args, case, seed, data_yaml, data_identity, source)
     run = args.project / case / f"seed_{seed}"
