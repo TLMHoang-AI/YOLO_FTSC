@@ -198,7 +198,7 @@ def test_alpha_case_mapping_locked():
     assert alpha.ALPHA_POLICY == {
         "ALPHA4_rerun": ("fixed", 4.0),
         "ALPHA6_rerun": ("fixed", 6.0),
-        "ALPHA8": ("fixed", 8.0),
+        "ALPHA8_rerun": ("fixed", 8.0),
         "ALPHA_ADAPTIVE": ("size_adaptive", 6.0),
     }
 
@@ -321,7 +321,7 @@ def test_read_only_aggregate_rejects_bad_completion(tmp_path, monkeypatch):
 
 def test_historical_h2_is_default_control_not_train_case():
     args = alpha.parse_args([])
-    assert args.cases == ["ALPHA4_rerun", "ALPHA8"]
+    assert args.cases == ["ALPHA4_rerun", "ALPHA8_rerun"]
     assert args.seeds == [42, 43, 44]
     assert "ALPHA6" not in args.cases
     assert args.allow_alpha6_bridge is False

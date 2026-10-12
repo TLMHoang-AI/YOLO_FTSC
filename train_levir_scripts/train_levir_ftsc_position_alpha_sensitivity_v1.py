@@ -35,8 +35,8 @@ NAMESPACE = "levir_ftsc_position_alpha_historical_h2_v1"
 HISTORICAL_REFERENCE = REPO / "reference/levir_h2_historical_head_pruning_seed42_43_44.csv"
 HISTORICAL_REFERENCE_SOURCE_SHA256 = "03c81c0800b499552311b62d965aa692bf156cffed50f061bd2065812af77779"
 HISTORICAL_REFERENCE_SHA256 = "03cbe509b3e59c282bf840cdeb82a9765b8f7ffd848004b5df6f493ed80a4f88"
-CASES = ("ALPHA4_rerun", "ALPHA6_rerun", "ALPHA8", "ALPHA_ADAPTIVE")
-DEFAULT_CASES = ("ALPHA4_rerun", "ALPHA8")
+CASES = ("ALPHA4_rerun", "ALPHA6_rerun", "ALPHA8_rerun", "ALPHA_ADAPTIVE")
+DEFAULT_CASES = ("ALPHA4_rerun", "ALPHA8_rerun")
 SEEDS = (42, 43, 44)
 ALPHA_POLICY = {
     # This label deliberately differs from the historical ALPHA4 arm so its
@@ -44,7 +44,7 @@ ALPHA_POLICY = {
     "ALPHA4_rerun": ("fixed", 4.0),
     # Keep a distinct artifact identity for the optional alpha=6 control rerun.
     "ALPHA6_rerun": ("fixed", 6.0),
-    "ALPHA8": ("fixed", 8.0),
+    "ALPHA8_rerun": ("fixed", 8.0),
     "ALPHA_ADAPTIVE": ("size_adaptive", 6.0),
 }
 YAMLS = {case: CONFIG_ROOT / f"yolov8n_p2_levir_ftsc_h2_{case.lower()}.yaml" for case in CASES}
