@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Matched LEVIR FTSC Position-Gaussian alpha sensitivity (training-only F5).
+"""Historical-H2-matched LEVIR FTSC Position Gaussian alpha sensitivity.
 
-Safe by default: without --confirm-run only a read-only source/data report is produced.
-All completed runs require immutable contract, training-finalization and artifact verification.
+The original head-pruning H2 is the baseline; only Position Gaussian alpha
+changes in new ablation arms. Earlier alpha-v1 results remain isolated.
+No training without --confirm-run; --live-preflight builds models but never trains.
 """
 from __future__ import annotations
 
@@ -25,13 +26,17 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from train_levir_scripts import train_all_levir_yolov8n_p2_routing as workflow
+from train_levir_scripts import train_all_levir_yolov8n_p2_ftsc_head_pruning as historical
 
 CONFIG_ROOT = REPO / "models_related/models_config/yolov8/levir"
 H2 = CONFIG_ROOT / "yolov8n_p2_levir_ftsc_nomosaic_h2_p2_p3.yaml"
-EXPERIMENT = "LEVIR_FTSC_POSITION_ALPHA_V1"
-NAMESPACE = "levir_ftsc_position_alpha_v1"
+EXPERIMENT = "LEVIR_FTSC_POSITION_ALPHA_HISTORICAL_H2_V1"
+NAMESPACE = "levir_ftsc_position_alpha_historical_h2_v1"
+HISTORICAL_REFERENCE = REPO / "reference/levir_h2_historical_head_pruning_seed42_43_44.csv"
+HISTORICAL_REFERENCE_SOURCE_SHA256 = "03c81c0800b499552311b62d965aa692bf156cffed50f061bd2065812af77779"
+HISTORICAL_REFERENCE_SHA256 = "03cbe509b3e59c282bf840cdeb82a9765b8f7ffd848004b5df6f493ed80a4f88"
 CASES = ("ALPHA4", "ALPHA6", "ALPHA8", "ALPHA_ADAPTIVE")
-DEFAULT_CASES = ("ALPHA4", "ALPHA6", "ALPHA8")
+DEFAULT_CASES = ("ALPHA4", "ALPHA8")
 SEEDS = (42, 43, 44)
 ALPHA_POLICY = {
     "ALPHA4": ("fixed", 4.0),
@@ -56,6 +61,10 @@ METRICS_REQUIRED = (
 )
 SOURCE_FILES = (
     "train_levir_scripts/train_levir_ftsc_position_alpha_sensitivity_v1.py",
+    "train_levir_scripts/train_all_levir_yolov8n_p2_ftsc_head_pruning.py",
+    "train_levir_scripts/train_all_levir_yolov8n_p2_routing.py",
+    "models_related/ultralytics/ultralytics/cfg/default.yaml",
+    "models_related/ultralytics/ultralytics/utils/tal.py",
     "models_related/ultralytics/ultralytics/nn/modules/ftsc.py",
     "models_related/ultralytics/ultralytics/nn/modules/head.py",
     "models_related/ultralytics/ultralytics/utils/loss.py",
@@ -106,25 +115,20 @@ def source_identity() -> dict[str, Any]:
 
 
 def train_kwargs(args: argparse.Namespace, data_yaml: Path, seed: int) -> dict[str, Any]:
-    # LEVIR protocol §16.7: equivalent to historical auto-resolved AdamW at nc=1.
-    return {
-        "data": str(data_yaml), "epochs": 100, "imgsz": 512, "batch": 8,
-        "device": args.device, "workers": args.workers, "patience": 20,
-        "seed": seed, "deterministic": True, "amp": True, "plots": False,
-        "optimizer": "AdamW", "lr0": 0.002, "momentum": 0.9,
-        "weight_decay": 0.0005, "nbs": 64,
-        "warmup_epochs": 3.0, "warmup_momentum": 0.8, "warmup_bias_lr": 0.0,
-        "cos_lr": False, "lrf": 0.01, "fitness_metric": "map50_95",
-        "mosaic": 0.0, "close_mosaic": 0, "hsv_h": 0.015, "hsv_s": 0.7,
-        "hsv_v": 0.4, "degrees": 0.0, "translate": 0.1, "scale": 0.5,
-        "shear": 0.0, "perspective": 0.0, "flipud": 0.0, "fliplr": 0.5,
-        "mixup": 0.0, "cutmix": 0.0, "copy_paste": 0.0, "rect": False,
-    }
+    """Reuse the EXACT historical head-pruning training recipe, not a rewrite."""
+    require(historical.VARIANTS["H2_p2_p3_nomosaic"] == H2,
+            "HISTORICAL_H2_CONFIG_PATH_DRIFT")
+    require(historical.FITNESS_METRIC == "map50_95", "HISTORICAL_FITNESS_DRIFT")
+    options = historical.train_kwargs(args, data_yaml, seed, True)
+    require(options.get("optimizer") == "auto"
+            and options.get("mosaic") == 0.0 and options.get("close_mosaic") == 0
+            and options.get("amp") is True, "HISTORICAL_TRAINING_RECIPE_DRIFT")
+    return options
 
 
 def scientific_train_args(args: argparse.Namespace, data_yaml: Path, seed: int) -> dict[str, Any]:
     values = train_kwargs(args, data_yaml, seed)
-    for operational in ("device", "workers"):
+    for operational in ("data", "device", "workers"):
         values.pop(operational)
     return values
 
@@ -137,6 +141,9 @@ def validate_args(args: argparse.Namespace) -> None:
     require(args.workers >= 0, "workers must be nonnegative")
     require(not (args.preflight_only and args.confirm_run), "Preflight-only and confirm-run cannot both be enabled")
     require(not (args.live_preflight and args.confirm_run), "Live-preflight and confirm-run must be separate")
+    require(not (args.aggregate_only and args.confirm_run), "Aggregate-only must not train")
+    require("ALPHA6" not in args.cases or args.allow_alpha6_bridge or not args.confirm_run,
+            "Historical H2 is the default alpha=6 control; enable --allow-alpha6-bridge only for a deliberate control replication")
 
 
 def source_preflight(args: argparse.Namespace) -> dict[str, Any]:
@@ -189,8 +196,11 @@ def validate_dataset(data_yaml: Path, data_root: Path) -> dict[str, Any]:
             labels_digest.update(stem.encode() + b"\0" + prepared + b"\0")
         fingerprints[split] = {"members_sha256": member_digest,
                                "labels_sha256": labels_digest.hexdigest()}
-    return {"split_seed": 42, "split_fingerprints": fingerprints,
-            "data_yaml_sha256": sha(data_yaml), "counts": {"train": 2320, "val": 788, "test": 788}}
+    # Path-only differences in generated levir_ship.yaml are operational;
+    # the deterministic membership and exact label bytes are scientific.
+    return {"split_seed": 42, "split_algorithm": "sorted_stems_random.Random(42).shuffle",
+            "split_fingerprints": fingerprints, "class_mapping": {0: "ship"},
+            "counts": {"train": 2320, "val": 788, "test": 788}}
 
 
 def audit_train_labels(data_yaml: Path, imgsz: int = 512) -> dict[str, Any]:
@@ -246,40 +256,69 @@ def model_for(case: str, pretrained: str):
 
 
 def model_preflight(pretrained: str, cases: tuple[str, ...] | list[str]) -> dict[str, Any]:
-    """Runtime-only preflight, deliberately NOT executed during local static review."""
+    """LIVE-only: prove identical pretrained initialization to historical H2.
+
+    Every variant is constructed with exactly the same RNG seed and
+    smart_transfer path. Alpha is a non-parameter training-time policy:
+    all model parameter/buffer initial states must match bit for bit.
+    """
     import torch
-    fingerprints = {}
+    workflow.local_ultralytics()
+    from ultralytics import YOLO
+    workflow.seed_everything(0)
+    historical_model = YOLO(H2)
+    historical_model.load(pretrained, smart_transfer=True)
+    reference_detector = historical_model.model.model[-1]
+    require(reference_detector.nl == 2 and reference_detector.nc == 1,
+            "Historical H2 Detect mismatch")
+    require([int(x) for x in reference_detector.stride.tolist()] == [4, 8],
+            "Historical H2 strides mismatch")
+    reference_state = {key: tensor.detach().cpu().clone()
+                       for key, tensor in historical_model.model.state_dict().items()}
+    report = {}
     for case in cases:
+        workflow.seed_everything(0)
         model = model_for(case, pretrained)
         detector = model.model.model[-1]
         require(detector.nl == 2 and detector.nc == 1, f"{case}: wrong Detect levels/classes")
         require([int(x) for x in detector.stride.tolist()] == [4, 8], f"{case}: wrong strides")
-        ftsc = detector.ftsc_calibrator
-        require(ftsc is not None and ftsc.policy == "f5", f"{case}: FTSC F5 missing")
-        require(set(ftsc.providers) == {"position_gaussian", "dfl_distribution"}, f"{case}: evidence drift")
-        require(ftsc.providers["dfl_distribution"].detach is True, f"{case}: DFL detach drift")
-        require(ftsc.providers["position_gaussian"].alpha_mode == ALPHA_POLICY[case][0], f"{case}: alpha mode drift")
-        require(ftsc.providers["position_gaussian"].alpha == ALPHA_POLICY[case][1], f"{case}: alpha value drift")
-        shapes = {name: tuple(value.shape) for name, value in model.model.state_dict().items()
-                  if "ftsc_calibrator" not in name}
-        fingerprints[case] = shapes
+        calibrator = detector.ftsc_calibrator
+        require(calibrator is not None and calibrator.policy == "f5", f"{case}: FTSC F5 missing")
+        require(set(calibrator.providers) == {"position_gaussian", "dfl_distribution"},
+                f"{case}: FTSC evidence drift")
+        require(calibrator.providers["dfl_distribution"].detach is True, f"{case}: DFL detach drift")
+        provider = calibrator.providers["position_gaussian"]
+        require((provider.alpha_mode, provider.alpha) == ALPHA_POLICY[case],
+                f"{case}: effective alpha policy drift")
+        state = model.model.state_dict()
+        require(set(state) == set(reference_state), f"{case}: H2 state keys differ")
+        mismatched = [key for key, value in state.items()
+                      if not torch.equal(value.detach().cpu(), reference_state[key])]
+        require(not mismatched,
+                f"{case}: pretrained initialization differs from historical H2: {mismatched[:8]}")
+        report[case] = {"strides": [4, 8], "identical_H2_initial_state": True,
+                        "state_entries": len(reference_state)}
         del model
-    baseline = fingerprints[cases[0]]
-    for case, shapes in fingerprints.items():
-        require(shapes == baseline, f"{case}: inference parameter topology drift")
-    return {"status": "MODEL_PREFLIGHT_PASSED", "strides": [4, 8], "inference_parameter_shapes_equal": True}
+    del historical_model
+    return {"status": "MODEL_PREFLIGHT_PASSED", "historical_h2_config": str(H2),
+            "alpha_only_init_parity": report}
 
 
 def contract(args: argparse.Namespace, case: str, seed: int, data_yaml: Path,
              data_identity: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
     return {
-        "schema": "levir_ftsc_alpha_scientific_contract_v2", "case": case,
+        "schema": "levir_ftsc_alpha_historical_h2_contract_v1", "case": case,
+        "baseline": {"source_suite": historical.PROTOCOL_VERSION,
+                     "historical_case": "H2_p2_p3_nomosaic",
+                     "historical_model_yaml_sha256": sha(H2),
+                     "historical_training_runner_sha256": sha(REPO / "train_levir_scripts/train_all_levir_yolov8n_p2_ftsc_head_pruning.py")},
         "training_seed": seed, "split_seed": 42,
         "alpha_policy": {"mode": ALPHA_POLICY[case][0], "alpha": ALPHA_POLICY[case][1]},
         "model_yaml_sha256": sha(YAMLS[case]), "source": source,
         "dataset": data_identity, "pretrained_sha256": sha(Path(args.pretrained)),
         "train_args": scientific_train_args(args, data_yaml, seed),
         "checkpoint_selection": "validation/mAP50-95",
+        "optimizer_requested": "auto", "optimizer_resolved_expected": "AdamW",
         "evaluation": {"dataset": "levir", "imgsz": 512, "batch": 8, "nms_iou": 0.5,
                        "evaluator_sha256": sha(REPO / "evaluate_test/standard_detection_metrics.py")},
     }
@@ -487,6 +526,8 @@ def _evaluate(run: Path, data_yaml: Path, args: argparse.Namespace) -> dict[str,
 
 def run_one(args: argparse.Namespace, case: str, seed: int, data_yaml: Path,
             data_identity: dict[str, Any], source: dict[str, Any]) -> Path:
+    require(case != "ALPHA6" or args.allow_alpha6_bridge,
+            "Historical H2 is the alpha6 control; explicit --allow-alpha6-bridge required")
     expected = contract(args, case, seed, data_yaml, data_identity, source)
     run = args.project / case / f"seed_{seed}"
     require(source["state"] == "VERIFIED", "SOURCE_NOT_CLEAN_OR_UNAVAILABLE")
@@ -528,6 +569,41 @@ def run_one(args: argparse.Namespace, case: str, seed: int, data_yaml: Path,
     return run
 
 
+def historical_h2_reference(seeds: list[int]) -> list[dict[str, Any]]:
+    """Historical result table is a reference, never a fabricated new alpha6 run.
+
+    Imported verbatim (metric values) from the original LEVIR head-pruning CSV.
+    Provenance is limited to the historical result export; this does not itself
+    prove that old checkpoints used the current source commit.
+    """
+    require(HISTORICAL_REFERENCE.is_file(), "MISSING_HISTORICAL_H2_REFERENCE")
+    require(sha(HISTORICAL_REFERENCE) == HISTORICAL_REFERENCE_SHA256,
+            "HISTORICAL_H2_REFERENCE_SHA256_MISMATCH")
+    with HISTORICAL_REFERENCE.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    require(len(rows) == 3, "Historical H2 reference must contain exactly 3 seeds")
+    require({int(row["seed"]) for row in rows} == set(SEEDS),
+            "Historical H2 reference seed identity mismatch")
+    require(all(
+        row["variant"] == "H2_p2_p3_nomosaic"
+        and row["protocol/version"] == historical.PROTOCOL_VERSION
+        and row["protocol/fitness_metric"] == historical.FITNESS_METRIC
+        and float(row["protocol/mosaic"]) == 0.0
+        and int(row["protocol/close_mosaic"]) == 0
+        and float(row["protocol/nms_iou"]) == 0.5
+        and int(row["params"]) == 1821959
+        for row in rows), "Historical H2 reference protocol mismatch")
+    selected = []
+    for row in rows:
+        if int(row["seed"]) in seeds:
+            selected.append({"case": "HISTORICAL_H2_ALPHA6_REFERENCE",
+                             "seed": int(row["seed"]), "cohort": historical.PROTOCOL_VERSION,
+                             "reference_only": True,
+                             **{key: float(value) for key, value in row.items()
+                                if key.startswith(("test/metrics/", "val/metrics/"))}})
+    return sorted(selected, key=lambda row: row["seed"])
+
+
 def aggregate(args: argparse.Namespace, data_yaml: Path, data_identity: dict[str, Any],
               source: dict[str, Any]) -> None:
     from evaluate_test.standard_detection_metrics import same_benchmark_fingerprint
@@ -554,7 +630,7 @@ def aggregate(args: argparse.Namespace, data_yaml: Path, data_identity: dict[str
             writer = csv.DictWriter(handle, fieldnames=columns)
             writer.writeheader()
             writer.writerows(values)
-    write_csv("levir_ftsc_position_alpha_v1_summary_runs.csv", rows)
+    write_csv("levir_ftsc_position_alpha_historical_h2_v1_summary_runs.csv", rows)
     summary = []
     for case in args.cases:
         group = [row for row in rows if row["case"] == case]
@@ -570,7 +646,28 @@ def aggregate(args: argparse.Namespace, data_yaml: Path, data_identity: dict[str
                 record[f"{metric}/mean"] = statistics.fmean(values)
                 record[f"{metric}/sample_std"] = statistics.stdev(values) if len(values) > 1 else None
         summary.append(record)
-    write_csv("levir_ftsc_position_alpha_v1_summary_aggregate.csv", summary)
+    write_csv("levir_ftsc_position_alpha_historical_h2_v1_summary_aggregate.csv", summary)
+    # Keep historical H2 visibly separate: reference metrics do NOT count as
+    # completed alpha6 runs or enter the new-cohort means/std.
+    references = historical_h2_reference(list(args.seeds))
+    write_csv("levir_ftsc_position_alpha_historical_h2_v1_historical_reference_runs.csv", references)
+    reference_summary: dict[str, Any] = {
+        "case": "HISTORICAL_H2_ALPHA6_REFERENCE",
+        "cohort": historical.PROTOCOL_VERSION,
+        "reference_only": True, "runs": len(references),
+    }
+    for metric in ("test/metrics/mAP50(B)", "test/metrics/mAP50-95(B)",
+                   "test/metrics/mAP75(B)", "test/metrics/precision(B)",
+                   "test/metrics/recall(B)", "val/metrics/mAP50(B)",
+                   "val/metrics/mAP50-95(B)"):
+        scores = [row[metric] for row in references]
+        if scores:
+            reference_summary[metric + "/mean"] = statistics.fmean(scores)
+            reference_summary[metric + "/sample_std"] = (
+                statistics.stdev(scores) if len(scores) > 1 else None
+            )
+    write_csv("levir_ftsc_position_alpha_historical_h2_v1_historical_reference_aggregate.csv",
+              [reference_summary])
     # Trainer's results.csv already carries epoch-indexed mechanism metrics.
     diagnostics = []
     for row in rows:
@@ -581,9 +678,17 @@ def aggregate(args: argparse.Namespace, data_yaml: Path, data_identity: dict[str
                         if key.strip().startswith("ftsc_") or key.strip() == "epoch"}
                 if diag:
                     diagnostics.append({"case": row["case"], "seed": row["seed"], **diag})
-    write_csv("levir_ftsc_position_alpha_v1_diagnostics.csv", diagnostics)
-    write_json(args.project / "levir_ftsc_position_alpha_v1_manifest.json", {
-        "schema": "levir_ftsc_alpha_suite_v2", "namespace": NAMESPACE,
+    write_csv("levir_ftsc_position_alpha_historical_h2_v1_diagnostics.csv", diagnostics)
+    write_json(args.project / "levir_ftsc_position_alpha_historical_h2_v1_manifest.json", {
+        "schema": "levir_ftsc_alpha_historical_h2_suite_v1", "namespace": NAMESPACE,
+        "historical_h2_reference": {"source_cohort": historical.PROTOCOL_VERSION,
+                                     "case": "H2_p2_p3_nomosaic",
+                                     "source_results_sha256": HISTORICAL_REFERENCE_SOURCE_SHA256,
+                                     "selected_seed_reference_csv": str(HISTORICAL_REFERENCE.relative_to(REPO)),
+                                     "historical_metrics_referenced": True,
+                                     "historical_training_rerun": False,
+                                     "status": "HISTORICAL_REFERENCE_NOT_RETRAINED",
+                                     "causal_delta_permitted_only_after_source_parity_check": True},
         "source": source, "dataset": data_identity, "statuses": statuses,
         "metric_source": "evaluation_metrics_extended.json",
         "diagnostics_basis": "epoch CSV, FTSC-positive-weighted where applicable",
@@ -644,7 +749,7 @@ def run_suite(args: argparse.Namespace, *, uploader=None) -> dict[str, Any]:
     require(size_audit["status"] == "READY" and size_audit["images"] == 2320, "GT-size audit not ready")
     model_report = model_preflight(args.pretrained, list(args.cases))
     args.project.mkdir(parents=True, exist_ok=True)
-    write_json(args.project / "levir_ftsc_position_alpha_v1_size_distribution.json", size_audit)
+    write_json(args.project / "levir_ftsc_position_alpha_historical_h2_v1_size_distribution.json", size_audit)
     if args.live_preflight:
         return {"status": "LIVE_PREFLIGHT_PASSED_NO_TRAINING",
                 "model_preflight": model_report, "size_audit": size_audit,
@@ -664,7 +769,9 @@ def run_suite(args: argparse.Namespace, *, uploader=None) -> dict[str, Any]:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", nargs="+", choices=CASES, default=list(DEFAULT_CASES))
-    parser.add_argument("--seeds", nargs="+", type=int, default=[42])
+    parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44])
+    parser.add_argument("--allow-alpha6-bridge", action="store_true",
+                        help="Explicitly permit new alpha6 control replication; not used by default")
     parser.add_argument("--split-seed", type=int, default=42)
     parser.add_argument("--data-root", type=Path, default=REPO.parent / "LevirShipData")
     parser.add_argument("--dataset-root", type=Path, default=REPO / "datasets")

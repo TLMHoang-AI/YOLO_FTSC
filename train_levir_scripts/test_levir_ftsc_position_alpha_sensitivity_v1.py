@@ -24,6 +24,7 @@ def fake_args(tmp_path: Path):
         data_root=tmp_path, dataset_root=tmp_path, project=tmp_path / "runs",
         pretrained=tmp_path / "yolov8n.pt", confirm_run=True,
         aggregate_only=False, preflight_only=False, live_preflight=False,
+        allow_alpha6_bridge=False,
     )
 
 
@@ -86,14 +87,14 @@ def test_zero_positives_return_empty():
     assert out.numel() == 0
 
 
-def test_train_kwargs_frozen_adamw(tmp_path):
+def test_train_kwargs_match_exact_historical_head_pruning(tmp_path):
     args = fake_args(tmp_path)
-    kwargs = alpha.train_kwargs(args, tmp_path / "dataset.yaml", 42)
-    assert kwargs["optimizer"] == "AdamW"
-    assert kwargs["lr0"] == .002
-    assert kwargs["momentum"] == .9
-    assert kwargs["warmup_bias_lr"] == .0
-    assert kwargs["mosaic"] == 0.0
+    data_yaml = tmp_path / "dataset.yaml"
+    kwargs = alpha.train_kwargs(args, data_yaml, 42)
+    assert kwargs == alpha.historical.train_kwargs(args, data_yaml, 42, True)
+    assert kwargs["optimizer"] == "auto"
+    assert "lr0" not in kwargs  # historical auto decides effective AdamW
+    assert kwargs["amp"] is True and kwargs["mosaic"] == 0.0
     assert kwargs["fitness_metric"] == "map50_95"
 
 
@@ -254,6 +255,7 @@ def test_notebook_gate_disabled_by_default():
     body = notebook.read_text(encoding="utf-8")
     assert "RUN_LEVIR_FTSC_ALPHA = False" in body
     assert "run_suite(_alpha_args, uploader=_alpha_uploader)" in body
+    assert "runs/levir_ftsc_position_alpha_historical_h2_v1" in body
 
 def test_checkpoint_alpha_identity_rejects_wrong_case():
     wrong_model = SimpleNamespace(yaml={"ftsc": {"position_alpha": 6.0, "position_alpha_mode": "fixed"}})
@@ -315,4 +317,52 @@ def test_read_only_aggregate_rejects_bad_completion(tmp_path, monkeypatch):
                         lambda *unused: (_ for _ in ()).throw(RuntimeError("CORRUPT_COMPLETION")))
     with pytest.raises(RuntimeError, match="CORRUPT_COMPLETION"):
         alpha.run_suite(args)
+
+
+def test_historical_h2_is_default_control_not_train_case():
+    args = alpha.parse_args([])
+    assert args.cases == ["ALPHA4", "ALPHA8"]
+    assert args.seeds == [42, 43, 44]
+    assert "ALPHA6" not in args.cases
+    assert args.allow_alpha6_bridge is False
+    assert alpha.NAMESPACE == "levir_ftsc_position_alpha_historical_h2_v1"
+
+
+def test_alpha6_train_requires_explicit_bridge(tmp_path):
+    args = fake_args(tmp_path)
+    args.cases = ["ALPHA6"]
+    with pytest.raises(RuntimeError, match="Historical H2"):
+        alpha.validate_args(args)
+    with pytest.raises(RuntimeError, match="Historical H2"):
+        alpha.run_one(args, "ALPHA6", 42, tmp_path / "dataset.yaml", {}, {"state": "VERIFIED"})
+    args.allow_alpha6_bridge = True
+    alpha.validate_args(args)
+
+
+def test_historical_reference_is_separate_and_three_seeds():
+    reference = alpha.historical_h2_reference([42, 43, 44])
+    assert [row["seed"] for row in reference] == [42, 43, 44]
+    assert all(row["reference_only"] for row in reference)
+    assert all(row["cohort"] == "ftsc_head_pruning_nomosaic_v1" for row in reference)
+    assert all(row["case"] == "HISTORICAL_H2_ALPHA6_REFERENCE" for row in reference)
+    assert sum(row["test/metrics/mAP50-95(B)"] for row in reference) / 3 == pytest.approx(.3129952615407791)
+
+
+def test_historical_reference_respects_selected_seeds():
+    rows = alpha.historical_h2_reference([43])
+    assert len(rows) == 1 and rows[0]["seed"] == 43
+
+
+def test_alpha6_yaml_parity_with_historical_source():
+    import yaml
+    old = yaml.safe_load(alpha.H2.read_text(encoding="utf-8"))
+    new = yaml.safe_load(alpha.YAMLS["ALPHA6"].read_text(encoding="utf-8"))
+    assert {k: v for k, v in old.items() if k != "ftsc"} == {
+        k: v for k, v in new.items() if k != "ftsc"
+    }
+    historic = dict(old["ftsc"])
+    fixed = dict(new["ftsc"])
+    assert fixed.pop("position_alpha_mode") == "fixed"
+    assert fixed == historic
+
 
