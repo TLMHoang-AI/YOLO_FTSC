@@ -413,8 +413,13 @@ def precision_ap(precision, iou_index: int, area_index: int) -> float:
     return float(values.mean()) if values.size else -1.0
 
 
-def evaluate_tiny_benchmark(prediction_path: Path, merged_gt_path: Path) -> dict[str, float]:
-    """Extract explicit metrics from TinyBenchmark's precision tensor."""
+def evaluate_tiny_benchmark(prediction_path: Path, merged_gt_path: Path) -> dict[str, float | str]:
+    """Extract legacy and extended metrics from merged-original predictions.
+
+    The six-threshold evaluator remains a separate invocation so extending the
+    IoU sweep cannot mutate the historical mAP50-75 definition or evaluator
+    state.  The ten-threshold invocation adds the paper-facing mAP50-95.
+    """
     import importlib.util
     import numpy as np
     from pycocotools.coco import COCO
@@ -436,43 +441,53 @@ def evaluate_tiny_benchmark(prediction_path: Path, merged_gt_path: Path) -> dict
         if isinstance(num, (float, np.floating)):
             num = int(num)
         return old_linspace(start, stop, num, *args, **kwargs)
-    evaluator_module.np.linspace = compatible_linspace
-    try:
-        evaluator = COCOeval(coco_gt, coco_dt, "bbox", True, True)
-    finally:
-        evaluator_module.np.linspace = old_linspace
-    evaluator.params.iouThrs = np.linspace(0.50, 0.75, 6)
-    had_np_float = hasattr(evaluator_module.np, "float")
-    if not had_np_float:
-        evaluator_module.np.float = float
-    try:
-        evaluator.evaluate()
-        evaluator.accumulate()
-    finally:
+    def accumulated(iou_thresholds):
+        # Fresh state per sweep: TinyBenchmark's params/eval tensors are mutable.
+        evaluator_module.np.linspace = compatible_linspace
+        try:
+            evaluator = COCOeval(coco_gt, coco_dt, "bbox", True, True)
+        finally:
+            evaluator_module.np.linspace = old_linspace
+        evaluator.params.iouThrs = np.asarray(iou_thresholds, dtype=float)
+        had_np_float = hasattr(evaluator_module.np, "float")
         if not had_np_float:
-            del evaluator_module.np.float
+            evaluator_module.np.float = float
+        try:
+            evaluator.evaluate()
+            evaluator.accumulate()
+        finally:
+            if not had_np_float:
+                del evaluator_module.np.float
+        return evaluator
 
-    area_indices = {name: evaluator.params.areaRngLbl.index(name) for name in ("tiny1", "tiny2", "tiny3", "small", "medium")}
-    all_ap = [precision_ap(evaluator.eval["precision"], index, evaluator.params.areaRngLbl.index("all")) for index in range(6)]
+    legacy = accumulated(np.linspace(0.50, 0.75, 6))
+    extended = accumulated(np.linspace(0.50, 0.95, 10))
+
+    area_indices = {name: legacy.params.areaRngLbl.index(name) for name in ("tiny1", "tiny2", "tiny3", "small", "medium")}
+    all_ap = [precision_ap(legacy.eval["precision"], index, legacy.params.areaRngLbl.index("all")) for index in range(6)]
+    all_ap_50_95 = [precision_ap(extended.eval["precision"], index, extended.params.areaRngLbl.index("all")) for index in range(10)]
     valid_all_ap = [value for value in all_ap if value > -1]
+    valid_all_ap_50_95 = [value for value in all_ap_50_95 if value > -1]
     metrics = {
         "test_merged/AP50": all_ap[0],
         "test_merged/AP75": all_ap[-1],
         "test_merged/mAP50-75": float(np.mean(valid_all_ap)) if valid_all_ap else -1.0,
+        "test_merged/mAP50-95": float(np.mean(valid_all_ap_50_95)) if valid_all_ap_50_95 else -1.0,
+        "test_merged/evaluator_contract": "tinybenchmark_merged_original_iou50_95_v2",
     }
     for name, area_index in area_indices.items():
-        metrics[f"test_merged/AP50-{name.title()}"] = precision_ap(evaluator.eval["precision"], 0, area_index)
-        area_ap = [precision_ap(evaluator.eval["precision"], index, area_index) for index in range(6)]
+        metrics[f"test_merged/AP50-{name.title()}"] = precision_ap(legacy.eval["precision"], 0, area_index)
+        area_ap = [precision_ap(legacy.eval["precision"], index, area_index) for index in range(6)]
         valid_area_ap = [value for value in area_ap if value > -1]
         metrics[f"test_merged/AP-{name.title()}"] = float(np.mean(valid_area_ap)) if valid_area_ap else -1.0
     return metrics
 
 
-def evaluate_merged_test(run_dir: Path, test_out_dir: Path, data_root: Path, args: argparse.Namespace) -> dict[str, float]:
+def evaluate_merged_test(run_dir: Path, test_out_dir: Path, data_root: Path, args: argparse.Namespace) -> dict[str, float | str]:
     """Evaluate merged detections with TinyBenchmark when its optional stack is available."""
     prediction_path = predict_merged_test(run_dir, test_out_dir, data_root, args)
     merged_gt_path = data_root / TEST_MERGED_JSON
-    metrics: dict[str, float] = {"test_merged/available": 0.0}
+    metrics: dict[str, float | str] = {"test_merged/available": 0.0}
     benchmark_root = ROOT / "vendor"
     if not (benchmark_root / "tinyperson_cocoeval.py").is_file() or not merged_gt_path.is_file():
         print("TinyBenchmark evaluator unavailable; merged detections were still written.", flush=True)
@@ -529,6 +544,9 @@ def evaluate(run_dir: Path, data_yaml: Path, test_out_dir: Path, data_root: Path
         required_metrics = [
             *(f"{split}/metrics/mAP50-75(B)" for split in ("val", "test")),
             "test_merged/mAP50-75",
+            "test_merged/mAP50-95",
+            "test_merged/AP50-Small",
+            "test_merged/evaluator_contract",
             "test_merged/AP-Tiny1",
             "test_merged/AP-Tiny2",
             "test_merged/AP-Tiny3",
