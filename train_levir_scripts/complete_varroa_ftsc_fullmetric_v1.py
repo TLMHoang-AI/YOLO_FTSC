@@ -42,9 +42,9 @@ METRIC_KEYS = {
     "inference_ms": "test_speed/inference_ms_per_image",
 }
 PREFIXES = (
-    "varroa", "varroa_ftsc_edge_placement_headscale",
-    "varroa_ftsc_next_ablation_suite", "varroa_ftsc_position_alpha_h2_v1",
-    "varroa_h2_generalization_completion_v1",
+    "varroa", "varroa_ftsc_causal_suite",
+    "varroa_ftsc_edge_placement_headscale", "varroa_ftsc_next_ablation_suite",
+    "varroa_ftsc_position_alpha_h2_v1", "varroa_h2_generalization_completion_v1",
 )
 
 @dataclass(frozen=True)
@@ -58,7 +58,7 @@ class Case:
 
 CASES: dict[str, Case] = {}
 for _name, _spec in causal.VARIANTS.items():
-    CASES[_name] = Case(_spec.config, ("varroa",), 1.0, 10)
+    CASES[_name] = Case(_spec.config, ("varroa_ftsc_causal_suite", "varroa"), 1.0, 10)
 for _name, _spec in placement.CASES.items():
     if _spec.stage == 1:  # 4 cases with historical results
         CASES[_name] = Case(_spec.config, ("varroa_ftsc_edge_placement_headscale", "varroa"), 1.0, 10)
@@ -71,7 +71,12 @@ for _name in alpha_suite.CASES:
     CASES[_name] = Case(alpha_suite.YAMLS[_name],
                         ("varroa_ftsc_position_alpha_h2_v1",),
                         1.0, 10, False, alpha_suite.ALPHA[_name])
-assert len(CASES) == 19, "Varroa cases drifted; review the completion registry"
+HISTORICAL_CASES = tuple(causal.VARIANTS) + tuple(
+    name for name, spec in placement.CASES.items() if spec.stage == 1
+) + tuple(next_suite.CASES)
+ALPHA_CASES = tuple(alpha_suite.CASES)
+assert len(HISTORICAL_CASES) == 17 and len(CASES) == 19, "Varroa registry drifted; review cases"
+assert set(HISTORICAL_CASES).isdisjoint(ALPHA_CASES) and set(CASES) == set(HISTORICAL_CASES) | set(ALPHA_CASES)
 
 
 def digest(path: Path) -> str:
@@ -125,6 +130,7 @@ def scientific_verification(case: str, seed: int, metadata: dict[str, Path]) -> 
             if summary.get("case") not in (None, case) or summary.get("seed") not in (None, seed):
                 return False, "Archive run_summary contradicts case/seed"
         required = {"seed": seed, "imgsz": 640, "batch": 4, "epochs": 100,
+                    "patience": 20, "deterministic": True,
                     "amp": True, "mosaic": spec.mosaic, "close_mosaic": spec.close_mosaic}
         for key, value in required.items():
             if saved.get(key) != value or type(saved.get(key)) is not type(value):
@@ -141,15 +147,21 @@ def scientific_verification(case: str, seed: int, metadata: dict[str, Path]) -> 
         if spec.cp2:
             if saved.get("copy_paste_enabled") is not True:
                 return False, "CP2 treatment missing enabled flag"
-        elif saved.get("copy_paste_enabled", False) is not False:
-            return False, "Unexpected CP2 treatment in FTSC control"
+            # The historical CP2 is a patched detection transform, not stock
+            # segmentation Copy-Paste. Verify the *whole* recorded recipe.
+            for key, expected in next_suite.validated_cp2_settings().items():
+                if saved.get(key) != expected:
+                    return False, f"CP2 training recipe differs: {key} (expected {expected!r}, got {saved.get(key)!r})"
+        elif saved.get("copy_paste_enabled", False) is not False or saved.get("copy_paste", 0) != 0:
+            return False, "Unexpected Copy-Paste treatment in FTSC control"
         if spec.alpha is not None:
             cfg = yaml_file(metadata["config.yaml"])
             if cfg.get("ftsc", {}).get("position_alpha") != spec.alpha:
                 return False, "Position alpha mismatch"
         # train config + args are necessary but not a proof of the original data bytes.
         # Preserve this limitation explicitly in provenance.
-        return True, "Matched archived YAML, seed-specific data path and full recorded training recipe; original split-content SHA not archived"
+        return True, ("Matched archived YAML, seed-specific data path and checked training settings; "
+                      "original split-content SHA and pretrained/source identity are NOT established")
     except (ValueError, KeyError, OSError, TypeError) as exc:
         return False, f"Metadata cannot be verified: {exc}"
 
@@ -275,47 +287,75 @@ def handle_plan(args: argparse.Namespace, *, recover: bool = False) -> dict[str,
 
 
 def evaluate(args: argparse.Namespace) -> dict[str, Any]:
+    """Evaluation-only, reporting progress persistently after every case/seed."""
     outcomes = []
+    total = len(args.cases) * len(args.seeds)
+    status_path = args.project / "evaluation_status.json"
+
+    def finish(row: dict[str, Any]) -> None:
+        outcomes.append(row)
+        write_json(status_path, {
+            "rows": outcomes, "phase": "evaluate", "namespace": NAMESPACE,
+            "processed": len(outcomes), "total": total,
+            "finished": len(outcomes) == total,
+        })
+        extra = f" missing={row['missing']}" if row.get("missing") else ""
+        print(f"[EVALUATE {len(outcomes)}/{total}] {row['case']}/seed_{row['seed']} "
+              f"=> {row['status']}{extra}", flush=True)
+
+    print(f"[EVALUATE] Starting {total} case/seed checks; evaluation-only (no training).",
+          flush=True)
     for case in args.cases:
         for seed in args.seeds:
             run = args.project / case / f"seed_{seed}"
             row = {"case": case, "seed": seed}
+            print(f"[EVALUATE] Checking {case}/seed_{seed}", flush=True)
             source = run / "recovery_source.json"
             if not source.is_file():
                 row["status"] = "BLOCKED_NO_VERIFIED_CHECKPOINT"
-                outcomes.append(row)
+                finish(row)
                 continue
             record = read_json(source)
             if record.get("case") != case or record.get("seed") != seed:
                 row["status"] = "BLOCKED_RECOVERY_IDENTITY"
-                outcomes.append(row)
+                finish(row)
                 continue
             best = run / "weights/best.pt"
             if not best.is_file() or digest(best) != record.get("checkpoint_sha256"):
                 row["status"] = "BLOCKED_CHECKPOINT_SHA"
-                outcomes.append(row)
+                finish(row)
                 continue
             if record.get("model_yaml_sha256") != digest(CASES[case].yaml):
                 row["status"] = "BLOCKED_MODEL_YAML_CHANGED"
-                outcomes.append(row)
+                finish(row)
                 continue
-            if local_metrics(run) is not None:
+            existing = local_metrics(run)
+            if existing is not None and not validate_six_core(existing, METRIC_KEYS):
                 row["status"] = "SKIP_COMPLETE"
-                outcomes.append(row)
+                finish(row)
                 continue
             if (run / "evaluation_metrics_completion_v1.json").exists():
                 row["status"] = "BLOCKED_STALE_EVALUATOR_OR_METRICS"
-                outcomes.append(row)
+                finish(row)
                 continue
+            print(f"[EVALUATE] Preparing dataset seed_{seed} for {case}", flush=True)
             data = shared.dataset_for_seed(args, seed)
             args.data_yaml = data
-            metrics = shared.evaluate(run, args)
+            print(f"[EVALUATE] Running native val/test + size/profile/speed: "
+                  f"{case}/seed_{seed}", flush=True)
+            try:
+                metrics = shared.evaluate(run, args)
+            except Exception as exc:
+                row.update(status="EVALUATION_FAILED",
+                           error=f"{type(exc).__name__}: {exc}")
+                finish(row)
+                raise
             missing = validate_six_core(metrics, METRIC_KEYS)
             if metrics.get("evaluation/nms_iou") != 0.7 or not metrics.get("test_size/protocol"):
                 missing = (*missing, "NMS_OR_SIZE_PROTOCOL")
             if missing:
                 row.update(status="METRIC_INCOMPLETE", missing=list(missing))
-                outcomes.append(row)
+                finish(row)
                 continue
             output = run / "evaluation_metrics_completion_v1.json"
             write_json(output, metrics)
@@ -326,9 +366,12 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 "standard_nms_iou": 0.7, "size_bucket_nms_iou": 0.5,
             })
             row["status"] = "COMPLETE"
-            outcomes.append(row)
-    report = {"rows": outcomes, "phase": "evaluate", "namespace": NAMESPACE}
-    write_json(args.project / "evaluation_status.json", report)
+            finish(row)
+    report = {"rows": outcomes, "phase": "evaluate", "namespace": NAMESPACE,
+              "processed": len(outcomes), "total": total, "finished": True}
+    write_json(status_path, report)
+    print(f"[EVALUATE] Finished {len(outcomes)}/{total}; "
+          f"status saved at {status_path}", flush=True)
     return report
 
 
@@ -407,7 +450,8 @@ def publish(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--phase", choices=("plan", "restore", "evaluate", "aggregate", "publish"), default="plan")
-    parser.add_argument("--cases", nargs="+", choices=tuple(CASES), default=list(CASES))
+    parser.add_argument("--cases", nargs="+", choices=tuple(CASES), default=list(HISTORICAL_CASES),
+                        help="Default: 17 historical cases; alpha arms are explicit opt-in only")
     parser.add_argument("--seeds", nargs="+", type=int, default=list(SEEDS))
     parser.add_argument("--repo-id", default=REPO)
     parser.add_argument("--token", default=None, help="Prefer HF_TOKEN environment variable")
