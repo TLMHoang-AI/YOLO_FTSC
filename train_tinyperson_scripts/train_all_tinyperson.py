@@ -333,6 +333,25 @@ def nms_detections(detections: list[dict], iou_threshold: float = 0.5) -> list[d
     return kept
 
 
+def decode_ultralytics_result(result) -> tuple[list[list[float]], list[float], list[float]]:
+    """Normalize the public Results.boxes contract used by v9/v10/v11 predictors.
+
+    YOLOv10's end-to-end tensors are decoded by its native predictor before
+    this boundary.  Refuse a raw/internal tensor instead of guessing its layout.
+    """
+    boxes = getattr(result, "boxes", None)
+    if boxes is None or len(boxes) == 0:
+        return [], [], []
+    required = (getattr(boxes, name, None) for name in ("xyxy", "conf", "cls"))
+    xyxy, conf, classes = required
+    if xyxy is None or conf is None or classes is None:
+        raise TypeError("Prediction result does not expose decoded Ultralytics boxes")
+    return (
+        xyxy.detach().cpu().tolist(), conf.detach().cpu().tolist(),
+        classes.detach().cpu().tolist(),
+    )
+
+
 def predict_merged_test(run_dir: Path, test_out_dir: Path, data_root: Path, args: argparse.Namespace) -> Path:
     """Run on corner windows, translate boxes, NMS, and emit original-image COCO detections."""
     local_ultralytics()
@@ -367,12 +386,9 @@ def predict_merged_test(run_dir: Path, test_out_dir: Path, data_root: Path, args
         for record, result in zip(chunk_records, predictions):
             original_id = original_id_by_name[record["file_name"]]
             corner = record["corner"]
-            boxes = result.boxes
-            if boxes is None or len(boxes) == 0:
+            xyxy, scores, classes = decode_ultralytics_result(result)
+            if not xyxy:
                 continue
-            xyxy = boxes.xyxy.detach().cpu().tolist()
-            scores = boxes.conf.detach().cpu().tolist()
-            classes = boxes.cls.detach().cpu().tolist()
             for box, score, cls in zip(xyxy, scores, classes):
                 if int(cls) != 0:
                     continue
