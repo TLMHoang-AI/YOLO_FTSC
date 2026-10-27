@@ -127,7 +127,11 @@ def _dataset_content_identity(data_yaml: Path, payload: dict[str, Any]) -> dict[
         ):
             require(folder.is_dir(), f"Missing prepared {split}/{role} directory: {folder}")
             for file in sorted(folder.iterdir()):
-                if not file.is_file() or file.suffix.lower() not in suffixes:
+                if file.suffix.lower() not in suffixes:
+                    continue
+                require(not file.is_symlink() or file.exists(),
+                        f"Broken prepared dataset symlink: {file}")
+                if not file.is_file():
                     continue
                 stat = file.stat()
                 key = f"{split}/{role}/{file.name}"

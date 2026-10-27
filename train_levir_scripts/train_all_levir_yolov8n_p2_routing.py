@@ -43,15 +43,43 @@ def seed_everything(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def validate_split(data_yaml: Path) -> None:
+def validate_split(data_yaml: Path, source_root: Path | None = None) -> None:
+    """Reject incomplete or stale image/label links after an SSD remount."""
     import yaml
 
     payload = yaml.safe_load(data_yaml.read_text(encoding="utf-8"))
     root = Path(payload["path"])
+    expected_source = source_root.resolve() if source_root is not None else None
     for split, expected in PUBLISHED_COUNTS.items():
-        count = sum(path.suffix.lower() == ".png" for path in (root / payload[split]).iterdir())
-        if count != expected:
-            raise ValueError(f"LEVIR {split} has {count} images; expected {expected}")
+        image_dir = root / payload[split]
+        label_dir = root / "labels" / split
+        if not image_dir.is_dir() or not label_dir.is_dir():
+            raise ValueError(f"LEVIR {split}: missing prepared images or labels directory")
+        images = sorted(p for p in image_dir.iterdir() if p.suffix.lower() == ".png")
+        labels = sorted(p for p in label_dir.iterdir() if p.suffix.lower() == ".txt")
+        if len(images) != expected or len(labels) != expected:
+            raise ValueError(
+                f"LEVIR {split}: expected {expected} images AND labels, "
+                f"got {len(images)} and {len(labels)}"
+            )
+        if {p.stem for p in images} != {p.stem for p in labels}:
+            raise ValueError(f"LEVIR {split}: image/label stems mismatch")
+        for path in (*images, *labels):
+            # is_file follows symlinks, so a dangling link is NOT accepted.
+            if not path.is_file():
+                raise ValueError(f"LEVIR {split}: broken or missing prepared file: {path}")
+            if path.suffix.lower() == ".png" and path.stat().st_size == 0:
+                raise ValueError(f"LEVIR {split}: empty image: {path}")
+            if expected_source is not None and path.is_symlink():
+                expected_folder = expected_source / (
+                    "All Images" if path.suffix.lower() == ".png" else "All Annotations"
+                )
+                try:
+                    path.resolve(strict=True).relative_to(expected_folder.resolve())
+                except (OSError, ValueError) as exc:
+                    raise ValueError(
+                        f"LEVIR {split}: symlink points outside mounted source: {path}"
+                    ) from exc
 
 
 def create_fixed_split(data_root: Path, output: Path, seed: int) -> Path:
@@ -93,10 +121,10 @@ def create_fixed_split(data_root: Path, output: Path, seed: int) -> Path:
 def prepare_fixed_split(args: argparse.Namespace) -> Path:
     data_yaml = args.dataset_root / f"levir_ship_yolo_seed{args.split_seed}" / "levir_ship.yaml"
     try:
-        validate_split(data_yaml)
+        validate_split(data_yaml, args.data_root)
     except (FileNotFoundError, KeyError, ValueError):
         data_yaml = create_fixed_split(args.data_root, data_yaml.parent, args.split_seed)
-    validate_split(data_yaml)
+    validate_split(data_yaml, args.data_root)
     return data_yaml
 
 
