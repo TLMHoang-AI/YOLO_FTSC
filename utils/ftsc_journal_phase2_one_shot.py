@@ -71,10 +71,12 @@ METRICS = {
 # Additional alpha cases are resolved via the corresponding existing alpha registry.
 HISTORICAL = {
     "levir": {
-        "H0": ("H0_p2_p3_p4_p5_nomosaic",),
-        "H1": ("H1_p2_p3_p4_nomosaic",),
-        "H2": ("H2_p2_p3_nomosaic",),
-        "H3": ("H3_p2_only_nomosaic",),
+        # HF's older levirship tree can use compact head names rather than
+        # the newer Python runner variant identifiers. Exact component only.
+        "H0": ("H0_p2_p3_p4_p5_nomosaic", "H0"),
+        "H1": ("H1_p2_p3_p4_nomosaic", "H1"),
+        "H2": ("H2_p2_p3_nomosaic", "H2"),
+        "H3": ("H3_p2_only_nomosaic", "H3"),
     },
     "tinyperson": {
         "H2_MOSAIC": ("H2_MOSAIC",),
@@ -184,8 +186,16 @@ def history_models(dataset: str) -> dict[str, tuple[Path, tuple[str, ...]]]:
         from train_levir_scripts import train_all_levir_yolov8n_p2_ftsc_head_pruning as h
         for short, aliases in HISTORICAL[dataset].items():
             actual = next((name for name in aliases if name in h.VARIANTS), None)
-            if actual is not None:
-                cases[short] = (Path(h.VARIANTS[actual]), aliases)
+            require(actual is not None, f"Head-pruning configuration missing: {short}")
+            cases[short] = (Path(h.VARIANTS[actual]), aliases)
+        # Historical cue studies live under levirship; they are NOT clean
+        # post-fusion Color/Edge cases and cannot replace the two V2 runs.
+        from train_levir_scripts import train_all_levir_yolov8n_p2_ftsc_h1_h2_nextgen as cues
+        from train_levir_scripts import train_all_levir_yolov8n_p2_ftsc_edge_stability as edges
+        cases["C_H2_LEGACY"] = (Path(cues.VARIANTS["C_H2"]), ("C_H2",))
+        cases["E_H2_LEGACY"] = (Path(cues.VARIANTS["E_H2"]), ("E_H2",))
+        for name in ("ES1", "ES2", "ES3"):
+            cases[f"{name}_LEGACY"] = (Path(edges.VARIANTS[name]), (name,))
         from train_levir_scripts import train_levir_ftsc_position_alpha_sensitivity_v1 as alpha
         # α6 refers to the canonical H2. Alpha 4/8 are only verified if the
         # historical source registry exposes a matching official YAML.
@@ -220,18 +230,54 @@ def _source_files(api: Any) -> tuple[str, list[str]]:
     return revision, files
 
 
-def _case_paths(files: list[str], aliases: tuple[str, ...], seed: int) -> list[str]:
+def _case_paths(files: list[str], aliases: tuple[str, ...], seed: int,
+                *, allowed_roots: tuple[str, ...] = ()) -> list[str]:
+    """Match only actual best.pt files under exact case/seed path components.
+
+    The old LEVIR archive uses levirship/<case>/<seed>, while matched
+    alpha reruns use their own versioned top-level namespace. Never match
+    A0_FTSC as H0 or use matching strings in unrelated dataset directories.
+    """
     import re
-    paths = set()
+
+    require(bool(aliases) and all("/" not in name for name in aliases),
+            f"Historical aliases must be path components: {aliases}")
+    paths: set[str] = set()
     for remote in files:
-        parts = PurePosixPath(remote).parts
-        if not any(p in aliases for p in parts):
+        if not remote.endswith("/weights/best.pt"):
             continue
-        for i, part in enumerate(parts):
-            m = re.fullmatch(r"seed[_-]?0*(\d+)(?:[_-].*)?", part, flags=re.I)
-            if m and int(m.group(1)) == seed and any(p in aliases for p in parts[:i]):
-                paths.add("/".join(parts[:i + 1]))
+        if allowed_roots and not any(
+            remote.startswith(root.rstrip("/") + "/") for root in allowed_roots
+        ):
+            continue
+        parts = PurePosixPath(remote).parts
+        if not any(part in aliases for part in parts):
+            continue
+        for index, part in enumerate(parts):
+            match = re.fullmatch(r"seed[_-]?0*(\d+)(?:[_-].*)?", part, flags=re.I)
+            if match and int(match.group(1)) == seed and any(
+                name in aliases for name in parts[:index]
+            ):
+                paths.add("/".join(parts[:index + 1]))
     return sorted(paths)
+
+
+def _historical_case_paths(files: list[str], dataset: str, case: str,
+                           aliases: tuple[str, ...], seed: int) -> list[str]:
+    if dataset == "levir":
+        from train_levir_scripts.train_levir_ftsc_position_alpha_sensitivity_v1 import (
+            RECOVERABLE_LIVE_NAMESPACE,
+        )
+        roots = (
+            (RECOVERABLE_LIVE_NAMESPACE,)
+            if case in {"ALPHA4_rerun", "ALPHA8_rerun"}
+            else ("levirship",)
+        )
+    else:
+        # Preserve original cross-dataset discovery until their own
+        # historical HF namespaces are individually verified.
+        roots = ()
+    return _case_paths(files, aliases, seed, allowed_roots=roots)
 
 
 def hf_file(remote: str, revision: str, token: str, cache: Path) -> Path:
@@ -733,6 +779,35 @@ def main(argv: list[str] | None = None) -> None:
     progress: dict[str, Any] = {"schema": "ftsc_journal_phase2_v1",
                                 "dataset": opt.dataset, "HF_revision": revision,
                                 "new_cases": {}, "historical_cases": {}}
+    if opt.dataset == "levir":
+        # Show the exact HF variant directory names, not silently report
+        # every old run as "absent". These names are diagnostic only, NOT
+        # architecture mappings (A0_FTSC is not head-pruning H0).
+        levir_cases = sorted({
+            PurePosixPath(name).parts[1]
+            for name in files
+            if name.startswith("levirship/") and
+            len(PurePosixPath(name).parts) >= 4 and
+            name.endswith("/weights/best.pt")
+        })
+        alpha_root = (
+            "levir_ftsc_position_alpha_historical_h2_v1_rerun_d3e60b1e59d2"
+        )
+        alpha_cases = sorted({
+            PurePosixPath(name).parts[1]
+            for name in files
+            if name.startswith(alpha_root + "/") and
+            len(PurePosixPath(name).parts) >= 4 and
+            name.endswith("/weights/best.pt")
+        })
+        progress["historical_hf_inventory"] = {
+            "main_namespace": "levirship",
+            "main_variant_directories_with_best_pt": levir_cases,
+            "alpha_namespace": alpha_root,
+            "alpha_variant_directories_with_best_pt": alpha_cases,
+        }
+        print(f"[levir] HF legacy levirship cases with best.pt: {levir_cases}", flush=True)
+        print(f"[levir] HF matched-alpha cases with best.pt: {alpha_cases}", flush=True)
     atomic_json(project / "phase2_progress.json", progress)
     # Freeze all dataset preparations before any possible training.
     prepared = {seed: _prepare_data(opt.dataset, paper, native, args, seed) for seed in SEEDS}
@@ -748,9 +823,13 @@ def main(argv: list[str] | None = None) -> None:
         for historical_seed in SEEDS:
             label = f"{historical_case}/seed_{historical_seed}"
             try:
-                candidates = _case_paths(files, aliases, historical_seed)
+                candidates = _historical_case_paths(
+                    files, opt.dataset, historical_case, aliases, historical_seed)
                 require(len(candidates) == 1,
-                        f"Historical HF source must be unique: {candidates}")
+                        f"Historical HF source for {historical_case}/seed_{historical_seed} "
+                        f"aliases={aliases} expected in "
+                        f"{'levirship or matched-alpha namespace' if opt.dataset == 'levir' else 'dataset historical namespaces'}; "
+                        f"best.pt candidates={candidates}")
                 _validate_historical_metadata(
                     candidates[0], file_set, revision, token, cache,
                     historical_case, historical_seed, historical_config, opt.dataset)
@@ -857,7 +936,8 @@ def main(argv: list[str] | None = None) -> None:
                 data_yaml, prepared_test = prepared[seed]
                 args.seed = seed
                 args.data_yaml = data_yaml
-                candidates = _case_paths(files, aliases, seed)
+                candidates = _historical_case_paths(
+                    files, opt.dataset, case, aliases, seed)
                 require(len(candidates) == 1, f"Historical candidate count {len(candidates)}: {candidates}")
                 row = _legacy_run(opt.dataset, native, args, case, seed, config,
                                   candidates[0], file_set, revision, token, cache,

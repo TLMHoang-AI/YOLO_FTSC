@@ -50,6 +50,34 @@ def test_safe_dry_check_has_frozen_registry(dataset, new_count, capsys, monkeypa
     assert len(record["new_cases"]) == len(set(record["new_cases"]))
 
 
+def test_historical_levir_namespaces_are_scoped_and_not_confused():
+    files = [
+        "levirship/H0/seed_42/weights/best.pt",
+        "levirship/H0/seed_43/weights/best.pt",
+        "levirship/A0_FTSC/seed_42/weights/best.pt",
+        "levirship/ES1/seed_42/weights/best.pt",
+        "levirship/E_H2/seed_42/weights/best.pt",
+        "tinyperson/H0/seed_42/weights/best.pt",
+        "levir_ftsc_position_alpha_historical_h2_v1_rerun_d3e60b1e59d2/"
+        "ALPHA4_rerun/seed_42/weights/best.pt",
+        "levir_ftsc_position_alpha_historical_h2_v1_rerun_d3e60b1e59d2/"
+        "ALPHA8_rerun/seed_44/weights/best.pt",
+    ]
+    assert suite._historical_case_paths(
+        files, "levir", "H0", ("H0_p2_p3_p4_p5_nomosaic", "H0"), 42
+    ) == ["levirship/H0/seed_42"]
+    assert suite._historical_case_paths(
+        files, "levir", "ES1_LEGACY", ("ES1",), 42
+    ) == ["levirship/ES1/seed_42"]
+    assert suite._historical_case_paths(
+        files, "levir", "ALPHA4_rerun", ("ALPHA4_rerun",), 42
+    ) == ["levir_ftsc_position_alpha_historical_h2_v1_rerun_d3e60b1e59d2/"
+          "ALPHA4_rerun/seed_42"]
+    assert not suite._historical_case_paths(
+        files, "levir", "H2", ("H2_p2_p3_nomosaic", "H2"), 42
+    )
+
+
 def test_exact_remote_seed_and_case_match():
     paths = [
         "tinyperson_ftsc_journal_phase2_v1/TP_PRUNE_H1_P234/seed_42_corner_sw640_sh512/weights/best.pt",
