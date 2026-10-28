@@ -295,45 +295,69 @@ def _source_id_match(candidate: Path, expected: Path) -> bool:
     return load_yaml(candidate) == load_yaml(expected)
 
 
+def _validate_historical_training_args(
+    values: dict[str, Any], *, case: str, seed: int, dataset: str,
+) -> None:
+    """Check mandatory evidence from either HF args.yaml or best.pt train_args."""
+    require(isinstance(values, dict) and "seed" in values
+            and int(values["seed"]) == seed,
+            f"Historical training seed missing/mismatched: {case}/seed_{seed}")
+    fixed = {
+        "levir": {"imgsz": 512, "batch": 8, "epochs": 100,
+                  "mosaic": 0.0, "close_mosaic": 0},
+        "tinyperson": {"imgsz": 640, "batch": 8, "epochs": 100,
+                       "mosaic": 1.0, "close_mosaic": 10},
+        "varroa": {"imgsz": 640, "batch": 4, "epochs": 100,
+                   "mosaic": 1.0, "close_mosaic": 10},
+    }[dataset]
+    for key, expected in fixed.items():
+        actual = values.get(key)
+        require(type(actual) in (int, float) and actual == expected,
+                f"Historical training recipe mismatch {case}/seed_{seed}: "
+                f"{key}={actual!r}, expected {expected!r}")
+    require(values.get("deterministic") is True,
+            f"Historical deterministic flag missing: {case}/seed_{seed}")
+    data_source = str(values.get("data", "")).lower()
+    require(dataset in data_source or
+            (dataset == "levir" and "levir" in data_source),
+            f"Historical dataset identity missing: {case}/seed_{seed}")
+    require(str(values.get("optimizer", "")) in ("auto", "AdamW"),
+            f"Historical optimizer provenance missing/mismatched: {case}/seed_{seed}")
+
+
 def _validate_historical_metadata(root: str, files: set[str], revision: str, token: str,
                                   cache: Path, case: str, seed: int,
                                   config: Path, dataset: str) -> dict[str, Any]:
+    """Inspect small historical metadata. Old runners did NOT save config.yaml.
+
+    The full checkpoint's embedded model.yaml and train_args are validated by
+    _legacy_run after downloading best.pt; absent optional outer metadata is
+    not itself evidence of an invalid trained checkpoint.
+    """
     config_remote, args_remote = (f"{root}/{name}" for name in ("config.yaml", "args.yaml"))
-    require(config_remote in files and args_remote in files,
-            f"Unverifiable historical case {case}/seed_{seed}: archived YAML/args missing")
-    cfg_file = hf_file(config_remote, revision, token, cache)
-    args_file = hf_file(args_remote, revision, token, cache)
-    require(_source_id_match(cfg_file, config),
-            f"Archived historical config differs: {case}/seed_{seed}")
-    import yaml
-    saved = yaml.safe_load(args_file.read_text(encoding="utf-8"))
-    require(isinstance(saved, dict) and int(saved.get("seed", -1)) == seed,
-            f"Historical checkpoint seed unverified: {case}/{seed}")
-    fixed = {
-        "levir": {"imgsz": 512, "batch": 8, "epochs": 100,
-                  "mosaic": 0., "close_mosaic": 0},
-        "tinyperson": {"imgsz": 640, "batch": 8, "epochs": 100,
-                       "mosaic": 1., "close_mosaic": 10},
-        "varroa": {"imgsz": 640, "batch": 4, "epochs": 100,
-                   "mosaic": 1., "close_mosaic": 10},
-    }[dataset]
-    for key, expected in fixed.items():
-        actual = saved.get(key)
-        require(isinstance(actual, (int, float)) and not isinstance(actual, bool)
-                and actual == expected,
-                f"Historical training contract mismatch {case}/{seed}: {key}={actual!r}")
-    require(saved.get("deterministic") is True,
-            f"Historical deterministic training provenance missing: {case}/{seed}")
-    data_name = str(saved.get("data", "")).lower()
-    require({"levir": "levir", "tinyperson": "tinyperson",
-             "varroa": "varroa"}[dataset] in data_name,
-            f"Historical dataset provenance mismatch: {case}/{seed}")
-    require(str(saved.get("optimizer", "")) in ("auto", "AdamW"),
-            f"Historical optimizer provenance unknown: {case}/{seed}")
-    return {"source_prefix": root, "model_yaml_sha256": sha256(config),
-            "args_sha256": sha256(args_file), "seed": seed,
-            "checkpoint_origin": "HF_HISTORICAL_REEVALUATION",
-            "historical_dataset_content_sha": "UNVERIFIED_IF_NOT_ARCHIVED"}
+    recorded: dict[str, Any] = {
+        "source_prefix": root,
+        "expected_model_yaml_sha256": sha256(config),
+        "seed": seed,
+        "checkpoint_origin": "HF_HISTORICAL_REEVALUATION",
+        "historical_dataset_content_sha": "UNVERIFIED_IF_NOT_ARCHIVED",
+        "config_source": "HF_CONFIG_YAML" if config_remote in files else "PENDING_EMBEDDED_MODEL_YAML",
+        "args_source": "HF_ARGS_YAML" if args_remote in files else "PENDING_EMBEDDED_TRAIN_ARGS",
+    }
+    if config_remote in files:
+        cfg_file = hf_file(config_remote, revision, token, cache)
+        require(_source_id_match(cfg_file, config),
+                f"Archived historical config differs: {case}/seed_{seed}")
+        recorded["archived_config_sha256"] = sha256(cfg_file)
+    if args_remote in files:
+        import yaml
+        args_file = hf_file(args_remote, revision, token, cache)
+        saved = yaml.safe_load(args_file.read_text(encoding="utf-8"))
+        _validate_historical_training_args(saved, case=case, seed=seed, dataset=dataset)
+        recorded["archived_args_sha256"] = sha256(args_file)
+    return recorded
+
+
 
 
 def record_evaluation_environment(run_dir: Path, dataset: str, args: Any) -> None:
@@ -610,27 +634,71 @@ def _legacy_run(dataset: str, native: Any, args: Any, case: str, seed: int,
     else:
         best.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(downloaded, best)
-    for name in ("config.yaml", "args.yaml"):
-        source = hf_file(remote + "/" + name, revision, token, cache)
-        dest = run_dir / name
-        if dest.is_file():
-            require(sha256(dest) == sha256(source), f"Historical source conflict: {dest}")
-        else:
-            shutil.copy2(source, dest)
     from ultralytics import YOLO
     from utils.ftsc_paper_preflight import layers, canonical_ftsc
+    import yaml
+
     loaded = YOLO(best)
-    head = loaded.model.model[-1]
     expected_config = load_yaml(config)
+    embedded_config = loaded.model.yaml
+    require(isinstance(embedded_config, dict) and
+            all(key in embedded_config for key in ("backbone", "head", "ftsc", "nc")),
+            f"Historical checkpoint lacks embedded architectural YAML: {case}/{seed}")
+    head = loaded.model.model[-1]
     require(tuple(head.f) == tuple(layers(expected_config)[-1][0]),
-            f"Historical checkpoint Detect tap mismatch: {case}/{seed}")
-    require(layers(loaded.model.yaml) == layers(expected_config)
-            and canonical_ftsc(loaded.model.yaml) == canonical_ftsc(expected_config),
-            f"Historical checkpoint architecture/FTSC differs from source: {case}/{seed}")
-    embedded = loaded.ckpt.get("train_args", {}) if isinstance(loaded.ckpt, dict) else {}
-    require(isinstance(embedded, dict) and "seed" in embedded
-            and int(embedded["seed"]) == seed,
-            f"Historical best.pt embedded seed mismatch: {case}/{seed}")
+            f"Historical checkpoint Detect taps differ from source: {case}/{seed}")
+    require(layers(embedded_config) == layers(expected_config)
+            and canonical_ftsc(embedded_config) == canonical_ftsc(expected_config)
+            and embedded_config["nc"] == expected_config["nc"],
+            f"Historical checkpoint graph/FTSC/class count differs: {case}/{seed}")
+    for key in ("depth_multiple", "width_multiple", "scales"):
+        if key in expected_config:
+            require(embedded_config.get(key) == expected_config[key],
+                    f"Historical checkpoint architectural field differs: {key} ({case}/{seed})")
+    embedded = loaded.ckpt.get("train_args") if isinstance(loaded.ckpt, dict) else None
+    _validate_historical_training_args(
+        embedded, case=case, seed=seed, dataset=dataset)
+
+    # Older dataset runners archived best.pt + args.yaml but did not create a
+    # standalone config.yaml. Source the missing YAML from the VERIFIED best.pt
+    # rather than falsely rejecting every checkpoint. These exports belong to
+    # the isolated evaluation folder only; HF source remains immutable.
+    for name, inferred in (
+        ("config.yaml", embedded_config),
+        ("args.yaml", embedded),
+    ):
+        remote_file = f"{remote}/{name}"
+        destination = run_dir / name
+        if remote_file in files:
+            archived = hf_file(remote_file, revision, token, cache)
+            if name == "config.yaml":
+                require(_source_id_match(archived, config),
+                        f"Archived historical config differs: {case}/{seed}")
+            else:
+                archived_args = yaml.safe_load(archived.read_text(encoding="utf-8"))
+                _validate_historical_training_args(
+                    archived_args, case=case, seed=seed, dataset=dataset)
+                for critical in ("seed", "epochs", "batch", "imgsz", "optimizer",
+                                 "deterministic", "mosaic", "close_mosaic"):
+                    require(archived_args.get(critical) == embedded.get(critical),
+                            f"HF args.yaml / checkpoint training-arg mismatch: "
+                            f"{critical} ({case}/{seed})")
+            if destination.exists():
+                require(sha256(destination) == sha256(archived),
+                        f"Historical metadata collision: {destination}")
+            else:
+                shutil.copy2(archived, destination)
+        else:
+            encoded = yaml.safe_dump(
+                json.loads(json.dumps(inferred)), sort_keys=True,
+                allow_unicode=True)
+            if destination.exists():
+                require(destination.read_text(encoding="utf-8") == encoded,
+                        f"Previously recovered historical metadata drift: {destination}")
+            else:
+                destination.write_text(encoded, encoding="utf-8")
+    source_info["checkpoint_embedded_args_verified"] = True
+    source_info["checkpoint_embedded_graph_verified"] = True
     source_info.update(
         source_checkpoint_sha256=sha256(best), source_revision=revision,
         source_remote_best=best_remote, evaluation_graph="HISTORICAL_UNMODIFIED")
@@ -830,13 +898,21 @@ def main(argv: list[str] | None = None) -> None:
                         f"aliases={aliases} expected in "
                         f"{'levirship or matched-alpha namespace' if opt.dataset == 'levir' else 'dataset historical namespaces'}; "
                         f"best.pt candidates={candidates}")
-                _validate_historical_metadata(
+                candidate_metadata = _validate_historical_metadata(
                     candidates[0], file_set, revision, token, cache,
                     historical_case, historical_seed, historical_config, opt.dataset)
                 require(f"{candidates[0]}/weights/best.pt" in file_set,
                         f"Historical HF best.pt missing: {candidates[0]}")
+                needs_checkpoint = any(
+                    str(candidate_metadata[key]).startswith("PENDING_")
+                    for key in ("config_source", "args_source")
+                )
                 progress["historical_precheck"][label] = {
-                    "status": "SOURCE_METADATA_PRESENT", "source": candidates[0]}
+                    "status": ("CHECKPOINT_PROVENANCE_REQUIRED" if needs_checkpoint
+                               else "SOURCE_METADATA_PRESENT"),
+                    "source": candidates[0],
+                    "config_source": candidate_metadata["config_source"],
+                    "args_source": candidate_metadata["args_source"]}
             except Exception as error:
                 progress["historical_precheck"][label] = {
                     "status": "BLOCKED_FOR_HISTORICAL_TABLE",
@@ -845,10 +921,18 @@ def main(argv: list[str] | None = None) -> None:
     count_blocked = sum(
         row["status"] == "BLOCKED_FOR_HISTORICAL_TABLE"
         for row in progress["historical_precheck"].values())
-    print(f"[{opt.dataset}] Historical source precheck: "
-          f"{len(progress['historical_precheck']) - count_blocked} candidates found, "
-          f"{count_blocked} unresolved; no historical training allowed.",
+    count_candidates = len(progress["historical_precheck"]) - count_blocked
+    count_checkpoint_pending = sum(
+        row["status"] == "CHECKPOINT_PROVENANCE_REQUIRED"
+        for row in progress["historical_precheck"].values())
+    print(f"[{opt.dataset}] Historical discovery: {count_candidates} exact best.pt "
+          f"candidates, {count_checkpoint_pending} need embedded checkpoint metadata, "
+          f"{count_blocked} blocked in metadata precheck; no historical training allowed.",
           flush=True)
+    for label, row in progress["historical_precheck"].items():
+        if row["status"] == "BLOCKED_FOR_HISTORICAL_TABLE":
+            print(f"[{opt.dataset}] historical precheck BLOCKED {label}: "
+                  f"{row['reason']}", flush=True)
 
     for case, spec in paper.CASES.items():
         progress["new_cases"][case] = {}
@@ -948,15 +1032,34 @@ def main(argv: list[str] | None = None) -> None:
                     Path(row["run_dir"]), archive, dataset_slug, case, seed,
                     files, revision, token, cache, opt.dataset)
                 progress["historical_cases"][case][str(seed)] = row
+                print(f"[{opt.dataset}] HISTORICAL {case}/seed_{seed}: "
+                      f"{row['status']}", flush=True)
             except Exception as exc:
                 progress["historical_cases"][case][str(seed)] = {
                     "status": "BLOCKED_UNVERIFIED",
                     "reason": f"{type(exc).__name__}: {exc}"}
+                print(f"[{opt.dataset}] HISTORICAL BLOCKED {case}/seed_{seed}: "
+                      f"{type(exc).__name__}: {exc}", flush=True)
             atomic_json(project / "phase2_progress.json", progress)
     progress["new_aggregates"] = _aggregate(opt.dataset, project, progress["new_cases"], "new")
     progress["historical_aggregates"] = _aggregate(opt.dataset, project, progress["historical_cases"], "historical")
     atomic_json(project / "phase2_progress.json", progress)
-    print(json.dumps({"dataset": opt.dataset, "status": "DONE_WITH_RECORDED_BLOCKERS",
+    historical_failed = sum(
+        record.get("status") == "BLOCKED_UNVERIFIED"
+        for cases in progress["historical_cases"].values()
+        for record in cases.values()
+    )
+    historical_completed = sum(
+        record.get("status") in ("HISTORICAL_PUBLISHED", "HISTORICAL_VERIFIED_ON_HF")
+        for cases in progress["historical_cases"].values()
+        for record in cases.values()
+    )
+    final_status = (
+        "DONE_WITH_RECORDED_BLOCKERS" if historical_failed else "DONE"
+    )
+    print(json.dumps({"dataset": opt.dataset, "status": final_status,
+                      "historical_completed": historical_completed,
+                      "historical_blocked": historical_failed,
                       "progress_file": str(project / "phase2_progress.json"),
                       "new_cases": list(paper.CASES),
                       "historical_cases": list(historical)}, indent=2), flush=True)
