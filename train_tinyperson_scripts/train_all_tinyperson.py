@@ -238,9 +238,6 @@ def prepare_test_set(data_root: Path, output_dir: Path) -> Path:
 def prepare_seed_dataset(data_root: Path, output_dir: Path, test_out_dir: Path, seed: int) -> Path:
     """Prepare official corner crops, splitting by original image rather than crop."""
     seed_dir = output_dir / f"tinyperson_seed_{seed}_corner_sw640_sh512"
-    if (seed_dir / "images/train").exists() and (seed_dir / "labels/train").exists():
-        print(f"Dataset for seed {seed} already prepared.", flush=True)
-        return seed_dir
 
     print(f"Preparing dataset split for seed {seed}...", flush=True)
     for split in ("train", "val"):
@@ -266,6 +263,31 @@ def prepare_seed_dataset(data_root: Path, output_dir: Path, test_out_dir: Path, 
     random.Random(seed).shuffle(source_names)
     val_count = max(1, int(len(source_names) * 0.1))
     splits = {"val": source_names[:val_count], "train": source_names[val_count:]}
+
+    # An interrupted crop pass leaves directories behind. Reuse only a full
+    # manifest matching this seed's original-image split and every output pair.
+    expected_manifest = {
+        split: [{"image_id": info["id"], "file_name": name, "corner": info["corner"]}
+                for name in names for info in by_file_name[name]]
+        for split, names in splits.items()
+    }
+    try:
+        cached_manifest = json.loads((seed_dir / "corner_manifest.json").read_text(encoding="utf-8"))
+        cache_valid = (seed_dir / "tinyperson.yaml").is_file() and cached_manifest == expected_manifest
+        for split, records in expected_manifest.items():
+            for kind, suffix in (("images", ".jpg"), ("labels", ".txt")):
+                folder = seed_dir / kind / split
+                expected_names = {f"img_{record['image_id']}{suffix}" for record in records}
+                cache_valid = cache_valid and {p.name for p in folder.iterdir()} == expected_names
+                cache_valid = cache_valid and all(
+                    (folder / name).is_file() and
+                    (kind == "labels" or (folder / name).stat().st_size > 0)
+                    for name in expected_names)
+        if cache_valid:
+            print(f"Dataset for seed {seed} already prepared and verified.", flush=True)
+            return seed_dir
+    except (OSError, ValueError, TypeError):
+        pass
 
     split_manifest = {}
     source_root = train_image_root(data_root)
