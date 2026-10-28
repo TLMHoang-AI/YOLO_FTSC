@@ -2,9 +2,11 @@
 """FTSC paper Phase 2: single-invocation, HF-first dataset-native completion.
 
 One invocation owns the entire lifecycle. No phase switches. The 10 NEW paper
-cases may train/resume; historical cases may ONLY restore and evaluate. Remote
-failure, conflicting checkpoints or unverifiable provenance NEVER authorize
-training. Isolated paper namespace; originals are never overwritten.
+cases may train/resume; original historical checkpoints are restore/evaluate
+only. Explicitly approved missing LEVIR originals may be reconstructed as
+NEW isolated RECON_* cohorts, never relabeled historical. HF failure, partial
+artifacts, conflicting checkpoints and unverifiable provenance NEVER authorize
+training. Original archived results and checkpoints are never overwritten.
 
 No network / training at import or in --check mode.
 """
@@ -262,21 +264,30 @@ def _case_paths(files: list[str], aliases: tuple[str, ...], seed: int,
     return sorted(paths)
 
 
-def _historical_case_paths(files: list[str], dataset: str, case: str,
-                           aliases: tuple[str, ...], seed: int) -> list[str]:
+def _historical_roots(dataset: str) -> tuple[str, str]:
+    """Return authoritative HF namespaces of ORIGINAL training checkpoints.
+
+    Never search portability/fullmetric/journal namespaces as substitutes.
+    They can contain metrics or checkpoint copies with different provenance.
+    """
     if dataset == "levir":
         from train_levir_scripts.train_levir_ftsc_position_alpha_sensitivity_v1 import (
             RECOVERABLE_LIVE_NAMESPACE,
         )
-        roots = (
-            (RECOVERABLE_LIVE_NAMESPACE,)
-            if case in {"ALPHA4_rerun", "ALPHA8_rerun"}
-            else ("levirship",)
-        )
-    else:
-        # Preserve original cross-dataset discovery until their own
-        # historical HF namespaces are individually verified.
-        roots = ()
+        return "levirship", RECOVERABLE_LIVE_NAMESPACE
+    if dataset == "tinyperson":
+        from train_tinyperson_scripts import train_tinyperson_ftsc_alpha_sensitivity_v1 as alpha
+        return "tinyperson", alpha.NAMESPACE
+    if dataset == "varroa":
+        from train_levir_scripts import train_varroa_ftsc_alpha_sensitivity_v1 as alpha
+        return "varroa", alpha.NAMESPACE
+    raise ValueError(f"Unsupported historical dataset: {dataset}")
+
+
+def _historical_case_paths(files: list[str], dataset: str, case: str,
+                           aliases: tuple[str, ...], seed: int) -> list[str]:
+    legacy_root, alpha_root = _historical_roots(dataset)
+    roots = (alpha_root,) if case in {"ALPHA4_rerun", "ALPHA8_rerun"} else (legacy_root,)
     return _case_paths(files, aliases, seed, allowed_roots=roots)
 
 
@@ -457,8 +468,9 @@ def _prepare_data(dataset: str, paper: Any, native: Any, args: Any,
 
 
 def _new_expected_contract(paper: Any, dataset: str, args: Any, case: str,
-                           seed: int, data_yaml: Path) -> dict[str, Any]:
-    spec = paper.CASES[case]
+                           seed: int, data_yaml: Path,
+                           spec_override: Any | None = None) -> dict[str, Any]:
+    spec = spec_override if spec_override is not None else paper.CASES[case]
     if dataset == "levir":
         kwargs = paper.train_kwargs(args, data_yaml, seed)
     elif dataset == "tinyperson":
@@ -724,6 +736,102 @@ def _legacy_run(dataset: str, native: Any, args: Any, case: str, seed: int,
             "run_dir": str(run_dir), "source": remote}
 
 
+def _reconstruct_missing_levir_seed(
+    *, historical_case: str, seed: int, args: Any, paper: Any, native: Any,
+    data_yaml: Path, project: Path, api: Any, archive: HFResultArchive,
+    token: str, cache: Path, dataset_slug: str,
+) -> dict[str, Any]:
+    """Train only a genuinely missing LEVIR case, never an invalid historical one.
+
+    Fresh and interrupted reconstructed runs are isolated from all historical
+    references. Repeated Run All restores them from a verified HF marker
+    before calling the same hardened source training runner.
+    """
+    from train_levir_scripts import train_levir_ftsc_reconstructed_missing_v1 as recon
+
+    require(historical_case in recon.RECON_CASE_IDS,
+            f"Historical case not approved for reconstruction: {historical_case}")
+    case = recon.RECON_CASE_IDS[historical_case]
+    spec = recon.CASES[case]
+    run_dir = _run_path("levir", args, spec, seed)
+    contract = _new_expected_contract(
+        paper, "levir", args, case, seed, data_yaml, spec_override=spec)
+    revision, remote_files = _source_files(api)
+    remote_set = set(remote_files)
+    expected_remote = f"{dataset_slug}/{case}/{run_dir.name}"
+    existing = _case_paths(remote_files, (case,), seed)
+    if existing:
+        require(existing == [expected_remote],
+                f"Reconstruction checkpoint collision: {existing}")
+        require(f"{expected_remote}/upload_complete.json" in remote_set,
+                f"Incomplete HF reconstruction upload; do not retrain: {expected_remote}")
+        _restore_new(
+            run_dir, expected_remote, revision, token, cache, contract,
+            remote_set, "levir")
+    # Catch incomplete uploads even if best.pt itself is not yet on HF.
+    partial = [name for name in remote_files
+               if name.startswith(expected_remote + "/")]
+    require(not partial or bool(existing),
+            f"Incomplete remote reconstruction: {expected_remote}")
+
+    args.case, args.seed, args.data_yaml = case, seed, data_yaml
+    args.confirm_run = True
+    completed = False
+    if validate_completion(run_dir):
+        require(json_load(run_dir / RUN_CONTRACT) == contract,
+                f"Reconstructed run contract differs: {run_dir}")
+        verify_checkpoint_graph(
+            run_dir / "weights/best.pt", config=spec.yaml,
+            expected_taps=spec.detect_from, expected_strides=spec.strides,
+            expected_seed=seed)
+        try:
+            _metric_file(run_dir, "levir")
+            completed = True
+        except RuntimeError:
+            pass
+    if not completed:
+        result_dir = recon.run_one(args)
+        require(result_dir == run_dir and validate_completion(run_dir),
+                f"Reconstructed LEVIR training did not complete safely: {run_dir}")
+        _native_evaluate("levir", native, args, run_dir, data_yaml, None)
+    _metric_file(run_dir, "levir")
+    record_evaluation_environment(run_dir, "levir", args)
+    revision, remote_files = _source_files(api)
+    status = _archive_new(
+        run_dir, archive, dataset_slug, case, seed, remote_files,
+        revision, token, cache, "levir")
+    return {
+        "status": status,
+        "cohort": "NEW_RECONSTRUCTED_HISTORICAL_PROTOCOL_NOT_ORIGINAL",
+        "historical_case": historical_case,
+        "reconstruction_case": case,
+        "seed": seed,
+        "run_dir": str(run_dir),
+        "checkpoint_sha256": sha256(run_dir / "weights/best.pt"),
+        "original_hf_checkpoint": "VERIFIED_ABSENT_AT_DISCOVERY",
+    }
+
+
+def _historical_seed_has_partial_artifacts(
+    files: list[str], dataset: str, aliases: tuple[str, ...], seed: int,
+) -> list[str]:
+    """Do not train when an original HF seed folder exists without best.pt."""
+    import re
+
+    legacy_root, _ = _historical_roots(dataset)
+    partial: set[str] = set()
+    for remote in files:
+        parts = PurePosixPath(remote).parts
+        if not parts or parts[0] != legacy_root:
+            continue
+        for index in range(2, len(parts)):
+            match = re.fullmatch(r"seed[_-]?0*(\d+)(?:[_-].*)?", parts[index], flags=re.I)
+            if (match and int(match.group(1)) == seed and
+                    any(x in aliases for x in parts[1:index])):
+                partial.add("/".join(parts[:index + 1]))
+    return sorted(partial)
+
+
 def _aggregate(dataset: str, project: Path, table: dict[str, Any],
                cohort: str) -> dict[str, Any]:
     result: dict[str, Any] = {}
@@ -847,35 +955,34 @@ def main(argv: list[str] | None = None) -> None:
     progress: dict[str, Any] = {"schema": "ftsc_journal_phase2_v1",
                                 "dataset": opt.dataset, "HF_revision": revision,
                                 "new_cases": {}, "historical_cases": {}}
-    if opt.dataset == "levir":
-        # Show the exact HF variant directory names, not silently report
-        # every old run as "absent". These names are diagnostic only, NOT
-        # architecture mappings (A0_FTSC is not head-pruning H0).
-        levir_cases = sorted({
-            PurePosixPath(name).parts[1]
-            for name in files
-            if name.startswith("levirship/") and
-            len(PurePosixPath(name).parts) >= 4 and
-            name.endswith("/weights/best.pt")
-        })
-        alpha_root = (
-            "levir_ftsc_position_alpha_historical_h2_v1_rerun_d3e60b1e59d2"
-        )
-        alpha_cases = sorted({
-            PurePosixPath(name).parts[1]
-            for name in files
-            if name.startswith(alpha_root + "/") and
-            len(PurePosixPath(name).parts) >= 4 and
-            name.endswith("/weights/best.pt")
-        })
-        progress["historical_hf_inventory"] = {
-            "main_namespace": "levirship",
-            "main_variant_directories_with_best_pt": levir_cases,
-            "alpha_namespace": alpha_root,
-            "alpha_variant_directories_with_best_pt": alpha_cases,
-        }
-        print(f"[levir] HF legacy levirship cases with best.pt: {levir_cases}", flush=True)
-        print(f"[levir] HF matched-alpha cases with best.pt: {alpha_cases}", flush=True)
+    # The real archives for the two older datasets have top-level
+    # tinyperson/ and varroa/ trees, distinct from the journal and alpha
+    # namespaces. Expose what HF ACTUALLY has before deciding any reuse.
+    legacy_root, alpha_root = _historical_roots(opt.dataset)
+
+    def archived_cases(root_name: str) -> dict[str, list[str]]:
+        seeds_by_case: dict[str, set[str]] = {}
+        for remote in files:
+            parts = PurePosixPath(remote).parts
+            if (len(parts) >= 5 and parts[0] == root_name and
+                    parts[-2:] == ("weights", "best.pt")):
+                seeds_by_case.setdefault(parts[1], set()).add(parts[2])
+        return {name: sorted(seeds) for name, seeds in sorted(seeds_by_case.items())}
+
+    legacy_inventory = archived_cases(legacy_root)
+    alpha_inventory = archived_cases(alpha_root)
+    progress["historical_hf_inventory"] = {
+        "main_namespace": legacy_root,
+        "main_variant_directories_with_best_pt": list(legacy_inventory),
+        "main_case_seed_folders_with_best_pt": legacy_inventory,
+        "alpha_namespace": alpha_root,
+        "alpha_variant_directories_with_best_pt": list(alpha_inventory),
+        "alpha_case_seed_folders_with_best_pt": alpha_inventory,
+    }
+    print(f"[{opt.dataset}] HF legacy {legacy_root} cases with best.pt: "
+          f"{list(legacy_inventory)}", flush=True)
+    print(f"[{opt.dataset}] HF matched-alpha {alpha_root} cases with best.pt: "
+          f"{list(alpha_inventory)}", flush=True)
     atomic_json(project / "phase2_progress.json", progress)
     # Freeze all dataset preparations before any possible training.
     prepared = {seed: _prepare_data(opt.dataset, paper, native, args, seed) for seed in SEEDS}
@@ -887,16 +994,25 @@ def main(argv: list[str] | None = None) -> None:
     # Missing historical provenance is reported, NEVER replaced by fresh
     # training. It does not prevent independently valid NEW experiments.
     progress["historical_precheck"] = {}
+    if opt.dataset == "levir":
+        from train_levir_scripts import train_levir_ftsc_reconstructed_missing_v1 as recon
+        progress["reconstruction_registry"] = recon.source_preflight()
+        progress["reconstructed_cases"] = {}
+        print(f"[levir] Missing historical checkpoints can be rebuilt in "
+              f"SEPARATE RECON_* cohorts: {list(recon.RECON_CASE_IDS)}", flush=True)
     for historical_case, (historical_config, aliases) in historical.items():
         for historical_seed in SEEDS:
             label = f"{historical_case}/seed_{historical_seed}"
             try:
                 candidates = _historical_case_paths(
                     files, opt.dataset, historical_case, aliases, historical_seed)
+                expected_legacy_root, expected_alpha_root = _historical_roots(opt.dataset)
+                expected_root = (expected_alpha_root
+                                 if historical_case in {"ALPHA4_rerun", "ALPHA8_rerun"}
+                                 else expected_legacy_root)
                 require(len(candidates) == 1,
                         f"Historical HF source for {historical_case}/seed_{historical_seed} "
-                        f"aliases={aliases} expected in "
-                        f"{'levirship or matched-alpha namespace' if opt.dataset == 'levir' else 'dataset historical namespaces'}; "
+                        f"aliases={aliases} expected under {expected_root}/; "
                         f"best.pt candidates={candidates}")
                 candidate_metadata = _validate_historical_metadata(
                     candidates[0], file_set, revision, token, cache,
@@ -927,7 +1043,9 @@ def main(argv: list[str] | None = None) -> None:
         for row in progress["historical_precheck"].values())
     print(f"[{opt.dataset}] Historical discovery: {count_candidates} exact best.pt "
           f"candidates, {count_checkpoint_pending} need embedded checkpoint metadata, "
-          f"{count_blocked} blocked in metadata precheck; no historical training allowed.",
+          f"{count_blocked} blocked in metadata precheck; "
+          f"original checkpoints remain restore-only; "
+          f"LEVIR missing-original reconstructions are separate NEW trainings.",
           flush=True)
     for label, row in progress["historical_precheck"].items():
         if row["status"] == "BLOCKED_FOR_HISTORICAL_TABLE":
@@ -1009,40 +1127,88 @@ def main(argv: list[str] | None = None) -> None:
                 raise
             atomic_json(project / "phase2_progress.json", progress)
 
-    # Historical runs are evaluation-only and NEVER train; missing or ambiguous
-    # historical source produces an explicit BLOCKED record, not a new run.
+    # Historical original checkpoints are ALWAYS restore/evaluate-only.
+    # LEVIR user-approved fallback: when an original seed really does not
+    # exist in its HF source namespace, reconstruct its original recipe in a
+    # DIFFERENT immutable RECON_* run and HF path. Never call it historical.
     revision, files = _source_files(api)
     file_set = set(files)
     for case, (config, aliases) in historical.items():
         progress["historical_cases"][case] = {}
+        if opt.dataset == "levir" and case in recon.RECON_CASE_IDS:
+            progress["reconstructed_cases"][case] = {}
         for seed in SEEDS:
+            reconstructing = False
             try:
                 data_yaml, prepared_test = prepared[seed]
                 args.seed = seed
                 args.data_yaml = data_yaml
                 candidates = _historical_case_paths(
                     files, opt.dataset, case, aliases, seed)
-                require(len(candidates) == 1, f"Historical candidate count {len(candidates)}: {candidates}")
-                row = _legacy_run(opt.dataset, native, args, case, seed, config,
-                                  candidates[0], file_set, revision, token, cache,
-                                  data_yaml, prepared_test)
-                revision, files = _source_files(api)
-                file_set = set(files)
-                row["status"] = _archive_historical(
-                    Path(row["run_dir"]), archive, dataset_slug, case, seed,
-                    files, revision, token, cache, opt.dataset)
-                progress["historical_cases"][case][str(seed)] = row
-                print(f"[{opt.dataset}] HISTORICAL {case}/seed_{seed}: "
-                      f"{row['status']}", flush=True)
+                if (opt.dataset == "levir" and not candidates
+                        and case in recon.RECON_CASE_IDS):
+                    partial_origins = _historical_seed_has_partial_artifacts(
+                        files, opt.dataset, aliases, seed)
+                    require(not partial_origins,
+                            f"Original HF historical archive is incomplete; "
+                            f"will NOT retrain over it: {partial_origins}")
+                    # A successful authenticated HF inventory is REQUIRED;
+                    # unknown HF status, source mismatch and duplicate source
+                    # candidates all fail closed and never authorize training.
+                    reconstructing = True
+                    rebuilt = _reconstruct_missing_levir_seed(
+                        historical_case=case, seed=seed, args=args, paper=paper,
+                        native=native, data_yaml=data_yaml, project=project,
+                        api=api, archive=archive, token=token, cache=cache,
+                        dataset_slug=dataset_slug)
+                    progress["reconstructed_cases"][case][str(seed)] = rebuilt
+                    progress["historical_cases"][case][str(seed)] = {
+                        "status": "ORIGINAL_HF_ABSENT_RECONSTRUCTED_SEPARATELY",
+                        "reconstructed_case": rebuilt["reconstruction_case"],
+                        "reconstructed_checkpoint_sha256": rebuilt["checkpoint_sha256"],
+                    }
+                    print(f"[levir] RECONSTRUCTED {case}/seed_{seed}: "
+                          f"{rebuilt['status']} ({rebuilt['reconstruction_case']})",
+                          flush=True)
+                else:
+                    require(len(candidates) == 1,
+                            f"Historical source candidate count {len(candidates)}: "
+                            f"{candidates}")
+                    row = _legacy_run(opt.dataset, native, args, case, seed, config,
+                                      candidates[0], file_set, revision, token, cache,
+                                      data_yaml, prepared_test)
+                    revision, files = _source_files(api)
+                    file_set = set(files)
+                    row["status"] = _archive_historical(
+                        Path(row["run_dir"]), archive, dataset_slug, case, seed,
+                        files, revision, token, cache, opt.dataset)
+                    progress["historical_cases"][case][str(seed)] = row
+                    print(f"[{opt.dataset}] HISTORICAL {case}/seed_{seed}: "
+                          f"{row['status']}", flush=True)
             except Exception as exc:
+                if reconstructing:
+                    progress["reconstructed_cases"][case][str(seed)] = {
+                        "status": "BLOCKED_RECONSTRUCTION",
+                        "reason": f"{type(exc).__name__}: {exc}"}
                 progress["historical_cases"][case][str(seed)] = {
                     "status": "BLOCKED_UNVERIFIED",
                     "reason": f"{type(exc).__name__}: {exc}"}
                 print(f"[{opt.dataset}] HISTORICAL BLOCKED {case}/seed_{seed}: "
                       f"{type(exc).__name__}: {exc}", flush=True)
+                if reconstructing:
+                    atomic_json(project / "phase2_progress.json", progress)
+                    # On HF, data, CUDA, resume or publication error, STOP.
+                    # The next Run All must re-verify and reuse/resume artifacts.
+                    raise
             atomic_json(project / "phase2_progress.json", progress)
     progress["new_aggregates"] = _aggregate(opt.dataset, project, progress["new_cases"], "new")
     progress["historical_aggregates"] = _aggregate(opt.dataset, project, progress["historical_cases"], "historical")
+    if opt.dataset == "levir":
+        # Reconstructed models are NEW trainings, never back-filled ORIGINAL
+        # historical checkpoints. Separate CSV and JSON, even when the same
+        # model YAML and original hyperparameters were used.
+        progress["reconstructed_aggregates"] = _aggregate(
+            opt.dataset, project, progress["reconstructed_cases"], "reconstructed")
     atomic_json(project / "phase2_progress.json", progress)
     historical_failed = sum(
         record.get("status") == "BLOCKED_UNVERIFIED"
@@ -1054,12 +1220,22 @@ def main(argv: list[str] | None = None) -> None:
         for cases in progress["historical_cases"].values()
         for record in cases.values()
     )
+    reconstructed_completed = sum(
+        row.get("status") in ("PUBLISHED", "VERIFIED_ALREADY_ON_HF")
+        for rows in progress.get("reconstructed_cases", {}).values()
+        for row in rows.values()
+    )
     final_status = (
+        "DONE_WITH_RECONSTRUCTED_ORIGINALS"
+        if reconstructed_completed and not historical_failed else
+        "DONE_WITH_RECONSTRUCTION_AND_REMAINING_BLOCKERS"
+        if reconstructed_completed else
         "DONE_WITH_RECORDED_BLOCKERS" if historical_failed else "DONE"
     )
     print(json.dumps({"dataset": opt.dataset, "status": final_status,
                       "historical_completed": historical_completed,
                       "historical_blocked": historical_failed,
+                      "reconstructed_completed": reconstructed_completed,
                       "progress_file": str(project / "phase2_progress.json"),
                       "new_cases": list(paper.CASES),
                       "historical_cases": list(historical)}, indent=2), flush=True)

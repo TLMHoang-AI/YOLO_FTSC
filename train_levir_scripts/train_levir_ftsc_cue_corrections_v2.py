@@ -158,10 +158,16 @@ def model_preflight(pretrained: str | None = None, loss_backward: bool = False) 
     return reports
 
 
-def run_one(args: argparse.Namespace) -> Path:
+def run_one(
+    args: argparse.Namespace, *, registry: dict[str, CaseSpec] | None = None,
+) -> Path:
+    # An explicit isolated registry permits reproducible reconstruction of
+    # checkpoint-missing LEVIR historical cases WITHOUT widening the two
+    # original Color/Edge V2 paper cases or altering shared training logic.
+    cases = CASES if registry is None else registry
     case, seed = args.case, args.seed
-    require(case in CASES and seed in DEFAULT_SEEDS, "Expected a registered corrected case and seed")
-    spec = CASES[case]
+    require(case in cases and seed in DEFAULT_SEEDS, "Expected an authorized case and seed")
+    spec = cases[case]
     data_yaml = workflow.prepare_fixed_split(args)
     run_dir = args.project / spec.namespace / f"seed_{seed}"
     pretrained = Path(args.pretrained)

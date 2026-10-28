@@ -78,6 +78,64 @@ def test_historical_levir_namespaces_are_scoped_and_not_confused():
     )
 
 
+def test_tinyperson_historical_archive_namespaces_are_not_interchangeable():
+    """Original H2/ES1 and matched alpha runs must never alias portal/journal."""
+    files = [
+        "tinyperson/H2_MOSAIC/seed_42_corner_sw640_sh512/weights/best.pt",
+        "tinyperson/ES1_MOSAIC/seed_43_corner_sw640_sh512/weights/best.pt",
+        "tinyperson/A0_FTSC/seed_42_corner_sw640_sh512/weights/best.pt",
+        "tinyperson_ftsc_position_alpha_h2_v1/ALPHA4_rerun/"
+        "seed_42_corner_sw640_sh512/weights/best.pt",
+        "tinyperson_ftsc_position_alpha_h2_v1/ALPHA8_rerun/"
+        "seed_44_corner_sw640_sh512/weights/best.pt",
+        "tinyperson_ftsc_cross_yolo_portability_v1/H2_MOSAIC/"
+        "seed_42_corner_sw640_sh512/weights/best.pt",
+        "tinyperson_ftsc_journal_phase2_v1/TP_PRUNE_H0_P2345/"
+        "seed_42_corner_sw640_sh512/weights/best.pt",
+    ]
+    assert suite._historical_roots("tinyperson") == (
+        "tinyperson", "tinyperson_ftsc_position_alpha_h2_v1")
+    assert suite._historical_case_paths(files, "tinyperson", "H2_MOSAIC",
+                                        ("H2_MOSAIC",), 42) == [
+        "tinyperson/H2_MOSAIC/seed_42_corner_sw640_sh512"]
+    assert suite._historical_case_paths(files, "tinyperson", "ES1_MOSAIC_LEGACY",
+                                        ("ES1_MOSAIC",), 43) == [
+        "tinyperson/ES1_MOSAIC/seed_43_corner_sw640_sh512"]
+    assert suite._historical_case_paths(files, "tinyperson", "ALPHA4_rerun",
+                                        ("ALPHA4_rerun",), 42) == [
+        "tinyperson_ftsc_position_alpha_h2_v1/ALPHA4_rerun/"
+        "seed_42_corner_sw640_sh512"]
+    assert not suite._historical_case_paths(files, "tinyperson", "H2_MOSAIC",
+                                            ("H2_MOSAIC",), 44)
+
+
+def test_varroa_historical_archive_not_structural_head_pruning():
+    files = [
+        "varroa/V1_FTSC/seed_42/weights/best.pt",
+        "varroa/V2_EDGE025/seed_42/weights/best.pt",
+        "varroa/V3_COLOR/seed_43/weights/best.pt",
+        "varroa/V0_NOFTSC/seed_42/weights/best.pt",
+        "varroa_ftsc_position_alpha_h2_v1/ALPHA4_rerun/seed_44/weights/best.pt",
+        "varroa_ftsc_position_alpha_h2_v1/ALPHA8_rerun/seed_42/weights/best.pt",
+        "varroa_ftsc_journal_phase2_v1/VR_STRUCT_H2_P23/seed_42/weights/best.pt",
+        "varroa_ftsc_cross_yolo_portability_v1/V1_FTSC/seed_42/weights/best.pt",
+        "varroa_ftsc_fullmetric_recovery_v1/V1_FTSC/seed_42/weights/best.pt",
+    ]
+    assert suite._historical_roots("varroa") == (
+        "varroa", "varroa_ftsc_position_alpha_h2_v1")
+    assert suite._historical_case_paths(files, "varroa", "V1_FTSC",
+                                        ("V1_FTSC",), 42) == [
+        "varroa/V1_FTSC/seed_42"]
+    assert suite._historical_case_paths(files, "varroa", "V2_EDGE025",
+                                        ("V2_EDGE025",), 42) == [
+        "varroa/V2_EDGE025/seed_42"]
+    assert suite._historical_case_paths(files, "varroa", "ALPHA4_rerun",
+                                        ("ALPHA4_rerun",), 44) == [
+        "varroa_ftsc_position_alpha_h2_v1/ALPHA4_rerun/seed_44"]
+    assert not suite._historical_case_paths(files, "varroa", "V1_FTSC",
+                                            ("VR_STRUCT_H2_P23",), 42)
+
+
 def test_exact_remote_seed_and_case_match():
     paths = [
         "tinyperson_ftsc_journal_phase2_v1/TP_PRUNE_H1_P234/seed_42_corner_sw640_sh512/weights/best.pt",
