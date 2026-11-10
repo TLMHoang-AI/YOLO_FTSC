@@ -171,8 +171,17 @@ class Uploader:
         missing = [path for path in REQUIRED if not (run_dir / path).is_file()]
         if missing:
             raise RuntimeError(f"{variant}: refusing incomplete upload: {missing}")
-        remote = f"runs/{variant}/seed_{seed}"
-        self.retry(lambda: self.api.upload_folder(folder_path=str(run_dir), path_in_repo=remote, repo_id=self.repo_id, repo_type="dataset"))
+        if self.repo_id == "TLMHoang/FTSC_results":
+            from utils.ftsc_hf_layout import prefix, segment, seed_dir
+            if run_dir.name != seed_dir("TinyPerson", seed):
+                raise RuntimeError(f"Unexpected TinyPerson seed-run name: {run_dir.name}")
+            remote = prefix(f"TinyPerson/original_runs/{segment(variant)}/{run_dir.name}")
+        else:
+            remote = f"runs/{variant}/seed_{seed}"
+        uploaded = set(self.retry(lambda: self.api.list_repo_files(self.repo_id, repo_type="dataset")))
+        if any(name.startswith(remote + "/") for name in uploaded):
+            raise RuntimeError(f"Refusing to overwrite existing HF checkpoint run: {remote}")
+        self.retry(lambda: self.api.upload_folder(folder_path=str(run_dir), path_in_repo=remote, repo_id=self.repo_id, repo_type="dataset", ignore_patterns=["upload_complete.json", "legacy_upload_complete.json"]))
         expected = {f"{remote}/{path}" for path in REQUIRED}
         uploaded = set(self.retry(lambda: self.api.list_repo_files(self.repo_id, repo_type="dataset")))
         missing = sorted(expected - uploaded)

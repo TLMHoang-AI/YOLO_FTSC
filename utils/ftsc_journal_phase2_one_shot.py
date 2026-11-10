@@ -35,7 +35,7 @@ from utils.ftsc_paper_run_integrity import (
 )
 from utils.ftsc_paper_preflight import load_yaml, sha256
 from utils.ftsc_completion_planner import validate_six_core
-from utils.hf_result_archive import HFResultArchive
+from utils.ftsc_hf_canonical_archive import CanonicalFTSCArchive as HFResultArchive
 
 REPO_ID = "TLMHoang/FTSC_results"
 SEEDS = (42, 43, 44)
@@ -265,30 +265,56 @@ def _case_paths(files: list[str], aliases: tuple[str, ...], seed: int,
 
 
 def _historical_roots(dataset: str) -> tuple[str, str]:
-    """Return authoritative HF namespaces of ORIGINAL training checkpoints.
-
-    Never search portability/fullmetric/journal namespaces as substitutes.
-    They can contain metrics or checkpoint copies with different provenance.
-    """
-    if dataset == "levir":
-        from train_levir_scripts.train_levir_ftsc_position_alpha_sensitivity_v1 import (
-            RECOVERABLE_LIVE_NAMESPACE,
-        )
-        return "levirship", RECOVERABLE_LIVE_NAMESPACE
-    if dataset == "tinyperson":
-        from train_tinyperson_scripts import train_tinyperson_ftsc_alpha_sensitivity_v1 as alpha
-        return "tinyperson", alpha.NAMESPACE
-    if dataset == "varroa":
-        from train_levir_scripts import train_varroa_ftsc_alpha_sensitivity_v1 as alpha
-        return "varroa", alpha.NAMESPACE
-    raise ValueError(f"Unsupported historical dataset: {dataset}")
+    """Post-reorganization HF groups. Never rediscover from legacy root folders."""
+    roots = {
+        "levir": ("LEVIR-Ship/historical_reconstructions",
+                  "LEVIR-Ship/journal_experiments/alpha_sensitivity"),
+        "tinyperson": ("TinyPerson/original_runs",
+                       "TinyPerson/journal_experiments/alpha_sensitivity"),
+        "varroa": ("Varroa/original_runs",
+                   "Varroa/journal_experiments/alpha_sensitivity"),
+    }
+    if dataset not in roots:
+        raise ValueError(f"Unsupported historical dataset: {dataset}")
+    return roots[dataset]
 
 
 def _historical_case_paths(files: list[str], dataset: str, case: str,
                            aliases: tuple[str, ...], seed: int) -> list[str]:
+    """Find one exact migrated source (never compare historical vs rerun aliases)."""
+    from utils.ftsc_hf_layout import seed_dir
+    aliases = tuple(aliases)
     legacy_root, alpha_root = _historical_roots(dataset)
-    roots = (alpha_root,) if case in {"ALPHA4_rerun", "ALPHA8_rerun"} else (legacy_root,)
-    return _case_paths(files, aliases, seed, allowed_roots=roots)
+    if case in {"ALPHA4_rerun", "ALPHA8_rerun"}:
+        run_root = f"{alpha_root}/{case}"
+    elif dataset == "levir":
+        recon = {
+            "H0": "RECON_H0_V1", "H1": "RECON_H1_V1",
+            "H2": "RECON_H2_V1", "H3": "RECON_H3_V1",
+            "C_H2_LEGACY": "RECON_C_H2_LEGACY_V1",
+            "ES3_LEGACY": "RECON_ES3_LEGACY_V1",
+        }
+        if case in recon:
+            run_root = f"{legacy_root}/{recon[case]}"
+        else:
+            names = {"E_H2_LEGACY": "E_H2", "ES1_LEGACY": "ES1",
+                     "ES2_LEGACY": "ES2"}
+            if case not in names:
+                raise RuntimeError(f"No audited canonical historical path: {dataset}/{case}")
+            run_root = f"LEVIR-Ship/original_runs/{names[case]}"
+    elif dataset == "tinyperson":
+        names = {"H2_MOSAIC": "H2_MOSAIC", "ES1_MOSAIC_LEGACY": "ES1_MOSAIC"}
+        if case not in names:
+            raise RuntimeError(f"No audited TinyPerson historical path: {case}")
+        run_root = f"{legacy_root}/{names[case]}"
+    else:
+        if case not in {"V1_FTSC", "V2_EDGE025", "V3_COLOR"}:
+            raise RuntimeError(f"No audited Varroa historical path: {case}")
+        run_root = f"{legacy_root}/{case}"
+    dataset_name = {"levir": "LEVIR-Ship", "tinyperson": "TinyPerson",
+                    "varroa": "Varroa"}[dataset]
+    path = f"{run_root}/{seed_dir(dataset_name, seed)}"
+    return [path] if f"{path}/weights/best.pt" in files else []
 
 
 def hf_file(remote: str, revision: str, token: str, cache: Path) -> Path:
@@ -520,7 +546,7 @@ def _validate_partial_remote_before_retry(
 def _archive_new(run_dir: Path, archive: HFResultArchive, dataset_slug: str,
                  case: str, seed: int, existing_files: list[str], revision: str,
                  token: str, cache: Path, dataset: str) -> str:
-    prefix = f"{dataset_slug}/{case}/{run_dir.name}"
+    prefix = archive.remote_path(dataset_slug, case, run_dir.name)
     marker_remote = prefix + "/upload_complete.json"
     required = required_artifacts(dataset, historical=False)
     for relative in required:
@@ -554,7 +580,7 @@ def _archive_historical(
 ) -> str:
     required = required_artifacts(dataset, historical=True)
     variant = "historical__" + case
-    prefix = f"{dataset_slug}/{variant}/{run_dir.name}"
+    prefix = archive.remote_path(dataset_slug, variant, run_dir.name)
     marker_remote = prefix + "/upload_complete.json"
     require(all((run_dir / relative).is_file() for relative in required),
             f"Historical evaluation artifacts missing: {run_dir}")
@@ -758,8 +784,8 @@ def _reconstruct_missing_levir_seed(
         paper, "levir", args, case, seed, data_yaml, spec_override=spec)
     revision, remote_files = _source_files(api)
     remote_set = set(remote_files)
-    expected_remote = f"{dataset_slug}/{case}/{run_dir.name}"
-    existing = _case_paths(remote_files, (case,), seed)
+    expected_remote = archive.remote_path(dataset_slug, case, run_dir.name)
+    existing = ([expected_remote] if f"{expected_remote}/weights/best.pt" in remote_set else [])
     if existing:
         require(existing == [expected_remote],
                 f"Reconstruction checkpoint collision: {existing}")
@@ -1062,8 +1088,8 @@ def main(argv: list[str] | None = None) -> None:
                 data_yaml, _ = prepared[seed]
                 args.data_yaml = data_yaml
                 contract = _new_expected_contract(paper, opt.dataset, args, case, seed, data_yaml)
-                found = _case_paths(files, (case,), seed)
-                expected_remote = f"{dataset_slug}/{case}/{run_dir.name}"
+                expected_remote = archive.remote_path(dataset_slug, case, run_dir.name)
+                found = ([expected_remote] if f"{expected_remote}/weights/best.pt" in file_set else [])
                 # Exact case/seed anywhere on HF is a candidate; an unmarked or
                 # alternate namespace cannot be assumed missing.
                 if found:

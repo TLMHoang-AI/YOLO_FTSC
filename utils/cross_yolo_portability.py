@@ -378,7 +378,7 @@ def write_summaries(root: Path, rows: list[dict[str, Any]], required_metrics: tu
 
 def archive_run(*, namespace: str, family: str, case: str, seed: int, run_dir: Path, repo_id: str, required_artifacts: tuple[str, ...] = FINAL_ARTIFACTS, archive: Any | None = None) -> dict[str, Any]:
     """Explicit network action; callers must validate COMPLETE before entry."""
-    from utils.hf_result_archive import HFResultArchive
+    from utils.ftsc_hf_canonical_archive import CanonicalFTSCArchive as HFResultArchive
     archive = archive or HFResultArchive(repo_id=repo_id)
     variant, run_name = f"{family}__{case}", run_dir.name
     remote = archive.remote_path(namespace, variant, run_name)

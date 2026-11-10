@@ -8,10 +8,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from utils.hf_result_archive import (
-    DEFAULT_FTSC_SEED_REQUIRED_ARTIFACTS,
-    HFResultArchive,
-)
+from utils.hf_result_archive import DEFAULT_FTSC_SEED_REQUIRED_ARTIFACTS
+from utils.ftsc_hf_canonical_archive import CanonicalFTSCArchive as HFResultArchive
+from utils.ftsc_hf_layout import augmentation_checkpoint, augmentation_run
 
 HF_REPO_ID = "TLMHoang/FTSC_results"
 HF_REPO_TYPE = "dataset"
@@ -63,3 +62,23 @@ class FTSCResultsUploader:
 
     def required_artifact_metadata(self, run_dir: str | Path, required_artifacts: Iterable[str]) -> dict[str, Any]:
         return self._archive.required_artifact_metadata(run_dir, required_artifacts)
+
+    def restore_augmentation_checkpoint(self, *, dataset: str, case: str, seed: int,
+                                        destination: str | Path, include_predictions: bool = False) -> dict[str, Any]:
+        """Restore one audited canonical best.pt, never an ambiguous legacy alias."""
+        return self._archive.restore_augmentation_source(
+            dataset=dataset, case=case, seed=seed, destination=destination,
+            include_predictions=include_predictions,
+        )
+
+    def publish_augmentation_evaluation(self, *, dataset: str, case: str, seed: int,
+                                        metric_file: str | Path, evaluator_contract: str,
+                                        source_sha256: str | None = None,
+                                        suite: str = "capstone_aug_sixcore_v1",
+                                        dry_run: bool = True) -> dict[str, Any]:
+        """Evaluation-only publication: source checkpoint and training artifacts remain immutable."""
+        return self._archive.publish_evaluation(
+            dataset=dataset, case=case, seed=seed, metric_file=metric_file,
+            evaluator_contract=evaluator_contract, source_sha256=source_sha256,
+            suite=suite, dry_run=dry_run,
+        )

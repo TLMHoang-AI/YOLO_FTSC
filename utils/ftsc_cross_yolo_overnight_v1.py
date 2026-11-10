@@ -141,7 +141,7 @@ def main() -> None:
     check_sources()
     from huggingface_hub import HfApi, hf_hub_download
     from ultralytics.utils.downloads import attempt_download_asset
-    from utils.hf_result_archive import HFResultArchive
+    from utils.ftsc_hf_canonical_archive import CanonicalFTSCArchive as HFResultArchive
 
     archive = HFResultArchive(
         repo_id=args.hf_repo_id, token=token,
@@ -219,7 +219,7 @@ def main() -> None:
             f"Cannot archive incomplete run: {current}",
         )
         variant = f"{family}__{case}"
-        prefix = f"{namespace}/{variant}/{current.name}"
+        prefix = archive.remote_path(namespace, variant, current.name)
         marker_name = prefix + "/upload_complete.json"
         remote_files = api.list_repo_files(repo_id=args.hf_repo_id, repo_type="dataset")
         if marker_name in remote_files:

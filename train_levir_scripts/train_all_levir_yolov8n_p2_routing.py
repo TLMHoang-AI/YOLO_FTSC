@@ -322,6 +322,11 @@ class Uploader:
         self.api = HfApi(token=token)
         self.repo_id = args.hf_repo_id
         self.api.create_repo(repo_id=self.repo_id, repo_type="dataset", private=False, exist_ok=True)
+        if self.repo_id == "TLMHoang/FTSC_results":
+            from utils.ftsc_hf_layout import training_root
+            self.remote_root = training_root(Path(args.project).name)
+        else:
+            self.remote_root = "runs"
 
     @staticmethod
     def retry(operation) -> None:
@@ -337,8 +342,35 @@ class Uploader:
     def upload_run(self, run_dir: Path, variant: str, seed: int) -> None:
         if not complete(run_dir):
             raise FileNotFoundError(f"Refusing to upload incomplete run: {run_dir}")
+        if self.repo_id == "TLMHoang/FTSC_results":
+            from utils.ftsc_hf_layout import prefix, segment
+            if run_dir.name != f"seed_{seed}":
+                raise RuntimeError(f"Unexpected LEVIR seed-run name: {run_dir.name}")
+            remote = prefix(f"{self.remote_root}/{segment(variant)}/{run_dir.name}")
+        else:
+            remote = f"runs/{variant}/seed_{seed}"
+        remote_files = set(self.api.list_repo_files(self.repo_id, repo_type="dataset"))
+        if any(name.startswith(remote + "/") for name in remote_files):
+            raise RuntimeError(f"Refusing to overwrite existing HF checkpoint run: {remote}")
         self.retry(lambda: self.api.upload_folder(
-            folder_path=run_dir, path_in_repo=f"runs/{variant}/seed_{seed}",
+            folder_path=run_dir, path_in_repo=remote,
+            repo_id=self.repo_id, repo_type="dataset",
+            ignore_patterns=["upload_complete.json", "legacy_upload_complete.json"],
+        ))
+        required = (*REQUIRED_TRAIN_ARTIFACTS, "evaluation_metrics.json")
+        expected = {f"{remote}/{name}" for name in required}
+        verified = set(self.api.list_repo_files(self.repo_id, repo_type="dataset"))
+        missing = sorted(expected - verified)
+        if missing:
+            raise RuntimeError(f"Missing HF LEVIR run artifacts, refusing completion marker: {missing}")
+        marker_path = run_dir / "upload_complete.json"
+        marker_path.write_text(json.dumps({
+            "repo_id": self.repo_id, "variant": variant, "seed": seed,
+            "remote_path": remote, "verified": sorted(expected),
+        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        self.retry(lambda: self.api.upload_file(
+            path_or_fileobj=str(marker_path),
+            path_in_repo=f"{remote}/upload_complete.json",
             repo_id=self.repo_id, repo_type="dataset",
         ))
 
@@ -351,11 +383,30 @@ class Uploader:
             (args.project / "summary_runs.csv", "summary_runs.csv"),
             (args.project / "summary_aggregate.csv", "summary_aggregate.csv"),
         ]
+        # A complete metadata snapshot is content-addressed so a later seed
+        # never silently overwrites a prior published summary.
+        if self.repo_id == "TLMHoang/FTSC_results":
+            import hashlib
+            digest = hashlib.sha256()
+            for local, relative in paths:
+                if local.is_file():
+                    digest.update(relative.encode("utf-8"))
+                    digest.update(local.read_bytes())
+            snapshot_root = f"{self.remote_root}/_metadata/{digest.hexdigest()[:16]}"
+            existing = set(self.api.list_repo_files(self.repo_id, repo_type="dataset"))
+        else:
+            snapshot_root = ""
+            existing = set()
         for local, remote in paths:
-            if local.is_file():
-                self.retry(lambda local=local, remote=remote: self.api.upload_file(
-                    path_or_fileobj=local, path_in_repo=remote, repo_id=self.repo_id, repo_type="dataset",
-                ))
+            if not local.is_file():
+                continue
+            if snapshot_root:
+                remote = f"{snapshot_root}/{remote}"
+                if remote in existing:
+                    continue
+            self.retry(lambda local=local, remote=remote: self.api.upload_file(
+                path_or_fileobj=local, path_in_repo=remote, repo_id=self.repo_id, repo_type="dataset",
+            ))
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

@@ -420,7 +420,7 @@ def aggregate(args: argparse.Namespace) -> dict[str, Any]:
 
 def publish(args: argparse.Namespace) -> dict[str, Any]:
     """Explicit upload only, never overwrite an existing remote canonical path."""
-    from utils.hf_result_archive import HFResultArchive
+    from utils.ftsc_hf_canonical_archive import CanonicalFTSCArchive as HFResultArchive
     agent = HFCheckpointRecovery(args.repo_id, token=args.token)
     archive = HFResultArchive(args.repo_id, token=args.token, cache_dir=args.cache_dir)
     results = []
