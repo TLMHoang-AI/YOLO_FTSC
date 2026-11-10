@@ -29,6 +29,7 @@ from utils.ftsc_hf_layout import (
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = "capstone_aug_sixcore_v1"
+CONTRACT_VERSION = "FTSC_CAPSTONE_AUG_HF_CANONICAL_20261110_V2"
 METRICS = {
     "TinyPerson": ("test_merged/AP50", "test_merged/mAP50-95", "test_merged/AP50-Small"),
     "LEVIR-Ship": ("test/metrics/mAP50(B)", "test/metrics/mAP50-95(B)", "test_size/AP50-Small"),
@@ -71,6 +72,41 @@ def planned_rows(dataset: str, cases: tuple[str, ...], seeds: tuple[int, ...],
     return out
 
 
+def verify_hf_sources(archive: Any, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Online, read-only preflight of every selected checkpoint and merged prediction.
+
+    Pin a single immutable Hub revision; do not accept a moved repository
+    revision halfway through the verification.
+    """
+    api = archive._get_api()
+    info = archive._retry(lambda: api.repo_info(repo_id=REPO_ID, repo_type="dataset"))
+    revision = getattr(info, "sha", None)
+    require(isinstance(revision, str) and len(revision) >= 30,
+            "Cannot pin a canonical Hugging Face revision")
+    files = set(archive._retry(lambda: api.list_repo_files(
+        repo_id=REPO_ID, repo_type="dataset", revision=revision)))
+    result = []
+    for row in rows:
+        dataset, case, seed = row["dataset"], row["case"], row["seed"]
+        source = row["hf_source_checkpoint"]
+        root = row["hf_source_run"]
+        required = (source, root + "/checkpoint_reference.json")
+        if dataset == "TinyPerson":
+            required += (root + "/evaluation/test_merged_predictions.json",)
+        missing = sorted(set(required) - files)
+        require(not missing, f"Missing canonical source artifacts for {dataset}/{case}/{seed}: {missing}")
+        ref, ref_revision = archive._source_reference(dataset, case, seed)
+        require(ref_revision == revision,
+                "Hugging Face revision moved during preflight; retry before evaluation")
+        result.append(dict(dataset=dataset, case=case, seed=seed,
+                           status="SOURCE_REFERENCE_VERIFIED",
+                           source_checkpoint=source,
+                           source_sha256=ref["best_sha256"],
+                           hf_revision=revision,
+                           merged_predictions_available=dataset == "TinyPerson"))
+    return result
+
+
 def yaml_for_seed(template: str | None, seed: int) -> Path:
     require(bool(template), "Native LEVIR/Varroa evaluation requires --data-yaml-template")
     path = Path(template.format(seed=seed)).expanduser().resolve()
@@ -83,13 +119,40 @@ def evaluate_one(args: argparse.Namespace, case: str, seed: int, archive: Any) -
     run_dir = output_run(args.project, args.dataset, case, seed)
     output_path = run_dir / "evaluation_metrics_extended.json"
     if output_path.exists():
-        previous = validated_output(output_path, args.dataset, case, seed)
-        require(previous.get("evaluation/evaluator_contract") ==
-                ("tinybenchmark_merged_original_iou50_95_v2"
-                 if args.dataset == "TinyPerson" else "ftsc_native_sixcore_v1"),
-                f"Existing result uses an incompatible evaluator: {output_path}")
-        return {"dataset": args.dataset, "case": case, "seed": seed,
-                "status": "REUSED_VERIFIED_LOCAL", "path": str(output_path)}
+        try:
+            validated_output(output_path, args.dataset, case, seed)
+        except (ValueError, RuntimeError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            if not args.recover_incomplete:
+                raise RuntimeError(
+                    f"Unverified/incomplete local evaluation: {output_path}. "
+                    "Inspect it, then explicitly pass --recover-incomplete to back it up "
+                    "and re-evaluate; original checkpoint remains untouched."
+                ) from exc
+            backup = output_path.with_name(output_path.name + ".incomplete_backup")
+            require(not backup.exists(), f"Refusing to replace existing backup: {backup}")
+            output_path.replace(backup)
+        else:
+            ref, revision = archive._source_reference(args.dataset, case, seed)
+            require(previous["evaluation/source_checkpoint_sha256"] == ref["best_sha256"],
+                    f"Local metric file source SHA does not match canonical HF checkpoint: {output_path}")
+            local_checkpoint = run_dir / "weights/best.pt"
+            require(local_checkpoint.is_file() and sha256(local_checkpoint) == ref["best_sha256"],
+                    f"Local checkpoint missing or has changed since evaluation: {local_checkpoint}")
+            if args.dataset == "TinyPerson":
+                require(args.tiny_merged_gt is not None, "--tiny-merged-gt required to reuse merged metrics")
+                gt = args.tiny_merged_gt.expanduser().resolve()
+                require(gt.is_file() and sha256(gt) == previous.get("evaluation/gt_sha256"),
+                        f"Merged original-image annotations differ from cached evaluation: {gt}")
+                prediction = run_dir / "evaluation/test_merged_predictions.json"
+                require(prediction.is_file() and sha256(prediction) == previous.get("evaluation/predictions_sha256"),
+                        f"TinyPerson merged predictions differ from cached evaluation: {prediction}")
+            else:
+                data_yaml = yaml_for_seed(args.data_yaml_template, seed)
+                require(sha256(data_yaml) == previous.get("evaluation/data_yaml_sha256"),
+                        f"Dataset YAML differs from cached evaluation: {data_yaml}")
+            return {"dataset": args.dataset, "case": case, "seed": seed,
+                    "status": "REUSED_VERIFIED_LOCAL", "path": str(output_path),
+                    "source_revision_verified": revision}
     checkpoint = run_dir / "weights/best.pt"
     provenance = archive.restore_augmentation_source(
         dataset=args.dataset, case=case, seed=seed, destination=checkpoint,
@@ -182,6 +245,8 @@ def validated_output(path: Path, dataset: str, case: str, seed: int) -> dict[str
 
 def aggregate(args: argparse.Namespace) -> list[dict[str, Any]]:
     rows = []
+    profile_contracts: list[tuple[str, int, str]] = []
+    prepared_data: dict[int, set[str]] = {seed: set() for seed in args.seeds}
     for case in args.cases:
         sources = [
             validated_output(output_run(args.project, args.dataset, case, seed)
@@ -190,6 +255,19 @@ def aggregate(args: argparse.Namespace) -> list[dict[str, Any]]:
             for seed in args.seeds
         ]
         require(set(args.seeds) == set(SEEDS), "Publishing journal means requires exactly 42/43/44")
+        for seed, source in zip(args.seeds, sources):
+            method = source.get("model/GFLOPs_method")
+            imgsz = source.get("model/GFLOPs_imgsz")
+            require(isinstance(method, str) and method
+                    and isinstance(imgsz, int)
+                    and imgsz == (512 if args.dataset == "LEVIR-Ship" else 640),
+                    f"Invalid/unmatched FLOPs measurement protocol: {args.dataset}/{case}/{seed}")
+            profile_contracts.append((method, imgsz, source["evaluation/evaluator_contract"]))
+            key = "evaluation/gt_sha256" if args.dataset == "TinyPerson" else "evaluation/data_yaml_sha256"
+            fingerprint = source.get(key)
+            require(isinstance(fingerprint, str) and len(fingerprint) == 64,
+                    f"Missing evaluation data fingerprint: {args.dataset}/{case}/{seed}")
+            prepared_data[seed].add(fingerprint)
         out: dict[str, Any] = {"dataset": args.dataset, "case": case,
                                "n": len(sources), "metrics_source": "reevaluated_sixcore"}
         for label, metric in zip(LABELS, METRICS[args.dataset]):
@@ -203,6 +281,13 @@ def aggregate(args: argparse.Namespace) -> list[dict[str, Any]]:
                     f"Model complexity differs across seeds for {args.dataset}/{case}/{name}")
             out[name] = round(statistics.fmean(values), 6)
         rows.append(out)
+    require(len(set(profile_contracts)) == 1,
+            f"GFLOPs profiler/resolution or evaluator contract differs between cases: {set(profile_contracts)}")
+    require(all(len(hashes) == 1 for hashes in prepared_data.values()),
+            f"Different cases evaluated with different prepared data for the same seed: {prepared_data}")
+    if args.dataset == "TinyPerson":
+        require(len(set.union(*prepared_data.values())) == 1,
+                "TinyPerson original-image merged GT must be identical for all seeds")
     result = args.project / args.dataset / "summary_aggregate.csv"
     result.parent.mkdir(parents=True, exist_ok=True)
     with result.open("w", newline="", encoding="utf-8") as stream:
@@ -215,7 +300,8 @@ def aggregate(args: argparse.Namespace) -> list[dict[str, Any]]:
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dataset", required=True, choices=DATASETS)
-    p.add_argument("--phase", default="plan", choices=("plan", "evaluate", "aggregate", "publish"))
+    p.add_argument("--contract-version", help="Notebook/codebase protocol version guard")
+    p.add_argument("--phase", default="plan", choices=("plan", "verify", "evaluate", "aggregate", "publish"))
     p.add_argument("--cases", nargs="+")
     p.add_argument("--seeds", nargs="+", type=int, default=list(SEEDS))
     p.add_argument("--project", type=Path, default=ROOT / "runs/ftsc_capstone_aug_reeval_v1")
@@ -223,6 +309,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--tiny-merged-gt", type=Path, help="TinyPerson original-image TinyBenchmark test annotations JSON")
     p.add_argument("--device", default="cuda")
     p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--recover-incomplete", action="store_true", help="Back up and recompute only invalid local evaluation JSON; never modify weights")
     p.add_argument("--confirm-eval", action="store_true")
     p.add_argument("--confirm-publish", action="store_true")
     return p
@@ -230,6 +317,8 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = parser().parse_args(argv)
+    require(args.contract_version in (None, CONTRACT_VERSION),
+            "Notebook requested a different FTSC re-evaluation code contract; sync the updated yolo_code checkout")
     args.project = args.project.expanduser().resolve()
     args.cases = tuple(args.cases or AUGMENTATION_RUNS[args.dataset])
     args.seeds = tuple(args.seeds)
@@ -275,6 +364,10 @@ def main(argv: list[str] | None = None) -> None:
             require(identity["evaluation/source_checkpoint_sha256"] ==
                     reference["best_sha256"],
                     f"Cannot publish metrics for a different source checkpoint: {destination}")
+    if args.phase == "verify":
+        print(json.dumps({"status": "HF_VERIFIED_READ_ONLY",
+                          "rows": verify_hf_sources(archive, rows)}, indent=2))
+        return
     outputs = []
     for row in rows:
         case, seed = row["case"], row["seed"]

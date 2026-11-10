@@ -113,7 +113,7 @@ class CanonicalHFTests(unittest.TestCase):
         self.assertEqual(CanonicalFTSCArchive.remote_path(
             "tinyperson_ftsc_journal_phase2_v1", "historical__ALPHA4_rerun",
             "seed_44_corner_sw640_sh512"),
-            "TinyPerson/derived_evaluations/journal_phase2/ALPHA4_rerun/"
+            "TinyPerson/derived_evaluations/journal_phase2/historical__ALPHA4_rerun/"
             "seed_44_corner_sw640_sh512",
         )
 
