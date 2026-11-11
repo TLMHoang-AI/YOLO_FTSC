@@ -20,6 +20,8 @@ class DeploymentContractTests(unittest.TestCase):
         args = p.parse_args(["--dataset", "TinyPerson", "--phase", "plan"])
         self.assertEqual(args.platform, "marimo_live")
         args.manifest_cases = {}
+        args.report_sections = {}
+        args.cases = ("FTSC",)
         args.project = Path("/tmp/test_deployment")
         rows = deploy.planned(args)
         self.assertEqual(len(rows), 12)
@@ -86,6 +88,60 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(deploy.parser().parse_args(["--dataset", "Varroa"]).platform,
                          "marimo_live")
 
+    def test_curated_report_inventory_has_exact_reference_provenance(self):
+        expected = {"LEVIR-Ship": 11, "TinyPerson": 11, "Varroa": 13}
+        total = 0
+        for dataset, count in expected.items():
+            with self.subTest(dataset=dataset):
+                cases, sections, unresolved = deploy.load_report_scope(
+                    deploy.REPORT_MANIFEST, dataset)
+                self.assertEqual(len(cases), count)
+                self.assertEqual(len(unresolved), 16)
+                self.assertEqual(set(cases), set(sections))
+                self.assertTrue(all(len(rows) == 3 for rows in cases.values()))
+                self.assertTrue(all(len(entry["sha256"]) == 64
+                                    for per_seed in cases.values() for entry in per_seed.values()))
+                self.assertTrue(all("main:" in " ".join(tags)
+                                    for alias, tags in sections.items() if alias in ("FTSC", "FTSC_YOLOV9T", "FTSC_YOLO11N")))
+                self.assertEqual(cases["FTSC"][42]["path"],
+                                 deploy.augmentation_checkpoint(dataset, "FTSC", 42))
+                total += sum(len(rows) for rows in cases.values())
+        self.assertEqual(total, 105)
+        # Distinguish structural Varroa pruning from the full-neck canonical model.
+        cases, _, _ = deploy.load_report_scope(deploy.REPORT_MANIFEST, "Varroa")
+        self.assertNotEqual(cases["FTSC"][42]["path"], cases["HEAD_H2"][42]["path"])
+
+    def test_report_plan_is_offline_and_defaults_to_all_report_cases(self):
+        import contextlib
+        import io
+        stream = io.StringIO()
+        with contextlib.redirect_stdout(stream):
+            deploy.main(["--dataset", "LEVIR-Ship", "--scope", "report",
+                         "--phase", "plan", "--backends", "pt32"])
+        output = json.loads(stream.getvalue())
+        self.assertEqual(output["case_count"], 11)
+        self.assertEqual(output["checkpoint_count"], 33)
+        self.assertEqual(output["evaluation_jobs"], 33)
+        self.assertEqual(len(output["unresolved_main_results"]), 16)
+        self.assertEqual(len({row["source"] for row in output["rows"]}), 33)
+
+    def test_report_rejects_checkpoint_alias_collision_or_sha_change(self):
+        with tempfile.TemporaryDirectory() as td:
+            modified = json.loads(deploy.REPORT_MANIFEST.read_text(encoding="utf-8"))
+            tiny = modified["datasets"]["Varroa"]["cases"]
+            tiny["HEAD_H2"]["seeds"]["42"]["path"] = tiny["FTSC"]["seeds"]["42"]["path"]
+            bad_path = Path(td) / "broken_report.json"
+            bad_path.write_text(json.dumps(modified), encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                deploy.load_report_scope(bad_path, "Varroa")
+            tiny["HEAD_H2"]["seeds"]["42"]["path"] = (
+                "Varroa/journal_experiments/phase2/VR_STRUCT_H2_P23/seed_42/weights/best.pt"
+            )
+            tiny["HEAD_H2"]["seeds"]["42"]["sha256"] = "not-a-hash"
+            bad_path.write_text(json.dumps(modified), encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                deploy.load_report_scope(bad_path, "Varroa")
+
     def test_notebooks_have_separate_safe_default_eval_cells(self):
         root = Path(__file__).resolve().parents[3]
         paths = [
@@ -103,11 +159,13 @@ class DeploymentContractTests(unittest.TestCase):
                 compile(code, str(path) + "#deployment", "exec")
                 self.assertIn(f"RUN_FTSC_DEPLOY_{suffix} = False", code)
                 self.assertIn(f"FTSC_DEPLOY_{suffix}_ALLOW_EVALUATE = False", code)
-                self.assertIn("FTSC_DEPLOY_EVAL_20261111_V2", code)
+                self.assertIn("FTSC_DEPLOY_EVAL_20261112_REPORT_V3", code)
                 self.assertIn(f"FTSC_DEPLOY_{suffix}_PLATFORM = 'marimo_live'", code)
                 self.assertNotIn(".train(", code)
                 self.assertNotIn("upload_file", code)
-                self.assertIn("'--checkpoint-manifest'", code)
+                self.assertIn("'--report-manifest'", code)
+                self.assertIn("'--scope', 'report'", code)
+                self.assertIn(f"FTSC_DEPLOY_{suffix}_CASES = []", code)
 
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@ from utils.ftsc_hf_layout import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "FTSC_DEPLOY_EVAL_20261111_V2"
+VERSION = "FTSC_DEPLOY_EVAL_20261112_REPORT_V3"
 DEFAULT_BACKENDS = ("pt32", "pt16", "trt32", "trt16")
 BACKENDS = DEFAULT_BACKENDS + ("ort_cpu32", "ort_cpu16")
 METRIC_KEYS = {
@@ -97,20 +97,87 @@ def manifest_entries(path: Path | None, dataset: str) -> dict[str, dict[int, dic
     return output
 
 
+
+REPORT_MANIFEST = ROOT / "utils/ftsc_report_deployment_case_manifest_v1.json"
+REPORT_SCHEMA = "ftsc_report_driven_deployment_case_manifest_v1"
+
+
+def load_report_scope(path: Path, dataset: str) -> tuple[dict[str, dict[int, dict[str, str]]], dict[str, list[str]], list[dict[str, str]]]:
+    """Strict, report-curated checkpoint identities; fail before any GPU work."""
+    path = path.expanduser().resolve()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    require(data.get("schema") == REPORT_SCHEMA and data.get("repo_id") == REPO_ID,
+            "Report manifest schema/repository mismatch")
+    require(data.get("seeds") == [42, 43, 44], "Unexpected report seed contract")
+    selected = data.get("datasets", {}).get(dataset)
+    require(isinstance(selected, dict), f"Dataset missing from report manifest: {dataset}")
+    cases = selected.get("cases")
+    require(isinstance(cases, dict) and cases, "Report case selection cannot be empty")
+    output: dict[str, dict[int, dict[str, str]]] = {}
+    sections: dict[str, list[str]] = {}
+    encountered = set()
+    for case, descriptor in cases.items():
+        require(bool(_SEGMENT.fullmatch(case)), f"Unsafe case alias in report: {case!r}")
+        require(isinstance(descriptor, dict) and descriptor.get("framework") == "ultralytics",
+                f"Case requires a different evaluator/adapter: {case}")
+        source_run = descriptor.get("source_run")
+        tags = descriptor.get("sections")
+        require(isinstance(source_run, str) and source_run.startswith(dataset + "/")
+                and all(_SEGMENT.fullmatch(part) for part in source_run.split("/")),
+                f"Invalid report source run: {case}")
+        require(isinstance(tags, list) and tags and all(isinstance(t, str) for t in tags),
+                f"Report section tags missing: {case}")
+        per_seed = descriptor.get("seeds")
+        require(isinstance(per_seed, dict) and set(per_seed) == {"42","43","44"},
+                f"Report case lacks exact 42/43/44 seed entries: {case}")
+        output[case] = {}
+        sections[case] = tags
+        for seed in SEEDS:
+            record = per_seed[str(seed)]
+            require(isinstance(record, dict), f"Invalid report reference: {case}/{seed}")
+            expected = f"{source_run}/{seed_dir(dataset, seed)}/weights/best.pt"
+            digest = record.get("sha256")
+            require(record.get("path") == expected and isinstance(digest, str)
+                    and bool(_SHA256.fullmatch(digest)),
+                    f"Invalid or unverified report source/hash: {case}/{seed}")
+            require(expected not in encountered,
+                    f"Duplicate checkpoint selected as two distinct cases: {expected}")
+            encountered.add(expected)
+            if case in AUGMENTATION_RUNS[dataset]:
+                require(augmentation_checkpoint(dataset, case, seed) == expected,
+                        f"Report alias collides with different canonical case: {case}/{seed}")
+            output[case][seed] = {"path": expected, "sha256": digest}
+    blockers = selected.get("unresolved_main_results", [])
+    require(isinstance(blockers, list) and all(isinstance(b, dict)
+            and isinstance(b.get("model"), str) and isinstance(b.get("reason"), str)
+            for b in blockers), "Invalid unresolved Main Results inventory")
+    return output, sections, blockers
+
+
+def report_protocol_warnings(path: Path, dataset: str, cases: list[str] | tuple[str, ...]) -> list[dict[str, str]]:
+    raw = json.loads(path.expanduser().resolve().read_text(encoding="utf-8"))
+    entries = raw["datasets"][dataset]["cases"]
+    return [{"case": alias, "warning": entries[alias]["protocol_note"]}
+            for alias in cases if entries[alias].get("protocol_note")]
+
+
 def checkpoint_source(args: argparse.Namespace, case: str, seed: int) -> str:
+    if case in args.manifest_cases:
+        return args.manifest_cases[case][seed]["path"]
     if case in AUGMENTATION_RUNS[args.dataset]:
         return augmentation_checkpoint(args.dataset, case, seed)
-    return args.manifest_cases[case][seed]["path"]
+    raise RuntimeError(f"Checkpoint case missing from selection: {case}")
 
 
 def verify_sources(args: argparse.Namespace, archive: Any) -> list[dict[str, Any]]:
     from utils.ftsc_capstone_aug_reeval_v1 import verify_hf_sources, planned_rows
-    canonical = [case for case in args.cases if case in AUGMENTATION_RUNS[args.dataset]]
+    canonical = [case for case in args.cases
+                 if case in AUGMENTATION_RUNS[args.dataset] and case not in args.manifest_cases]
     verified: list[dict[str, Any]] = []
     if canonical:
         verified.extend(verify_hf_sources(archive, planned_rows(
             args.dataset, tuple(canonical), tuple(args.seeds), args.project)))
-    external = [case for case in args.cases if case not in AUGMENTATION_RUNS[args.dataset]]
+    external = [case for case in args.cases if case in args.manifest_cases]
     if external:
         api = archive._get_api()
         revision = archive._retry(lambda: api.repo_info(repo_id=REPO_ID, repo_type="dataset")).sha
@@ -135,6 +202,7 @@ def planned(args: argparse.Namespace) -> list[dict[str, Any]]:
             "dataset": args.dataset, "case": case, "seed": seed, "backend": backend,
             "source_repo": REPO_ID, "source": checkpoint_source(args, case, seed),
             "output": str(path_for(args.project, args.dataset, case, seed, backend) / "metrics.json"),
+            "report_sections": args.report_sections.get(case, []),
         }
         for case in args.cases for seed in args.seeds for backend in args.backends
     ]
@@ -144,7 +212,7 @@ def source_restore(args: argparse.Namespace, archive: Any, case: str, seed: int)
     # Canonical transport verifies checkpoint reference and SHA, and never replaces
     # different existing bytes. DO NOT fetch old TinyPerson predictions for accuracy.
     src = source_path(args.project, args.dataset, case, seed)
-    if case in AUGMENTATION_RUNS[args.dataset]:
+    if case in AUGMENTATION_RUNS[args.dataset] and case not in args.manifest_cases:
         return archive.restore_augmentation_source(
             dataset=args.dataset, case=case, seed=seed, destination=src, include_predictions=False
         )
@@ -470,13 +538,125 @@ def aggregate(args: argparse.Namespace) -> list[dict[str, Any]]:
     return rows
 
 
+
+def aggregate_report(args: argparse.Namespace) -> dict[str, Any]:
+    """Partial-safe report aggregation: only complete three-seed rows get numbers."""
+    results: list[dict[str, Any]] = []
+    blockers: list[dict[str, Any]] = []
+    require(tuple(sorted(args.seeds)) == SEEDS,
+            "Report means require all three seeds 42/43/44")
+    for case in args.cases:
+        for backend in args.backends:
+            records: list[dict[str, Any]] = []
+            issues: list[str] = []
+            for seed in args.seeds:
+                folder = path_for(args.project, args.dataset, case, seed, backend)
+                metric_path = folder / "metrics.json"
+                if not metric_path.is_file():
+                    failed = folder / "failure.json"
+                    if failed.is_file():
+                        try:
+                            error_record = json.loads(failed.read_text(encoding="utf-8"))
+                            issues.append(f"{seed}: {error_record.get('error_type', 'ERROR')}: "
+                                          f"{error_record.get('error', 'No detail')}")
+                        except (OSError, ValueError, TypeError):
+                            issues.append(f"{seed}: unreadable failure.json")
+                    else:
+                        issues.append(f"{seed}: missing metrics.json")
+                    continue
+                try:
+                    record = json.loads(metric_path.read_text(encoding="utf-8"))
+                    identity = expected_identity(args, {
+                        "case": case, "seed": seed, "backend": backend,
+                        "source": checkpoint_source(args, case, seed),
+                    })
+                    require(all(record.get(k) == v for k, v in identity.items()),
+                            "different checkpoint identity or platform")
+                    require(record.get("evaluator") == EVALUATOR[args.dataset],
+                            "evaluator contract mismatch")
+                    require(record.get("imgsz") == (512 if args.dataset == "LEVIR-Ship" else 640),
+                            "input resolution mismatch")
+                    require(record.get("source_sha256") ==
+                            (args.manifest_cases[case][seed]["sha256"]
+                             if case in args.manifest_cases else record.get("source_sha256")),
+                            "checkpoint SHA changed from report inventory")
+                    validate_metric_values(record["metrics"], args.dataset)
+                    records.append(record)
+                except (OSError, ValueError, TypeError, RuntimeError, KeyError) as error:
+                    issues.append(f"{seed}: invalid result: {type(error).__name__}: {error}")
+            if issues:
+                blockers.append({
+                    "case": case, "backend": backend, "report_sections": args.report_sections.get(case, []),
+                    "issues": issues, "status": "INCOMPLETE_NOT_PAPER_READY",
+                })
+                continue
+            try:
+                require(len(records) == 3, "Exactly three checkpoint seeds required")
+                require(all(len({str(x[k]) for x in records}) == 1
+                            for k in ("device", "host_machine", "host_system",
+                                      "gpu_name", "torch_version", "cuda_version", "evaluator")),
+                        "Hardware/toolchain/evaluator contract differs across seeds")
+                if args.dataset == "TinyPerson":
+                    require(len({x["gt_sha256"] for x in records}) == 1 and
+                            len({x["corner_manifest_sha256"] for x in records}) == 1,
+                            "TinyPerson GT or corner mapping differs across seeds")
+                row: dict[str, Any] = {
+                    "dataset": args.dataset, "case": case, "backend": backend,
+                    "report_sections": ";".join(args.report_sections.get(case, [])),
+                    "platform": args.platform, "n": 3, "imgsz": records[0]["imgsz"],
+                    "device": records[0]["device"], "gpu_name": records[0]["gpu_name"],
+                    "evaluator": records[0]["evaluator"], "status": "COMPLETE",
+                }
+                for label, key in zip(("AP50", "mAP50_95", "AP50_small"), METRIC_KEYS[args.dataset]):
+                    values = [100.0 * float(x["metrics"][key]) for x in records]
+                    row[label + "_mean_pct"] = round(statistics.fmean(values), 6)
+                    row[label + "_sample_std_pct"] = round(statistics.stdev(values), 6)
+                results.append(row)
+            except (KeyError, ValueError, RuntimeError, TypeError) as error:
+                blockers.append({
+                    "case": case, "backend": backend, "report_sections": args.report_sections.get(case, []),
+                    "issues": [f"Three-seed comparability failure: {type(error).__name__}: {error}"],
+                    "status": "INVALID_NOT_PAPER_READY",
+                })
+    destination = args.project / args.dataset
+    destination.mkdir(parents=True, exist_ok=True)
+    csv_path = destination / f"deployment_{args.platform}_accuracy_aggregate.csv"
+    if results:
+        with csv_path.open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(results[0]))
+            writer.writeheader()
+            writer.writerows(results)
+    else:
+        # Do not preserve an old apparently complete aggregate when there is no valid row.
+        if csv_path.is_file():
+            csv_path.unlink()
+    report = {
+        "status": ("REPORT_PARTIAL" if blockers else
+                   "SELECTED_CASES_COMPLETE_WITH_UNRESOLVED_MAIN" if args.unresolved_main else
+                   "REPORT_ALL_SELECTED_COMPLETE"),
+        "scope": "report", "dataset": args.dataset, "platform": args.platform,
+        "complete_case_backend_rows": len(results), "blocked_case_backend_rows": len(blockers),
+        "unresolved_main_results": args.unresolved_main,
+        "protocol_warnings": args.protocol_warnings,
+        "aggregate_csv": str(csv_path) if results else None,
+        "complete_rows": results, "blockers": blockers,
+    }
+    destination.joinpath(f"deployment_{args.platform}_report_status.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return report
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dataset", choices=DATASETS, required=True)
     p.add_argument("--phase", choices=("plan", "verify", "evaluate", "aggregate"), default="plan")
-    p.add_argument("--cases", nargs="+", default=["FTSC"])
+    p.add_argument("--cases", nargs="+", default=None,
+                   help="Optional case subset. Omit in --scope report to select all report cases")
     p.add_argument("--seeds", nargs="+", type=int, default=list(SEEDS))
     p.add_argument("--backends", nargs="+", default=list(DEFAULT_BACKENDS))
+    p.add_argument("--scope", choices=("manual", "report"), default="manual")
+    p.add_argument("--report-manifest", type=Path, default=REPORT_MANIFEST,
+                   help="Curated Main Results + A/B/C/D case manifest")
     p.add_argument("--platform", choices=("marimo_live", "local_server"), default="marimo_live",
                    help="Where backend accuracy is evaluated, NOT Jetson runtime benchmark provenance")
     p.add_argument("--device", default="cuda:0")
@@ -497,8 +677,24 @@ def main(argv: list[str] | None = None) -> None:
     args = parser().parse_args(argv)
     require(args.contract_version in (None, VERSION),
             "Deployment runner version mismatch: sync updated yolo_code")
-    args.manifest_cases = manifest_entries(args.checkpoint_manifest, args.dataset)
-    allowed = set(AUGMENTATION_RUNS[args.dataset]) | set(args.manifest_cases)
+    args.report_sections = {}
+    args.unresolved_main = []
+    args.protocol_warnings = []
+    if args.scope == "report":
+        require(args.checkpoint_manifest is None,
+                "Report scope uses its audited report manifest; do not combine manual overrides")
+        args.manifest_cases, args.report_sections, args.unresolved_main = load_report_scope(
+            args.report_manifest, args.dataset)
+        if args.cases is None:
+            args.cases = tuple(args.manifest_cases)
+        allowed = set(args.manifest_cases)
+        args.protocol_warnings = report_protocol_warnings(
+            args.report_manifest, args.dataset, tuple(args.cases))
+    else:
+        args.manifest_cases = manifest_entries(args.checkpoint_manifest, args.dataset)
+        if args.cases is None:
+            args.cases = ("FTSC",)
+        allowed = set(AUGMENTATION_RUNS[args.dataset]) | set(args.manifest_cases)
     require(args.cases and len(set(args.cases)) == len(args.cases)
             and all(case in allowed for case in args.cases),
             f"Unknown/unmapped HF case for {args.dataset}; add exact paths/SHA in manifest")
@@ -506,17 +702,25 @@ def main(argv: list[str] | None = None) -> None:
             and all(seed in SEEDS for seed in args.seeds), "Unsupported/duplicate seeds")
     require(args.backends and len(set(args.backends)) == len(args.backends)
             and all(b in BACKENDS for b in args.backends), "Unsupported/duplicate backend")
-    require(all(case in AUGMENTATION_RUNS[args.dataset] or
-                all(seed in args.manifest_cases[case] for seed in args.seeds)
+    require(all((case in AUGMENTATION_RUNS[args.dataset] and case not in args.manifest_cases)
+                or all(seed in args.manifest_cases[case] for seed in args.seeds)
                 for case in args.cases), "Manifest lacks requested seed checkpoint mapping")
     require(args.batch > 0 and args.workers >= 0, "Invalid batch/workers")
     args.project = args.project.expanduser().resolve()
     rows = planned(args)
     if args.phase == "plan":
-        print(json.dumps({"status":"PLAN_ONLY","rows":rows}, indent=2))
+        print(json.dumps({
+            "status": "PLAN_ONLY", "scope": args.scope,
+            "case_count": len(args.cases), "checkpoint_count": len(args.cases) * len(args.seeds),
+            "evaluation_jobs": len(rows),
+            "unresolved_main_results": args.unresolved_main,
+            "protocol_warnings": args.protocol_warnings,
+            "rows": rows,
+        }, indent=2))
         return
     if args.phase == "aggregate":
-        print(json.dumps(aggregate(args), indent=2))
+        result = aggregate_report(args) if args.scope == "report" else aggregate(args)
+        print(json.dumps(result, indent=2))
         return
     # Only evaluate phase needs test material; verify only checks HF metadata.
     if args.phase == "evaluate":
@@ -539,9 +743,40 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps({"status":"HF_VERIFIED_READ_ONLY", "rows":verified}, indent=2))
         return
     completed = []
-    for row in rows:
-        completed.append(evaluate_one(args, archive, row))
-    print(json.dumps({"status":"EVALUATION_ONLY_COMPLETE", "rows":completed}, indent=2))
+    for index, row in enumerate(rows, 1):
+        try:
+            outcome = evaluate_one(args, archive, row)
+            folder = path_for(args.project, args.dataset, row["case"], row["seed"], row["backend"])
+            if outcome.get("status") in ("EVALUATED", "REUSED_VERIFIED"):
+                (folder / "failure.json").unlink(missing_ok=True)
+        except Exception as error:
+            if args.scope != "report":
+                raise
+            folder = path_for(args.project, args.dataset, row["case"], row["seed"], row["backend"])
+            folder.mkdir(parents=True, exist_ok=True)
+            token = os.environ.get("HF_TOKEN", "")
+            error_text = str(error)
+            if token:
+                error_text = error_text.replace(token, "<HF_TOKEN>")
+            failure = {
+                "status": "BLOCKED_BACKEND_EVALUATION", "dataset": args.dataset,
+                "case": row["case"], "seed": row["seed"], "backend": row["backend"],
+                "source": row["source"], "error_type": type(error).__name__,
+                "error": error_text,
+            }
+            tmp = folder / "failure.json.tmp"
+            tmp.write_text(json.dumps(failure, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            tmp.replace(folder / "failure.json")
+            outcome = {"status": "BLOCKED_BACKEND_EVALUATION",
+                       "case": row["case"], "seed": row["seed"], "backend": row["backend"],
+                       "error_type": type(error).__name__, "error": error_text}
+        completed.append(outcome)
+        print(f"[deployment {index}/{len(rows)}] {args.dataset}/{row['case']}/"
+              f"{row['seed']}/{row['backend']}: {outcome['status']}", flush=True)
+    num_blocked = sum(x.get("status") == "BLOCKED_BACKEND_EVALUATION" for x in completed)
+    print(json.dumps({"status": "REPORT_PARTIAL" if num_blocked else "EVALUATION_ONLY_COMPLETE",
+                      "scope": args.scope, "jobs": len(completed), "blocked": num_blocked,
+                      "rows": completed}, indent=2))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,970 @@
+{
+  "schema": "ftsc_report_driven_deployment_case_manifest_v1",
+  "report_source": "note/FTSC_CAPSTONE_REPORT_MAIN_RESULTS_ABLATION_ROADMAP_2026-11-09.md",
+  "repo_id": "TLMHoang/FTSC_results",
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "scope": "Main Results FTSC rows and four paper ablations A/B/C/D; non-FTSC Main Results rows listed as blockers until source/framework verified",
+  "datasets": {
+    "LEVIR-Ship": {
+      "cases": {
+        "FTSC": {
+          "source_run": "LEVIR-Ship/historical_reconstructions/RECON_H2_V1",
+          "sections": [
+            "main:YOLOv8n+FTSC",
+            "A:on",
+            "B:P23",
+            "C:reference",
+            "D:alpha6"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "LEVIR-Ship/historical_reconstructions/RECON_H2_V1/seed_42/weights/best.pt",
+              "sha256": "e658614e617378110a280fe62927eb0df6f708162a5117865fe45efe66612805"
+            },
+            "43": {
+              "path": "LEVIR-Ship/historical_reconstructions/RECON_H2_V1/seed_43/weights/best.pt",
+              "sha256": "3987e53a33e1e23bef5c84ce56fd1d4ffe7535efa645893412e8e8606004c414"
+            },
+            "44": {
+              "path": "LEVIR-Ship/historical_reconstructions/RECON_H2_V1/seed_44/weights/best.pt",
+              "sha256": "2ee720fee5cc1d68444b94a61c8a74c05908d31e712cfc9c2eb5c69f4e3b26ba"
+            }
+          }
+        },
+        "FTSC_YOLOV9T": {
+          "source_run": "LEVIR-Ship/cross_yolo_portability/yolov9t/FTSC_H2",
+          "sections": [
+            "main:YOLOv9t+FTSC"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "LEVIR-Ship/cross_yolo_portability/yolov9t/FTSC_H2/seed_42/weights/best.pt",
+              "sha256": "56a3375ddbe7e1dc3e6a52e8d4d489613241368ade202481f5501c6fba2754fd"
+            },
+            "43": {
+              "path": "LEVIR-Ship/cross_yolo_portability/yolov9t/FTSC_H2/seed_43/weights/best.pt",
+              "sha256": "66f8786b2aebbb9c5386a6c8998cc3fd32bc6dd236d792dd06178ff6ed4ae3e8"
+            },
+            "44": {
+              "path": "LEVIR-Ship/cross_yolo_portability/yolov9t/FTSC_H2/seed_44/weights/best.pt",
+              "sha256": "57ea4da74330b0da013e2b2bacbe88982484f7286a19d164f8b655f604a90749"
+            }
+          }
+        },
+        "FTSC_YOLO11N": {
+          "source_run": "LEVIR-Ship/cross_yolo_portability/yolo11n/FTSC_H2",
+          "sections": [
+            "main:YOLO11n+FTSC"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "LEVIR-Ship/cross_yolo_portability/yolo11n/FTSC_H2/seed_42/weights/best.pt",
+              "sha256": "879f867d7022c0afc734a3bb34e72f6a0c5f1ddf95c3aa486e73523389ca9966"
+            },
+            "43": {
+              "path": "LEVIR-Ship/cross_yolo_portability/yolo11n/FTSC_H2/seed_43/weights/best.pt",
+              "sha256": "937a2e85bfe1512f340068a669fff4fc660e31bf69e7be28504b4a55dadf162a"
+            },
+            "44": {
+              "path": "LEVIR-Ship/cross_yolo_portability/yolo11n/FTSC_H2/seed_44/weights/best.pt",
+              "sha256": "1e5277f8a5647fb9011c0130a6efbfad58be002a0b38e06535e94fda5f9d31fd"
+            }
+          }
+        },
+        "FTSC_OFF": {
+          "source_run": "LEVIR-Ship/journal_experiments/ftsc_off_hf_first_v1/V8_B1_P23_NOFTSC",
+          "sections": [
+            "A:off"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "LEVIR-Ship/journal_experiments/ftsc_off_hf_first_v1/V8_B1_P23_NOFTSC/seed_42/weights/best.pt",
+              "sha256": "10e318a3c48f9e7dcd619a61c8e96d1a12f2cd8a33c90f14a402fa1a2b806e0f"
+            },
+            "43": {
+              "path": "LEVIR-Ship/journal_experiments/ftsc_off_hf_first_v1/V8_B1_P23_NOFTSC/seed_43/weights/best.pt",
+              "sha256": "6ec2f7175eda3c27f63d02ee27222489abfc48c6ddbcbd166c29c69e101360df"
+            },
+            "44": {
+              "path": "LEVIR-Ship/journal_experiments/ftsc_off_hf_first_v1/V8_B1_P23_NOFTSC/seed_44/weights/best.pt",
+              "sha256": "eb8ba316269d831fc118de25094b5120039f158437243c5923d197dc0696a864"
+            }
+          }
+        },
+        "HEAD_H0": {
+          "source_run": "LEVIR-Ship/historical_reconstructions/RECON_H0_V1",
+          "sections": [
+            "B:P2345"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "LEVIR-Ship/historical_reconstructions/RECON_H0_V1/seed_42/weights/best.pt",
+              "sha256": "521d6dd288a9cd508552c5c42a5bf4a4b58245b78caad0ec9a69a0676c59271a"
+            },
+            "43": {
+              "path": "LEVIR-Ship/historical_reconstructions/RECON_H0_V1/seed_43/weights/best.pt",
+              "sha256": "410329de45ae11bb450a6cd82707621e74a6de8c39f8f3b4c6ca2ebac44e0bb3"
+            },
+            "44": {
+              "path": "LEVIR-Ship/historical_reconstructions/RECON_H0_V1/seed_44/weights/best.pt",
+              "sha256": "8296c6e22f8bcf14be5144c2084ea00919832465adf7b2d3dba5aaa79c137814"
+            }
+          }
+        },
+        "HEAD_H1": {
+          "source_run": "LEVIR-Ship/historical_reconstructions/RECON_H1_V1",
+          "sections": [
+            "B:P234"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "LEVIR-Ship/historical_reconstructions/RECON_H1_V1/seed_42/weights/best.pt",
+              "sha256": "99c08fb527f57cef139cbce48fc0ef712802a26fb999f274a06817cc597e4b58"
+            },
+            "43": {
+              "path": "LEVIR-Ship/historical_reconstructions/RECON_H1_V1/seed_43/weights/best.pt",
+              "sha256": "4fbfe4614e519a9d689e19acaa88eb95b3772e6fc0381b58ac45cd4bad0813ca"
+            },
+            "44": {
+              "path": "LEVIR-Ship/historical_reconstructions/RECON_H1_V1/seed_44/weights/best.pt",
+              "sha256": "7597cf39040ce579a2e787ee3ee784d781741f0d4655e647690418c7cccc52d7"
+            }
+          }
+        },
+        "HEAD_H3": {
+          "source_run": "LEVIR-Ship/historical_reconstructions/RECON_H3_V1",
+          "sections": [
+            "B:P2"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "LEVIR-Ship/historical_reconstructions/RECON_H3_V1/seed_42/weights/best.pt",
+              "sha256": "afb4d36141bceae9d0d63190f728858c80b8d7169dcba594425e750cb88b6d8a"
+            },
+            "43": {
+              "path": "LEVIR-Ship/historical_reconstructions/RECON_H3_V1/seed_43/weights/best.pt",
+              "sha256": "6ede1cf91fab579c2f9b259009679ac2b9220421d9d1459745aeffd63dcdc6ad"
+            },
+            "44": {
+              "path": "LEVIR-Ship/historical_reconstructions/RECON_H3_V1/seed_44/weights/best.pt",
+              "sha256": "412e1b23b6156fcd16e260a98eb5195228004962c7c3a114bec37df78c7205cc"
+            }
+          }
+        },
+        "COLOR_CUE": {
+          "source_run": "LEVIR-Ship/historical_reconstructions/RECON_C_H2_LEGACY_V1",
+          "sections": [
+            "C:color"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "LEVIR-Ship/historical_reconstructions/RECON_C_H2_LEGACY_V1/seed_42/weights/best.pt",
+              "sha256": "78a09caa74b9f15bda71e1c6e558f228fe1d35f6eab795ba22a52ad5b4e87edb"
+            },
+            "43": {
+              "path": "LEVIR-Ship/historical_reconstructions/RECON_C_H2_LEGACY_V1/seed_43/weights/best.pt",
+              "sha256": "cbd0142ed5aafcab0340281bcd987239559a5be369731323f9ddbc090d327793"
+            },
+            "44": {
+              "path": "LEVIR-Ship/historical_reconstructions/RECON_C_H2_LEGACY_V1/seed_44/weights/best.pt",
+              "sha256": "b2428df5bf0349e445e39529b49e2f08b0f69c2d7572c5dfd01d31f298b84fd9"
+            }
+          }
+        },
+        "EDGE_CUE": {
+          "source_run": "LEVIR-Ship/original_runs/ES1",
+          "sections": [
+            "C:edge:ES1"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "LEVIR-Ship/original_runs/ES1/seed_42/weights/best.pt",
+              "sha256": "32427262777cf7996b91c99ef8ec215a07da8b2215b29eadb33f0444536c4eab"
+            },
+            "43": {
+              "path": "LEVIR-Ship/original_runs/ES1/seed_43/weights/best.pt",
+              "sha256": "e1606a16a0246c3b1a9fb6e6edaa4c85ea26cfb29b8874d86bd38ba569fd87e1"
+            },
+            "44": {
+              "path": "LEVIR-Ship/original_runs/ES1/seed_44/weights/best.pt",
+              "sha256": "41fe24ecede62200c4e0b38941dde744347f3c5f1a3b26bcf368e7c04b9e2507"
+            }
+          }
+        },
+        "ALPHA4": {
+          "source_run": "LEVIR-Ship/journal_experiments/alpha_sensitivity/ALPHA4_rerun",
+          "sections": [
+            "D:alpha4"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "LEVIR-Ship/journal_experiments/alpha_sensitivity/ALPHA4_rerun/seed_42/weights/best.pt",
+              "sha256": "fe43e096cacaf351d96efbeaf0bde0f004785102b2c1f66ac130fb1f2bce5726"
+            },
+            "43": {
+              "path": "LEVIR-Ship/journal_experiments/alpha_sensitivity/ALPHA4_rerun/seed_43/weights/best.pt",
+              "sha256": "5c520d81590e677835705e5631f3554020c6b8e6bf5a1dac0d3b964e04815270"
+            },
+            "44": {
+              "path": "LEVIR-Ship/journal_experiments/alpha_sensitivity/ALPHA4_rerun/seed_44/weights/best.pt",
+              "sha256": "96f6d21d475fb7167b48be16b781a9c71e057916b337d03957c552478488e87e"
+            }
+          }
+        },
+        "ALPHA8": {
+          "source_run": "LEVIR-Ship/journal_experiments/alpha_sensitivity/ALPHA8_rerun",
+          "sections": [
+            "D:alpha8"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "LEVIR-Ship/journal_experiments/alpha_sensitivity/ALPHA8_rerun/seed_42/weights/best.pt",
+              "sha256": "bb2a4806b5e17fae55f1798a3a14df8f6fbccec6d4a58aa08a9391a4b278085b"
+            },
+            "43": {
+              "path": "LEVIR-Ship/journal_experiments/alpha_sensitivity/ALPHA8_rerun/seed_43/weights/best.pt",
+              "sha256": "3ba6c4f4db8921374e946801904f9eeb2cac3c6dce664a3e59fc07e876375729"
+            },
+            "44": {
+              "path": "LEVIR-Ship/journal_experiments/alpha_sensitivity/ALPHA8_rerun/seed_44/weights/best.pt",
+              "sha256": "b0868a3dc4b45bfe85fd06d8ab0f83e0b66292bfd92a3317fea6bc3e58dfb919"
+            }
+          }
+        }
+      },
+      "unresolved_main_results": [
+        {
+          "model": "YOLOv5n",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "YOLOv8n",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "YOLOv9t",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "YOLOv10n",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "YOLO11n",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "ATSS R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "Faster R-CNN R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "FCOS R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "RetinaNet R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "Cascade R-CNN R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "RTMDet-S",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "Deformable DETR R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "RT-DETR R18",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "STW-YOLO",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "TPH-YOLOv5",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "FCOS w/ SET",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        }
+      ]
+    },
+    "TinyPerson": {
+      "cases": {
+        "FTSC": {
+          "source_run": "TinyPerson/original_runs/H2_MOSAIC",
+          "sections": [
+            "main:YOLOv8n+FTSC",
+            "A:on",
+            "B:P23",
+            "C:reference",
+            "D:alpha6"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "TinyPerson/original_runs/H2_MOSAIC/seed_42_corner_sw640_sh512/weights/best.pt",
+              "sha256": "16c8d182b46b976c8e3bc70299950a356901ec7f205ed78b57cef050ca61fe79"
+            },
+            "43": {
+              "path": "TinyPerson/original_runs/H2_MOSAIC/seed_43_corner_sw640_sh512/weights/best.pt",
+              "sha256": "c740f9fe71c742a868f512957af8aaf263d55e3a356cf4bd1099991d07214da1"
+            },
+            "44": {
+              "path": "TinyPerson/original_runs/H2_MOSAIC/seed_44_corner_sw640_sh512/weights/best.pt",
+              "sha256": "56e76152a962895dd28efa299ee70845bb171ff431475a933ce9d68664ae3a32"
+            }
+          }
+        },
+        "FTSC_YOLOV9T": {
+          "source_run": "TinyPerson/cross_yolo_portability/yolov9t/yolov9t__FTSC_H2",
+          "sections": [
+            "main:YOLOv9t+FTSC"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "TinyPerson/cross_yolo_portability/yolov9t/yolov9t__FTSC_H2/seed_42_corner_sw640_sh512/weights/best.pt",
+              "sha256": "d550cdcaa5fa3fab172ab493ff90fbadab7840c026428d40d5428ab7472d7a91"
+            },
+            "43": {
+              "path": "TinyPerson/cross_yolo_portability/yolov9t/yolov9t__FTSC_H2/seed_43_corner_sw640_sh512/weights/best.pt",
+              "sha256": "7c0e29c01e3c0afd02f6ad076eef79c97db054b1768793dc942fa21feff816f9"
+            },
+            "44": {
+              "path": "TinyPerson/cross_yolo_portability/yolov9t/yolov9t__FTSC_H2/seed_44_corner_sw640_sh512/weights/best.pt",
+              "sha256": "ab2de9f33e1b5d17448a96469c5b49ae60f1d32a211383876b9ce486c41acf49"
+            }
+          }
+        },
+        "FTSC_YOLO11N": {
+          "source_run": "TinyPerson/cross_yolo_portability/yolo11n/yolo11n__FTSC_H2",
+          "sections": [
+            "main:YOLO11n+FTSC"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "TinyPerson/cross_yolo_portability/yolo11n/yolo11n__FTSC_H2/seed_42_corner_sw640_sh512/weights/best.pt",
+              "sha256": "698c48374d81324e74f07d7c8619c979077f881645d5a072826e2ccea8e28b3b"
+            },
+            "43": {
+              "path": "TinyPerson/cross_yolo_portability/yolo11n/yolo11n__FTSC_H2/seed_43_corner_sw640_sh512/weights/best.pt",
+              "sha256": "97d01948f16f2a0ab645e7b063ca20a18c96c6b2e0b7ce6a73c2c8f524ad3e7f"
+            },
+            "44": {
+              "path": "TinyPerson/cross_yolo_portability/yolo11n/yolo11n__FTSC_H2/seed_44_corner_sw640_sh512/weights/best.pt",
+              "sha256": "22fcd24135c815f7c3b71d2ed9e2c9a28ca6d8200800de1317098ec4c30f98b8"
+            }
+          }
+        },
+        "FTSC_OFF": {
+          "source_run": "TinyPerson/original_runs/H2_NOFTSC_NM",
+          "sections": [
+            "A:off"
+          ],
+          "protocol_note": "HF args.yaml seed42: FTSC_OFF has mosaic=0, close_mosaic=0; canonical FTSC H2_MOSAIC has mosaic=1, close_mosaic=10. Re-evaluation is valid for each checkpoint but this pair is not matched in mosaic augmentation.",
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "TinyPerson/original_runs/H2_NOFTSC_NM/seed_42_corner_sw640_sh512/weights/best.pt",
+              "sha256": "c412173f42f553a92c4e34f857c70ba166d4d780186c4ad7eb79d4f97d97a54f"
+            },
+            "43": {
+              "path": "TinyPerson/original_runs/H2_NOFTSC_NM/seed_43_corner_sw640_sh512/weights/best.pt",
+              "sha256": "415a2fb41b682bb6c345d113e2de19ffa67d5f4b4c9563e4f348399272d1993a"
+            },
+            "44": {
+              "path": "TinyPerson/original_runs/H2_NOFTSC_NM/seed_44_corner_sw640_sh512/weights/best.pt",
+              "sha256": "acca58fdc41933e3f09f5a9b15736f1e39fa6ee10308f027ffb8527cb8a2a689"
+            }
+          }
+        },
+        "HEAD_H0": {
+          "source_run": "TinyPerson/journal_experiments/phase2/TP_PRUNE_H0_P2345",
+          "sections": [
+            "B:P2345"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "TinyPerson/journal_experiments/phase2/TP_PRUNE_H0_P2345/seed_42_corner_sw640_sh512/weights/best.pt",
+              "sha256": "34dc58d4a4b8814dd5120da7b8cdc8769662bcb9d6eefd5d2219cf4b4fa47fd6"
+            },
+            "43": {
+              "path": "TinyPerson/journal_experiments/phase2/TP_PRUNE_H0_P2345/seed_43_corner_sw640_sh512/weights/best.pt",
+              "sha256": "2539b8bb3ae94a8130c1bfe71dd141b03039b84b11099d15ce683f2bee1f328d"
+            },
+            "44": {
+              "path": "TinyPerson/journal_experiments/phase2/TP_PRUNE_H0_P2345/seed_44_corner_sw640_sh512/weights/best.pt",
+              "sha256": "696c52ea48ecd0a0603afdaba5cdb5c69ae074d844fe5de5ace5b505201484d6"
+            }
+          }
+        },
+        "HEAD_H1": {
+          "source_run": "TinyPerson/journal_experiments/phase2/TP_PRUNE_H1_P234",
+          "sections": [
+            "B:P234"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "TinyPerson/journal_experiments/phase2/TP_PRUNE_H1_P234/seed_42_corner_sw640_sh512/weights/best.pt",
+              "sha256": "93571e23d7dc5e04cd8276fe099ab6869f580e8652d91081e830782efab2c62e"
+            },
+            "43": {
+              "path": "TinyPerson/journal_experiments/phase2/TP_PRUNE_H1_P234/seed_43_corner_sw640_sh512/weights/best.pt",
+              "sha256": "8bcf1461b6d6d9d8956cc10452c29c3fd7094bbcbc0b8d5ef82fe307a0879698"
+            },
+            "44": {
+              "path": "TinyPerson/journal_experiments/phase2/TP_PRUNE_H1_P234/seed_44_corner_sw640_sh512/weights/best.pt",
+              "sha256": "f43a28677631a6c7dff8ae846ef3fab8b38d7e57931d91d7e015768e139d8196"
+            }
+          }
+        },
+        "HEAD_H3": {
+          "source_run": "TinyPerson/journal_experiments/phase2/TP_PRUNE_H3_P2",
+          "sections": [
+            "B:P2"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "TinyPerson/journal_experiments/phase2/TP_PRUNE_H3_P2/seed_42_corner_sw640_sh512/weights/best.pt",
+              "sha256": "934a3ee14438633c7fdaef59a054b074a64efd180ad7f3131b5741e8e01be453"
+            },
+            "43": {
+              "path": "TinyPerson/journal_experiments/phase2/TP_PRUNE_H3_P2/seed_43_corner_sw640_sh512/weights/best.pt",
+              "sha256": "0817de3672f95476cd5036cbe9d93401d3bf00512c108e060cd461c8ec067b88"
+            },
+            "44": {
+              "path": "TinyPerson/journal_experiments/phase2/TP_PRUNE_H3_P2/seed_44_corner_sw640_sh512/weights/best.pt",
+              "sha256": "554919f40300f5adfbdc1de0d3210093025a167b800a8160c01d5f61ed1e5e24"
+            }
+          }
+        },
+        "COLOR_CUE": {
+          "source_run": "TinyPerson/journal_experiments/phase2/TP_CUE_COLOR_H2_MOSAIC",
+          "sections": [
+            "C:color"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "TinyPerson/journal_experiments/phase2/TP_CUE_COLOR_H2_MOSAIC/seed_42_corner_sw640_sh512/weights/best.pt",
+              "sha256": "f3ba4ba3e182c1d9a49dc6caa2813258acc4901a43d223c1656957ff30db353a"
+            },
+            "43": {
+              "path": "TinyPerson/journal_experiments/phase2/TP_CUE_COLOR_H2_MOSAIC/seed_43_corner_sw640_sh512/weights/best.pt",
+              "sha256": "e72ce039fd2a400fe03554eb19b04bbb4ac532f4a26a830b6f8b76ffa4983b9d"
+            },
+            "44": {
+              "path": "TinyPerson/journal_experiments/phase2/TP_CUE_COLOR_H2_MOSAIC/seed_44_corner_sw640_sh512/weights/best.pt",
+              "sha256": "62dd946685092171100309e6eb5ae96fbf0eb6ffa97ce9d1ea621d3622b815e2"
+            }
+          }
+        },
+        "EDGE_CUE": {
+          "source_run": "TinyPerson/original_runs/ES1_MOSAIC",
+          "sections": [
+            "C:edge"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "TinyPerson/original_runs/ES1_MOSAIC/seed_42_corner_sw640_sh512/weights/best.pt",
+              "sha256": "2ac7ff5d2c3dd09ea2b0d0d7acff7e50313df72606fe0849833d8ec6fb956e51"
+            },
+            "43": {
+              "path": "TinyPerson/original_runs/ES1_MOSAIC/seed_43_corner_sw640_sh512/weights/best.pt",
+              "sha256": "25428e72c722225342faebec82071d083c0623bbb4ccd7653d72e5b0e7fdb8ab"
+            },
+            "44": {
+              "path": "TinyPerson/original_runs/ES1_MOSAIC/seed_44_corner_sw640_sh512/weights/best.pt",
+              "sha256": "80b4179c6921790c9e4bef40425c9e1ccb176cb0923677544885c7b6983b405f"
+            }
+          }
+        },
+        "ALPHA4": {
+          "source_run": "TinyPerson/journal_experiments/alpha_sensitivity/ALPHA4_rerun",
+          "sections": [
+            "D:alpha4"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "TinyPerson/journal_experiments/alpha_sensitivity/ALPHA4_rerun/seed_42_corner_sw640_sh512/weights/best.pt",
+              "sha256": "381ce314e993dd2a9f9ff29c8a51a0b247573782ecd9348cedb66ce479b8680f"
+            },
+            "43": {
+              "path": "TinyPerson/journal_experiments/alpha_sensitivity/ALPHA4_rerun/seed_43_corner_sw640_sh512/weights/best.pt",
+              "sha256": "e7170ccdf9dc967c9ed9f5139c0e43603531edfcf049cdae23226d0373bcd232"
+            },
+            "44": {
+              "path": "TinyPerson/journal_experiments/alpha_sensitivity/ALPHA4_rerun/seed_44_corner_sw640_sh512/weights/best.pt",
+              "sha256": "7a093846ae931a8384a69d3be784ce9e08ce15f95fc1df023e035c0985a7d559"
+            }
+          }
+        },
+        "ALPHA8": {
+          "source_run": "TinyPerson/journal_experiments/alpha_sensitivity/ALPHA8_rerun",
+          "sections": [
+            "D:alpha8"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "TinyPerson/journal_experiments/alpha_sensitivity/ALPHA8_rerun/seed_42_corner_sw640_sh512/weights/best.pt",
+              "sha256": "391548ba3833feb16a725ca0577c3d28a1993937da454913561b26532acbb9d9"
+            },
+            "43": {
+              "path": "TinyPerson/journal_experiments/alpha_sensitivity/ALPHA8_rerun/seed_43_corner_sw640_sh512/weights/best.pt",
+              "sha256": "e8c56dde53a0dae9107d7b6350f988af8ab8475eba76dd871e2eec676a273ee6"
+            },
+            "44": {
+              "path": "TinyPerson/journal_experiments/alpha_sensitivity/ALPHA8_rerun/seed_44_corner_sw640_sh512/weights/best.pt",
+              "sha256": "aa6a970866a133a42695a12b7ae22ebd957ca3a609a5b1148f27e8e07d236c24"
+            }
+          }
+        }
+      },
+      "unresolved_main_results": [
+        {
+          "model": "YOLOv5n",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "YOLOv8n",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "YOLOv9t",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "YOLOv10n",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "YOLO11n",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "ATSS R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "Faster R-CNN R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "FCOS R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "RetinaNet R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "Cascade R-CNN R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "RTMDet-S",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "Deformable DETR R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "RT-DETR R18",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "STW-YOLO",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "TPH-YOLOv5",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "FCOS w/ SET",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        }
+      ]
+    },
+    "Varroa": {
+      "cases": {
+        "FTSC": {
+          "source_run": "Varroa/original_runs/V1_FTSC",
+          "sections": [
+            "main:YOLOv8n+FTSC",
+            "A:on",
+            "C:reference",
+            "D:alpha6"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "Varroa/original_runs/V1_FTSC/seed_42/weights/best.pt",
+              "sha256": "161b6ad89d1d4ca759b9a4565ee8a710b3d1e790c52b7ad2e1f74bb33507915e"
+            },
+            "43": {
+              "path": "Varroa/original_runs/V1_FTSC/seed_43/weights/best.pt",
+              "sha256": "4677fb5708d2657340d231c52069eb0116e7f25a85769abb37ec099f840982b9"
+            },
+            "44": {
+              "path": "Varroa/original_runs/V1_FTSC/seed_44/weights/best.pt",
+              "sha256": "65a7a4e2251051eecd08acd8192f66679193b496dbb996cab526bd6cd0bf7f66"
+            }
+          }
+        },
+        "FTSC_YOLOV9T": {
+          "source_run": "Varroa/cross_yolo_portability/yolov9t/yolov9t__FTSC_H2",
+          "sections": [
+            "main:YOLOv9t+FTSC"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "Varroa/cross_yolo_portability/yolov9t/yolov9t__FTSC_H2/seed_42/weights/best.pt",
+              "sha256": "bfb182f00633fc0b383f47c780a2e9d88bf3cf5c37f65934df680e040befd7b2"
+            },
+            "43": {
+              "path": "Varroa/cross_yolo_portability/yolov9t/yolov9t__FTSC_H2/seed_43/weights/best.pt",
+              "sha256": "5ff2acde1a01ea521ba83c544fc2187deb8b497dc60437a1439df6d71476ff15"
+            },
+            "44": {
+              "path": "Varroa/cross_yolo_portability/yolov9t/yolov9t__FTSC_H2/seed_44/weights/best.pt",
+              "sha256": "3c3ae667009411a71d612695a09cf9ea02f50207c631bf6c375ef3cd7e817c1e"
+            }
+          }
+        },
+        "FTSC_YOLO11N": {
+          "source_run": "Varroa/cross_yolo_portability/yolo11n/yolo11n__FTSC_H2",
+          "sections": [
+            "main:YOLO11n+FTSC"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "Varroa/cross_yolo_portability/yolo11n/yolo11n__FTSC_H2/seed_42/weights/best.pt",
+              "sha256": "85098d9a849962f5a5e7b0d2e749f1b3517d02f6ab4b881d8ee1e33511cc4255"
+            },
+            "43": {
+              "path": "Varroa/cross_yolo_portability/yolo11n/yolo11n__FTSC_H2/seed_43/weights/best.pt",
+              "sha256": "cd3bba4d70fc58cdb09161bab239e562d73b492b0dfdd7499b5584e92e94ddb8"
+            },
+            "44": {
+              "path": "Varroa/cross_yolo_portability/yolo11n/yolo11n__FTSC_H2/seed_44/weights/best.pt",
+              "sha256": "078834b6539e963cd3f2b3ec7181ec3e09ee5b85ce2cdc574d05384c4969252b"
+            }
+          }
+        },
+        "FTSC_OFF": {
+          "source_run": "Varroa/original_runs/V0_NOFTSC",
+          "sections": [
+            "A:off"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "Varroa/original_runs/V0_NOFTSC/seed_42/weights/best.pt",
+              "sha256": "e55cefa4644318491dcac5d2fe6a5fb9e7a58dd0e067808fe7ca5f754b93ed51"
+            },
+            "43": {
+              "path": "Varroa/original_runs/V0_NOFTSC/seed_43/weights/best.pt",
+              "sha256": "3d7d1122e77ec4215ab727b38963d660aa1eb309d34f82d7c5762cf842594c81"
+            },
+            "44": {
+              "path": "Varroa/original_runs/V0_NOFTSC/seed_44/weights/best.pt",
+              "sha256": "b1e93f043a2f1401a0f05f4d944d0c4f66faf4f81db351548edaf38a065b70d3"
+            }
+          }
+        },
+        "HEAD_H0": {
+          "source_run": "Varroa/journal_experiments/phase2/VR_STRUCT_H0_P2345",
+          "sections": [
+            "B:P2345"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H0_P2345/seed_42/weights/best.pt",
+              "sha256": "a3957532e1cfa93b764223d4e775c3f2cc1f86ce960e82d86cf185db19f252d2"
+            },
+            "43": {
+              "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H0_P2345/seed_43/weights/best.pt",
+              "sha256": "d859775209a4546106676b14269ad5b2e91f3580f12b086abe0552affc007083"
+            },
+            "44": {
+              "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H0_P2345/seed_44/weights/best.pt",
+              "sha256": "d1c0c8988ac16d21ab289737cbc3790edac4920c2f508012466362eab6e95d5e"
+            }
+          }
+        },
+        "HEAD_H1": {
+          "source_run": "Varroa/journal_experiments/phase2/VR_STRUCT_H1_P234",
+          "sections": [
+            "B:P234"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H1_P234/seed_42/weights/best.pt",
+              "sha256": "5ff5459dbaa18af9fdbb78da0196bf116d89f6ece3473dcc4fc29e6cb7d1afc2"
+            },
+            "43": {
+              "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H1_P234/seed_43/weights/best.pt",
+              "sha256": "f1cc58f6d6f254ff74e805fbb45ec723f0bb231081333a7ca175f7c8d436da9d"
+            },
+            "44": {
+              "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H1_P234/seed_44/weights/best.pt",
+              "sha256": "3ca613b866cfc317e83f96cd3fb9cd64957e1bdb6541c61a92c336165e63be53"
+            }
+          }
+        },
+        "HEAD_H2": {
+          "source_run": "Varroa/journal_experiments/phase2/VR_STRUCT_H2_P23",
+          "sections": [
+            "B:P23-structural"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H2_P23/seed_42/weights/best.pt",
+              "sha256": "41be2a19e412dc7b85d1dcd17817ae8699f8715fb0abc224b92af492a846490d"
+            },
+            "43": {
+              "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H2_P23/seed_43/weights/best.pt",
+              "sha256": "4d0eae9f4bae221122d27e9c1fabe54e37bfb1588a7707eb29e225843decb3be"
+            },
+            "44": {
+              "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H2_P23/seed_44/weights/best.pt",
+              "sha256": "29c5638472ba665ae2567d0659bccb29740cc7f84e9b6dda252b20c6ddf0fe5a"
+            }
+          }
+        },
+        "HEAD_H3": {
+          "source_run": "Varroa/journal_experiments/phase2/VR_STRUCT_H3_P2",
+          "sections": [
+            "B:P2"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H3_P2/seed_42/weights/best.pt",
+              "sha256": "96280874dba1227196efdd3bae1c870fbec853c7dbbce1b42ba05c6140fe6d80"
+            },
+            "43": {
+              "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H3_P2/seed_43/weights/best.pt",
+              "sha256": "4d86622005a8c2353aac2ad10d28e629036650a34b2a463e8baedfa8d8c70bc4"
+            },
+            "44": {
+              "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H3_P2/seed_44/weights/best.pt",
+              "sha256": "993927cbb04c76d20e9c24bf506a01bc1cf15bcad2b3bece08d08f93455b43e5"
+            }
+          }
+        },
+        "COLOR_CUE": {
+          "source_run": "Varroa/original_runs/V3_COLOR",
+          "sections": [
+            "C:color"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "Varroa/original_runs/V3_COLOR/seed_42/weights/best.pt",
+              "sha256": "3d4d0365dcb00eebc9f8c88a7b4d6d81d0b6d771b456ad6073f1e04c42c15528"
+            },
+            "43": {
+              "path": "Varroa/original_runs/V3_COLOR/seed_43/weights/best.pt",
+              "sha256": "187462df4cd6238e32ece0fdae0b21ef0d8da2a94f0c5f11bee8197caf0b91d3"
+            },
+            "44": {
+              "path": "Varroa/original_runs/V3_COLOR/seed_44/weights/best.pt",
+              "sha256": "c7b8eec985b152bd4e90315a3f1955f714be5dac1e80af7ab16b89021c96600e"
+            }
+          }
+        },
+        "EDGE_P2": {
+          "source_run": "Varroa/additional_ablations/varroa_ftsc_edge_placement_headscale/EDGE_P2_DETECT_ONLY",
+          "sections": [
+            "C:edge-p2"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "Varroa/additional_ablations/varroa_ftsc_edge_placement_headscale/EDGE_P2_DETECT_ONLY/seed_42/weights/best.pt",
+              "sha256": "90ed2c900e3c7e34a1a3ef44d545b0bca611e4d486ccedbd05e223ec0fe92184"
+            },
+            "43": {
+              "path": "Varroa/additional_ablations/varroa_ftsc_edge_placement_headscale/EDGE_P2_DETECT_ONLY/seed_43/weights/best.pt",
+              "sha256": "8462ac578df5fa3190b22b05793338777dbe1377d7232d0196bf906d74648f26"
+            },
+            "44": {
+              "path": "Varroa/additional_ablations/varroa_ftsc_edge_placement_headscale/EDGE_P2_DETECT_ONLY/seed_44/weights/best.pt",
+              "sha256": "8a8304cb67a843f80b24256cb0d58f70e1b9386d7f33c4eba97d0f98371b8414"
+            }
+          }
+        },
+        "EDGE_P3": {
+          "source_run": "Varroa/additional_ablations/varroa_ftsc_edge_placement_headscale/EDGE_P3_DETECT_ONLY",
+          "sections": [
+            "C:edge-p3"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "Varroa/additional_ablations/varroa_ftsc_edge_placement_headscale/EDGE_P3_DETECT_ONLY/seed_42/weights/best.pt",
+              "sha256": "0f0a209a649c833455160e1879334d10316b8dfea992b8638816aa42ffd685fa"
+            },
+            "43": {
+              "path": "Varroa/additional_ablations/varroa_ftsc_edge_placement_headscale/EDGE_P3_DETECT_ONLY/seed_43/weights/best.pt",
+              "sha256": "b10cec3b5bd96a473de14a0a5582c5f00557d6f329df4bdf0647ce1c16dc9b42"
+            },
+            "44": {
+              "path": "Varroa/additional_ablations/varroa_ftsc_edge_placement_headscale/EDGE_P3_DETECT_ONLY/seed_44/weights/best.pt",
+              "sha256": "2ed3c0bbc92fd7aeeb5a62be1b8f126e2c1b8d9acb65fc834b5f41825dcc3335"
+            }
+          }
+        },
+        "ALPHA4": {
+          "source_run": "Varroa/journal_experiments/alpha_sensitivity/ALPHA4_rerun",
+          "sections": [
+            "D:alpha4"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "Varroa/journal_experiments/alpha_sensitivity/ALPHA4_rerun/seed_42/weights/best.pt",
+              "sha256": "81719c364144a8e26205e3bb235767d79a9747a129c885feb8c1d0734d377a2c"
+            },
+            "43": {
+              "path": "Varroa/journal_experiments/alpha_sensitivity/ALPHA4_rerun/seed_43/weights/best.pt",
+              "sha256": "ac91eb0ecd8882c288b6dd34ccbcfc6f120c084cfbf7ba8d197b10d3691cf568"
+            },
+            "44": {
+              "path": "Varroa/journal_experiments/alpha_sensitivity/ALPHA4_rerun/seed_44/weights/best.pt",
+              "sha256": "f4abae50cd36222a249717ed127444e5ca7fff911dee02b9428f87cdbf67ff40"
+            }
+          }
+        },
+        "ALPHA8": {
+          "source_run": "Varroa/journal_experiments/alpha_sensitivity/ALPHA8_rerun",
+          "sections": [
+            "D:alpha8"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "Varroa/journal_experiments/alpha_sensitivity/ALPHA8_rerun/seed_42/weights/best.pt",
+              "sha256": "efb357bd267d2a89d06ff3d129d298fab26a0a9ed2534e15669f704890cad486"
+            },
+            "43": {
+              "path": "Varroa/journal_experiments/alpha_sensitivity/ALPHA8_rerun/seed_43/weights/best.pt",
+              "sha256": "f7bd1688c4b60db0daae27f71c7cc1fbbe902858fec8832935d0baca17530be9"
+            },
+            "44": {
+              "path": "Varroa/journal_experiments/alpha_sensitivity/ALPHA8_rerun/seed_44/weights/best.pt",
+              "sha256": "58ce82244570b3f0a3391df99248b38dfedd464833dda4fbdab980104963bba1"
+            }
+          }
+        }
+      },
+      "unresolved_main_results": [
+        {
+          "model": "YOLOv5n",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "YOLOv8n",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "YOLOv9t",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "YOLOv10n",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "YOLO11n",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "ATSS R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "Faster R-CNN R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "FCOS R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "RetinaNet R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "Cascade R-CNN R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "RTMDet-S",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "Deformable DETR R50",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "RT-DETR R18",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        },
+        {
+          "model": "STW-YOLO",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "TPH-YOLOv5",
+          "reason": "Report baseline checkpoint lineage not yet audited; do not substitute cross-YOLO stock checkpoint"
+        },
+        {
+          "model": "FCOS w/ SET",
+          "reason": "Non-Ultralytics / specialized source checkpoints and backend evaluator not yet audited"
+        }
+      ]
+    }
+  }
+}
