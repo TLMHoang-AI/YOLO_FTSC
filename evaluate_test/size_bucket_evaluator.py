@@ -122,6 +122,7 @@ def _predictions(
     batch: int,
     device: str,
     workers: int,
+    half: bool | None = None,
 ) -> list[dict[str, Any]]:
     """Run partner-matched prediction settings and collapse all classes to category 1."""
     detections = []
@@ -132,6 +133,7 @@ def _predictions(
         results = model.predict(
             source=[str(path) for path in chunk], imgsz=imgsz, batch=batch,
             device=device, workers=workers, iou=0.5, verbose=False, stream=True,
+            **({"half": half} if half is not None else {}),
         )
         for offset, result in enumerate(results):
             boxes = result.boxes

@@ -383,8 +383,13 @@ def decode_ultralytics_result(result) -> tuple[list[list[float]], list[float], l
     )
 
 
-def predict_merged_test(run_dir: Path, test_out_dir: Path, data_root: Path, args: argparse.Namespace) -> Path:
-    """Run on corner windows, translate boxes, NMS, and emit original-image COCO detections."""
+def predict_merged_test(run_dir: Path, test_out_dir: Path, data_root: Path, args: argparse.Namespace,
+                        *, model_path: Path | None = None, half: bool | None = None) -> Path:
+    """Run backend on corners, translate boxes, NMS, emit original-image detections.
+
+    Optional model_path supports independent .pt/.engine/.onnx evaluation. The
+    default remains the historical best.pt path for existing training runs.
+    """
     local_ultralytics()
     from ultralytics import YOLO
 
@@ -398,7 +403,7 @@ def predict_merged_test(run_dir: Path, test_out_dir: Path, data_root: Path, args
     records = manifest["images"]
     image_paths = [str(test_out_dir / "images" / f"test_{record['image_id']}.jpg") for record in records]
     by_original: dict[int, list[dict]] = defaultdict(list)
-    model = YOLO(run_dir / "weights/best.pt")
+    model = YOLO(str(model_path if model_path is not None else run_dir / "weights/best.pt"), task="detect")
     chunk_size = max(args.batch_size * 8, 32)
     for start in range(0, len(records), chunk_size):
         chunk_records = records[start : start + chunk_size]
@@ -413,6 +418,7 @@ def predict_merged_test(run_dir: Path, test_out_dir: Path, data_root: Path, args
             max_det=300,
             stream=True,
             verbose=False,
+            **({"half": half} if half is not None else {}),
         )
         for record, result in zip(chunk_records, predictions):
             original_id = original_id_by_name[record["file_name"]]
