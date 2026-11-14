@@ -525,12 +525,20 @@ class DeploymentContractTests(unittest.TestCase):
                 self.assertNotIn("upload_file", code)
                 self.assertIn("'--report-manifest'", code)
                 self.assertIn("'--scope', 'report'", code)
-                self.assertIn(f"FTSC_DEPLOY_{suffix}_CASES = []", code)
                 selected_protocol = (deploy.RECT_PARITY_PROTOCOL if suffix == "LEVIR"
                                      else deploy.NATIVE_VAL_PROTOCOL)
                 self.assertIn(f"FTSC_DEPLOY_{suffix}_EVAL_PROTOCOL = '{selected_protocol}'", code)
                 self.assertIn("'--evaluation-protocol', FTSC_DEPLOY_", code)
-                self.assertIn("utils/ftsc_deployment_parity_probe_v1.py", code)
+                if suffix == "LEVIR":
+                    self.assertIn("FTSC_DEPLOY_LEVIR_STAGE = 'ftsc_fp32'", code)
+                    self.assertIn("utils.ftsc_deployment_rect_parity_audit_v1", code)
+                    self.assertIn("ftsc_all_precision", code)
+                    self.assertIn("report_all_precision", code)
+                    self.assertIn("if _dep_phase == 'audit':", code)
+                    self.assertIn("if _dep_phase == 'evaluate':", code)
+                else:
+                    self.assertIn(f"FTSC_DEPLOY_{suffix}_CASES = []", code)
+                    self.assertIn("utils/ftsc_deployment_parity_probe_v1.py", code)
 
 
 if __name__ == "__main__":
