@@ -18,6 +18,7 @@ import platform
 import re
 import shutil
 import statistics
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +31,20 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = "FTSC_DEPLOY_EVAL_20261112_REPORT_V3"
 PARTNER_CONTRACT = "FTSC_DEPLOY_PARTNER_PREDICT_COCO_V1"
 PARTNER_PROTOCOL = "partner_predict_coco_v1"
+PARTNER_RUNTIME_REVISION = "trt_named_io_v2"
 NATIVE_PROTOCOL = "native_ultralytics_v1"
+NATIVE_VAL_PROTOCOL = "native_ultralytics_val_v2"
+NATIVE_VAL_CONTRACT = "FTSC_DEPLOY_NATIVE_ULTRALYTICS_VAL_V2"
+NATIVE_VAL_RUNTIME_REVISION = "trt_named_io_val_v2"
+# LEVIR only: preserve paper YOLO.val pre-letterbox imgsz=512 and rect=True.
+# Static TRT shape (544x544) is derived from the prior validator batch_shapes.
+RECT_PARITY_PROTOCOL = "native_ultralytics_val_rect_parity_v3"
+RECT_PARITY_CONTRACT = "FTSC_DEPLOY_LEVIR_RECT_CANVAS_PARITY_V3"
+RECT_PARITY_RUNTIME_REVISION = "levir_512_padded_544_static_trt_v1"
+RECT_PAPER_IMGSZ = 512
+RECT_PAPER_STRIDE = 32  # PyTorchBackend enforces max(model.stride, 32)
+RECT_ENGINE_CANVAS = 544  # measured 99/99 historical LEVIR seed42 batches
+RECT_PT_VAL_BATCH = 8
 TINY_MERGED_CONTRACT = "tinybenchmark_merged_original_iou50_95_v2"
 DEFAULT_BACKENDS = ("pt32", "pt16", "trt32", "trt16")
 BACKENDS = DEFAULT_BACKENDS + ("ort_cpu32", "ort_cpu16")
@@ -58,11 +72,69 @@ PARTNER_EVALUATOR = {
 }
 
 
+@lru_cache(maxsize=1)
+def partner_source_hashes() -> dict[str, str]:
+    """Pin all files capable of changing partner export, inference or AP logic."""
+    names = (
+        "utils/ftsc_deployment_backend_eval_v1.py",
+        "utils/ftsc_partner_backend_metrics_v1.py",
+        "models_related/ultralytics/ultralytics/nn/backends/tensorrt.py",
+        "models_related/ultralytics/ultralytics/nn/backends/pytorch.py",
+        "models_related/ultralytics/ultralytics/nn/modules/head.py",
+        "models_related/ultralytics/ultralytics/nn/autobackend.py",
+        "models_related/ultralytics/ultralytics/engine/exporter.py",
+        "models_related/ultralytics/ultralytics/engine/predictor.py",
+        "models_related/ultralytics/ultralytics/models/yolo/detect/predict.py",
+        "models_related/ultralytics/ultralytics/utils/nms.py",
+        "evaluate_test/standard_detection_metrics.py",
+        "evaluate_test/size_bucket_evaluator.py",
+        "train_tinyperson_scripts/train_all_tinyperson.py",
+        "vendor/tinyperson_cocoeval.py",
+    )
+    return {name: sha256(ROOT / name) for name in names}
+
+
+@lru_cache(maxsize=1)
+def rect_parity_source_hashes() -> dict[str, str]:
+    """Lock v3 evaluation, dataset padding, validator, exporter and backends."""
+    names = (
+        "utils/ftsc_deployment_backend_eval_v1.py",
+        "models_related/ultralytics/ultralytics/nn/backends/tensorrt.py",
+        "models_related/ultralytics/ultralytics/nn/backends/pytorch.py",
+        "models_related/ultralytics/ultralytics/nn/modules/head.py",
+        "models_related/ultralytics/ultralytics/nn/autobackend.py",
+        "models_related/ultralytics/ultralytics/engine/validator.py",
+        "models_related/ultralytics/ultralytics/engine/model.py",
+        "models_related/ultralytics/ultralytics/engine/exporter.py",
+        "models_related/ultralytics/ultralytics/data/base.py",
+        "models_related/ultralytics/ultralytics/data/build.py",
+        "models_related/ultralytics/ultralytics/data/dataset.py",
+        "models_related/ultralytics/ultralytics/data/augment.py",
+        "models_related/ultralytics/ultralytics/models/yolo/detect/val.py",
+        "models_related/ultralytics/ultralytics/utils/nms.py",
+        "evaluate_test/standard_detection_metrics.py",
+        "evaluate_test/size_bucket_evaluator.py",
+    )
+    return {name: sha256(ROOT / name) for name in names}
+
+
+def rect_parity_mode(args: argparse.Namespace) -> bool:
+    return evaluation_protocol(args) == RECT_PARITY_PROTOCOL
+
+
+def native_val_mode(args: argparse.Namespace) -> bool:
+    return evaluation_protocol(args) in (NATIVE_VAL_PROTOCOL, RECT_PARITY_PROTOCOL)
+
+
 def evaluation_protocol(args: argparse.Namespace) -> str:
     return getattr(args, "evaluation_protocol", NATIVE_PROTOCOL)
 
 
 def evaluator_name(args: argparse.Namespace) -> str:
+    if rect_parity_mode(args):
+        return "ultralytics_paper_rect_native_val_with_static_engine_544_v3"
+    if native_val_mode(args) and args.dataset != "TinyPerson":
+        return "ultralytics_test_val_json_plus_tinybenchmark_native_small_v2"
     return (PARTNER_EVALUATOR if evaluation_protocol(args) == PARTNER_PROTOCOL else EVALUATOR)[args.dataset]
 
 
@@ -319,9 +391,26 @@ def cache_export(pt: Path, digest: str, backend: str, output_dir: Path, imgsz: i
     # TensorRT engine artifacts are bound to device/toolchain. Re-export on Jetson.
     fingerprint = {"source_sha256": digest, "backend": backend, "imgsz": imgsz,
                    "gpu_name": gpu_name, "device": device, "torch": str(torch.__version__)}
-    if protocol == PARTNER_PROTOCOL:
-        fingerprint["export_protocol"] = PARTNER_PROTOCOL
+    if protocol in (PARTNER_PROTOCOL, NATIVE_VAL_PROTOCOL, RECT_PARITY_PROTOCOL):
+        fingerprint["export_protocol"] = protocol
         fingerprint["simplify"] = False
+        sources = (rect_parity_source_hashes() if protocol == RECT_PARITY_PROTOCOL
+                   else partner_source_hashes())
+        fingerprint["export_source_sha256"] = {
+            name: source_hash for name, source_hash in sources.items()
+            if name in (
+                "utils/ftsc_deployment_backend_eval_v1.py",
+                "models_related/ultralytics/ultralytics/nn/backends/tensorrt.py",
+                "models_related/ultralytics/ultralytics/nn/modules/head.py",
+                "models_related/ultralytics/ultralytics/engine/exporter.py",
+            )
+        }
+    if protocol == RECT_PARITY_PROTOCOL:
+        require(is_trt and imgsz == RECT_ENGINE_CANVAS,
+                "LEVIR V3 only exports a static TensorRT 544x544 canvas")
+        fingerprint["paper_preprocess_imgsz"] = RECT_PAPER_IMGSZ
+        fingerprint["paper_rect"] = True
+        fingerprint["paper_stride"] = RECT_PAPER_STRIDE
     if is_trt:
         require(torch.cuda.is_available() and device != "cpu",
                 "TensorRT export requires CUDA on the target machine")
@@ -339,7 +428,7 @@ def cache_export(pt: Path, digest: str, backend: str, output_dir: Path, imgsz: i
     # Preserve source data. Backend precision is baked into export, not inferred
     # from PyTorch checkpoint dtype. Disable embedded NMS to keep predictor NMS.
     model = YOLO(str(staged), task="detect")
-    partner_kwargs = {"simplify": False, "int8": False, "verbose": False} if protocol == PARTNER_PROTOCOL else {}
+    partner_kwargs = {"simplify": False, "int8": False, "verbose": False} if protocol in (PARTNER_PROTOCOL, NATIVE_VAL_PROTOCOL, RECT_PARITY_PROTOCOL) else {}
     exported = Path(model.export(
         format="engine" if is_trt else "onnx",
         imgsz=imgsz, batch=1, half=backend.endswith("16"), device=device,
@@ -365,8 +454,178 @@ def prepare_backend(args: argparse.Namespace, provenance: dict[str, Any],
     elif backend == "ort_cpu16":
         # ONNX FP16 export needs CUDA; CPU EP may not implement all FP16 ops.
         require(args.device != "cpu", "ORT CPU FP16 export requires CUDA; CPU execution may still be unsupported")
+    if rect_parity_mode(args):
+        require(args.dataset == "LEVIR-Ship" and backend.startswith("trt"),
+                "Rect parity V3 only supports LEVIR TensorRT exports")
+        imgsz = RECT_ENGINE_CANVAS
     return cache_export(pt, provenance["sha256"], backend, output_dir, imgsz, export_device,
                         evaluation_protocol(args))
+
+
+def val_detections_to_size_predictions(
+    detections: list[dict[str, Any]], images: list[Path],
+) -> list[dict[str, Any]]:
+    """Convert detections produced by YOLO.val() into the original-image
+    TinyBenchmark size-bucket format, without a second inference pass.
+
+    The fork's DetectionValidator.pred_to_json() records file_name, image_id,
+    category_id, bbox (original-image xywh) and score. Fail if any filename
+    is ambiguous or if the validator emitted a foreign image.
+    """
+    names = [p.name for p in images]
+    require(len(names) == len(set(names)),
+            "Native test image names are not unique; cannot safely join val JSON by basename")
+    ids = {name: index for index, name in enumerate(names, 1)}
+    predictions: list[dict[str, Any]] = []
+    for detection in detections:
+        name = detection.get("file_name")
+        require(isinstance(name, str) and name in ids,
+                f"YOLO.val JSON references missing/ambiguous test image: {name!r}")
+        bbox = detection.get("bbox")
+        score = detection.get("score")
+        require(isinstance(bbox, list) and len(bbox) == 4 and
+                all(type(v) in (int, float) and math.isfinite(v) for v in bbox) and
+                all(v >= 0 for v in bbox[2:]) and
+                type(score) in (int, float) and math.isfinite(score) and 0 <= score <= 1,
+                f"Malformed YOLO.val detection: {detection!r}")
+        predictions.append({
+            "image_id": ids[name],
+            "category_id": 1,  # paper's existing class-agnostic size-bucket contract
+            "bbox": [float(v) for v in bbox],
+            "score": float(score),
+        })
+    return predictions
+
+
+def paper_rect_static_validator():
+    """Local validator class: TRT static 544 input with *paper* LEVIR 512 preprocessor.
+
+    Model.val() passes the custom validator class as validator=... and uses the
+    unmodified upstream BaseValidator loop. For static engines that loop forces
+    rect=False before calling get_dataloader; restore rect only *here*. The
+    original local variable 'imgsz=544' in BaseValidator.__call__ is retained,
+    so engine warmup uses the correct 544 tensor, while the dataset loads
+    512-pixel content and performs historical rectangular 16-pixel padding.
+    """
+    from ultralytics.models.yolo.detect.val import DetectionValidator
+
+    class LevirPaperRectTensorRTValidator(DetectionValidator):
+        def get_dataloader(self, dataset_path: str, batch_size: int):
+            require(int(self.args.imgsz) == RECT_ENGINE_CANVAS,
+                    "TRT static 544 engine must be initialized with imgsz=544")
+            require(int(batch_size) == 1 and int(self.args.batch) == 1,
+                    "Static TRT engine requires batch 1")
+            require(not self.args.rect, "Unexpected validator initialization ordering")
+            # PyTorchBackend uses max(int(model.stride.max()), 32), but TensorRT
+            # export metadata can contain stride=8. Restore paper PT stride=32.
+            self.stride = RECT_PAPER_STRIDE
+            self.args.imgsz = RECT_PAPER_IMGSZ
+            self.args.rect = True
+            loader = super().get_dataloader(dataset_path, batch_size)
+            dataset = loader.dataset
+            shapes = getattr(dataset, "batch_shapes", None)
+            require(shapes is not None and len(shapes) == len(loader),
+                    "Rectangular LEVIR validator has missing/incomplete batch shapes")
+            require(all(tuple(int(x) for x in shape) ==
+                        (RECT_ENGINE_CANVAS, RECT_ENGINE_CANVAS)
+                        for shape in shapes),
+                    "LEVIR has non-544 rect batch: cannot feed a static TRT engine")
+            require(bool(getattr(dataset, "rect", False)) and
+                    int(getattr(dataset, "imgsz", -1)) == RECT_PAPER_IMGSZ and
+                    int(getattr(dataset, "stride", -1)) == RECT_PAPER_STRIDE,
+                    "TensorRT dataloader does not reproduce paper rect/imgsz/stride")
+            return loader
+
+    return LevirPaperRectTensorRTValidator
+
+
+def capture_rect_val_inputs(validator: Any, images: list[Path],
+                            output_dir: Path) -> dict[str, Any]:
+    """SHA-256 of the real dataset's preprocessed CHW uint8 tensors, all images.
+
+    On the frozen LEVIR test split this compares the exact 512-content + pad
+    used by paper PT and static TRT, not simply matching a 544 canvas shape.
+    """
+    import numpy as np
+    import torch
+
+    dataset = getattr(getattr(validator, "dataloader", None), "dataset", None)
+    require(dataset is not None, "Cannot inspect YOLO.val dataset for pixel parity")
+    ordered = [str(Path(path).resolve()) for path in dataset.im_files]
+    expected = {str(path.resolve()) for path in images}
+    require(len(ordered) == len(expected) and set(ordered) == expected,
+            "Rect parity input hashing sees a different native test image set")
+    by_file = {}
+    for index, name in enumerate(ordered):
+        value = dataset[index]["img"]
+        if isinstance(value, torch.Tensor):
+            value = value.detach().cpu().numpy()
+        value = np.ascontiguousarray(value)
+        require(value.dtype == np.uint8 and
+                tuple(value.shape) == (3, RECT_ENGINE_CANVAS, RECT_ENGINE_CANVAS),
+                f"Wrong native rect input shape/dtype: {name}, {value.shape}, {value.dtype}")
+        by_file[name] = hashlib.sha256(value.tobytes()).hexdigest()
+    require(len(by_file) == len(expected), "Missing input SHA records")
+    report = {
+        "schema": "ftsc_levir_exact_paper_rect_input_pixels_v3",
+        "paper_imgsz": RECT_PAPER_IMGSZ,
+        "canvas": RECT_ENGINE_CANVAS,
+        "minimum_pytorch_stride": RECT_PAPER_STRIDE,
+        "source_images_count": len(images),
+        "image_sha256": {name: by_file[name] for name in sorted(by_file)},
+    }
+    path = output_dir / "test_val_preprocessed_inputs_sha256.json"
+    encoded = json.dumps(report, sort_keys=True, indent=2) + "\n"
+    if path.is_file():
+        require(path.read_text(encoding="utf-8") == encoded,
+                f"Preprocessed input mismatch on resumed run: {path}")
+    else:
+        staging = path.with_suffix(".json.tmp")
+        require(not staging.exists(), f"Incomplete prior preprocessing hash: {staging}")
+        staging.write_text(encoded, encoding="utf-8")
+        staging.replace(path)
+    return {
+        "preprocessed_input_manifest_sha256": sha256(path),
+        "preprocessed_input_count": len(by_file),
+        "preprocessed_input_canvas": RECT_ENGINE_CANVAS,
+    }
+
+
+def verify_rect_trt_pt_input_pair(args: argparse.Namespace,
+                                  row: dict[str, Any],
+                                  source_digest: str,
+                                  trt_fingerprints: dict[str, Any]) -> dict[str, Any]:
+    """Refuse to publish TRT AP until all test image tensors match this seed's PT32."""
+    if not rect_parity_mode(args) or not row["backend"].startswith("trt"):
+        return {}
+    pt_dir = path_for(args.project, args.dataset, row["case"], row["seed"], "pt32")
+    trt_dir = path_for(args.project, args.dataset, row["case"], row["seed"], row["backend"])
+    pt_record_path = pt_dir / "metrics.json"
+    require(pt_record_path.is_file(),
+            "Rect parity requires this case/seed PT32 model.val first (select --backends pt32 trt32)")
+    pt_record = json.loads(pt_record_path.read_text(encoding="utf-8"))
+    expected = expected_identity(args, {
+        "case": row["case"], "seed": row["seed"], "backend": "pt32",
+        "source": row["source"],
+    })
+    require(all(pt_record.get(k) == value for k, value in expected.items()),
+            "Rect parity reference PT32 record has a different evaluator/checkpoint identity")
+    require(pt_record.get("source_sha256") == source_digest,
+            "TRT checkpoint differs from PT32 pixel reference checkpoint")
+    left = pt_dir / "test_val_preprocessed_inputs_sha256.json"
+    right = trt_dir / "test_val_preprocessed_inputs_sha256.json"
+    require(left.is_file() and right.is_file(), "Native paper preprocessing fingerprints missing")
+    require(sha256(left) == pt_record.get("preprocessed_input_manifest_sha256"),
+            "PT32 reference preprocessing manifest hash changed")
+    require(sha256(right) == trt_fingerprints.get("preprocessed_input_manifest_sha256"),
+            "TRT preprocessing manifest hash changed")
+    require(left.read_bytes() == right.read_bytes(),
+            "TRT vs PT32 input pixels differ: NOT the same paper validation protocol")
+    return {
+        "full_test_input_parity": True,
+        "paired_pt32_preprocessed_manifest_sha256": sha256(left),
+        "paired_pt32_metrics_sha256": sha256(pt_record_path),
+    }
 
 
 def native_metrics(args: argparse.Namespace, model_file: Path, backend: str,
@@ -388,10 +647,36 @@ def native_metrics(args: argparse.Namespace, model_file: Path, backend: str,
     model = YOLO(str(model_file), task="detect")
     device = backend_device(backend, args.device)
     half = backend == "pt16"
+    val_v2 = native_val_mode(args)
+    paper_parity = rect_parity_mode(args)
+    require(not paper_parity or (args.dataset == "LEVIR-Ship" and
+            backend in ("pt32", "pt16", "trt32", "trt16")),
+            "Native paper rect V3 is only implemented for LEVIR PT/TRT")
+    validator_state: dict[str, Any] = {}
+    if val_v2:
+        # The local Ultralytics Model.val() does NOT assign self.validator.
+        # Capture the actual validator through its supported on_val_end callback.
+        model.add_callback("on_val_end", lambda validator: validator_state.__setitem__(
+            "validator", validator
+        ))
+    # LEVIR paper PT: imgsz=512, batch=8, rect=True -> 512 pixels + 16 pad
+    # each side -> actual 544 canvas. TRT static: export 544 batch1 but use
+    # an isolated validator that keeps the 512-image preprocessing and stride32.
+    val_size = (RECT_ENGINE_CANVAS if paper_parity and backend.startswith("trt")
+                else imgsz)
+    val_batch = (RECT_PT_VAL_BATCH if paper_parity and backend.startswith("pt")
+                 else 1 if paper_parity else args.batch)
+    val_rect = True if paper_parity else False if val_v2 else True
+    validator_class = (paper_rect_static_validator()
+                       if paper_parity and backend.startswith("trt") else None)
     result = model.val(
-        data=str(yaml_path), split="test", imgsz=imgsz, batch=args.batch,
-        device=device, half=half, workers=args.workers, iou=0.5 if args.dataset == "LEVIR-Ship" else 0.7,
-        plots=False, save_json=False, project=str(output_dir), name="validator",
+        validator=validator_class,
+        data=str(yaml_path), split="test", imgsz=val_size, batch=val_batch,
+        device=device, half=half, workers=args.workers,
+        conf=0.001 if val_v2 else None,
+        iou=0.5 if args.dataset == "LEVIR-Ship" else 0.7,
+        max_det=300, rect=val_rect,
+        plots=False, save_json=val_v2, project=str(output_dir), name="validator",
         exist_ok=True, verbose=False,
     )
     metrics = standard_metrics(result, "test")
@@ -400,13 +685,36 @@ def native_metrics(args: argparse.Namespace, model_file: Path, backend: str,
     gt_file = output_dir / "test_size_ground_truth.json"
     pred_file = output_dir / "test_size_predictions.json"
     gt_file.write_text(json.dumps(_coco_ground_truth(images)) + "\n", encoding="utf-8")
-    prediction = _predictions(model, images, imgsz=imgsz, batch=args.batch,
-                              device=device, workers=args.workers,
-                              half=half if backend.startswith("pt") else None)
+    if val_v2:
+        validator = validator_state.get("validator")
+        require(validator is not None, "YOLO.val did not execute on_val_end callback")
+        require(getattr(validator, "seen", None) == len(images),
+                "YOLO.val did not process exactly the native test image count")
+        native_paths = getattr(getattr(validator.dataloader, "dataset", None), "im_files", [])
+        require(len(native_paths) == len(images) and
+                {str(Path(p).resolve()) for p in native_paths} ==
+                {str(p.resolve()) for p in images},
+                "YOLO.val evaluated a different set of native test images")
+        if paper_parity:
+            require(int(validator.args.imgsz) == RECT_PAPER_IMGSZ and
+                    int(validator.args.batch) == val_batch and
+                    bool(validator.args.rect) and
+                    int(validator.stride) == RECT_PAPER_STRIDE,
+                    "V3 validator did not preserve paper imgsz/batch/rect/stride")
+            pixel_fingerprints = capture_rect_val_inputs(validator, images, output_dir)
+        else:
+            pixel_fingerprints = {}
+        prediction = val_detections_to_size_predictions(validator.jdict, images)
+    else:
+        # Historical V3 compatibility only (separate predict pass).
+        prediction = _predictions(model, images, imgsz=imgsz, batch=args.batch,
+                                  device=device, workers=args.workers,
+                                  half=half if backend.startswith("pt") else None)
     pred_file.write_text(json.dumps(prediction) + "\n", encoding="utf-8")
     metrics.update(_evaluate_coco(gt_file, pred_file))
     return metrics, {"data_yaml_sha256": sha256(yaml_path),
-                     "gt_sha256": sha256(gt_file), "predictions_sha256": sha256(pred_file)}
+                     "gt_sha256": sha256(gt_file), "predictions_sha256": sha256(pred_file),
+                     **(pixel_fingerprints if paper_parity else {})}
 
 
 def tiny_metrics(args: argparse.Namespace, model_file: Path, backend: str,
@@ -456,7 +764,8 @@ def validate_metric_values(metrics: dict[str, Any], dataset: str,
 
 def expected_identity(args: argparse.Namespace, row: dict[str, Any]) -> dict[str, Any]:
     partner = evaluation_protocol(args) == PARTNER_PROTOCOL
-    identity = {"contract": PARTNER_CONTRACT if partner else VERSION,
+    native_val_v2 = native_val_mode(args)
+    identity = {"contract": (PARTNER_CONTRACT if partner else NATIVE_VAL_CONTRACT if native_val_v2 else VERSION),
                 "dataset": args.dataset, "case": row["case"],
                 "seed": row["seed"], "backend": row["backend"],
                 "source": row["source"], "platform": args.platform}
@@ -464,10 +773,39 @@ def expected_identity(args: argparse.Namespace, row: dict[str, Any]) -> dict[str
         from utils.ftsc_partner_backend_metrics_v1 import PARTNER_REPO, PARTNER_COMMIT
         identity["evaluation_protocol"] = PARTNER_PROTOCOL
         identity["partner_source"] = f"{PARTNER_REPO}@{PARTNER_COMMIT}"
+        identity["runtime_revision"] = PARTNER_RUNTIME_REVISION
+        identity["source_code_sha256"] = partner_source_hashes()
         identity["predict_config"] = {
             "conf": 0.001, "nms_iou": 0.7, "max_det": 300,
             "batch": 1, "rect": False,
             "tiny_merge_nms_iou": 0.5 if args.dataset == "TinyPerson" else None,
+        }
+    if rect_parity_mode(args):
+        identity["contract"] = RECT_PARITY_CONTRACT
+        identity["evaluation_protocol"] = RECT_PARITY_PROTOCOL
+        identity["runtime_revision"] = RECT_PARITY_RUNTIME_REVISION
+        identity["source_code_sha256"] = rect_parity_source_hashes()
+        identity["validation_config"] = {
+            "method": "YOLO.val", "split": "test", "confidence": 0.001,
+            "nms_iou": 0.5, "max_det": 300,
+            "paper_preprocess_imgsz": RECT_PAPER_IMGSZ,
+            "paper_preprocess_rect": True, "paper_preprocess_stride": RECT_PAPER_STRIDE,
+            "static_engine_canvas": RECT_ENGINE_CANVAS,
+            "pt_val_batch": RECT_PT_VAL_BATCH, "engine_val_batch": 1,
+            "native_small_source": "same_validation_detections",
+            "full_test_input_pixel_sha_comparison": "required_for_trt",
+        }
+    elif native_val_v2:
+        identity["evaluation_protocol"] = NATIVE_VAL_PROTOCOL
+        identity["runtime_revision"] = NATIVE_VAL_RUNTIME_REVISION
+        identity["source_code_sha256"] = partner_source_hashes()
+        identity["validation_config"] = {
+            "method": "YOLO.val" if args.dataset != "TinyPerson" else "TinyBenchmark merged-original",
+            "split": "test", "confidence": 0.001,
+            "nms_iou": 0.5 if args.dataset in ("LEVIR-Ship", "TinyPerson") else 0.7,
+            "max_det": 300, "rect": False, "batch": 1,
+            "native_small_source": "same_validation_detections" if args.dataset != "TinyPerson"
+                                   else "merged_original_predictions",
         }
     return identity
 
@@ -488,6 +826,28 @@ def verify_partner_artifacts(record: dict[str, Any], folder: Path, dataset: str)
                 f"Saved partner prediction/GT fingerprint invalid: {artifact}")
 
 
+def verify_native_val_artifacts(record: dict[str, Any], folder: Path, dataset: str) -> None:
+    if record.get("evaluation_protocol") == RECT_PARITY_PROTOCOL:
+        artifact = folder / "test_val_preprocessed_inputs_sha256.json"
+        require(artifact.is_file() and
+                record.get("preprocessed_input_manifest_sha256") == sha256(artifact) and
+                record.get("preprocessed_input_count", 0) > 0,
+                "V3 full-test image preprocess SHA manifest invalid")
+        if record.get("backend", "").startswith("trt"):
+            require(record.get("full_test_input_parity") is True,
+                    "TRT record does not certify input SHA parity against PT32")
+    if dataset == "TinyPerson":
+        paths = {"predictions_sha256": folder / "evaluation/test_merged_predictions.json"}
+    else:
+        paths = {
+            "gt_sha256": folder / "test_size_ground_truth.json",
+            "predictions_sha256": folder / "test_size_predictions.json",
+        }
+    for key, artifact in paths.items():
+        require(artifact.is_file() and record.get(key) == sha256(artifact),
+                f"Native val V2 saved prediction/GT fingerprint invalid: {artifact}")
+
+
 def evaluate_one(args: argparse.Namespace, archive: Any, row: dict[str, Any]) -> dict[str, Any]:
     backend, case, seed = row["backend"], row["case"], row["seed"]
     output_dir = path_for(args.project, args.dataset, case, seed, backend)
@@ -499,6 +859,13 @@ def evaluate_one(args: argparse.Namespace, archive: Any, row: dict[str, Any]) ->
         validate_metric_values(cached["metrics"], args.dataset, evaluation_protocol(args))
         if evaluation_protocol(args) == PARTNER_PROTOCOL:
             verify_partner_artifacts(cached, output_dir, args.dataset)
+        if native_val_mode(args):
+            verify_native_val_artifacts(cached, output_dir, args.dataset)
+        if rect_parity_mode(args) and backend.startswith("trt"):
+            paired = verify_rect_trt_pt_input_pair(
+                args, row, cached["source_sha256"], cached)
+            require(all(cached.get(k) == value for k, value in paired.items()),
+                    "TRT cache PT32 pairing or full-test pixel hash changed")
         require(cached.get("device") == backend_device(backend, args.device),
                 f"Cached evaluation was run on a different device: {metrics_path}")
         actual_host = hardware_identity(backend_device(backend, args.device))
@@ -544,13 +911,15 @@ def evaluate_one(args: argparse.Namespace, archive: Any, row: dict[str, Any]) ->
     else:
         metrics, fingerprints = native_metrics(args, model_file, backend, output_dir, imgsz)
     validate_metric_values(metrics, args.dataset, evaluation_protocol(args))
+    paired_fingerprints = verify_rect_trt_pt_input_pair(
+        args, row, provenance["sha256"], fingerprints)
     record: dict[str, Any] = {
         **expected_identity(args, row), "source_sha256": provenance["sha256"],
         "hf_revision": provenance["revision"], "model_artifact_sha256": sha256(model_file),
         "evaluator": evaluator_name(args), "imgsz": imgsz,
         "device": backend_device(backend, args.device),
         **hardware_identity(backend_device(backend, args.device)),
-        "metrics": metrics, **fingerprints,
+        "metrics": metrics, **fingerprints, **paired_fingerprints,
     }
     # Write complete result last, atomically; no writes to source HF repository.
     temporary = metrics_path.with_suffix(".json.tmp")
@@ -581,6 +950,15 @@ def aggregate(args: argparse.Namespace) -> list[dict[str, Any]]:
                 validate_metric_values(record["metrics"], args.dataset, evaluation_protocol(args))
                 if evaluation_protocol(args) == PARTNER_PROTOCOL:
                     verify_partner_artifacts(record, path.parent, args.dataset)
+                if native_val_mode(args):
+                    verify_native_val_artifacts(record, path.parent, args.dataset)
+                if rect_parity_mode(args) and backend.startswith("trt"):
+                    verified_pair = verify_rect_trt_pt_input_pair(
+                        args, {"case": case, "seed": seed, "backend": backend,
+                               "source": checkpoint_source(args, case, seed)},
+                        record["source_sha256"], record)
+                    require(all(record.get(k) == value for k, value in verified_pair.items()),
+                            "TRT paper-input paired PT reference changed")
                 found.append(record)
             require(len({x["gt_sha256"] for x in found}) == 1 if args.dataset == "TinyPerson" else True,
                     "Different merged GT hashes across TinyPerson seeds")
@@ -598,8 +976,8 @@ def aggregate(args: argparse.Namespace) -> list[dict[str, Any]]:
                 "evaluator": evaluator_name(args),
                 "imgsz": found[0]["imgsz"],
             }
-            if evaluation_protocol(args) == PARTNER_PROTOCOL:
-                data["evaluation_protocol"] = PARTNER_PROTOCOL
+            if evaluation_protocol(args) in (PARTNER_PROTOCOL, RECT_PARITY_PROTOCOL):
+                data["evaluation_protocol"] = evaluation_protocol(args)
             for label, key in zip(("AP50", "mAP50_95", "AP50_small"),
                                   metric_keys(args.dataset, evaluation_protocol(args))):
                 vals = [100 * x["metrics"][key] for x in found]
@@ -661,6 +1039,15 @@ def aggregate_report(args: argparse.Namespace) -> dict[str, Any]:
                     validate_metric_values(record["metrics"], args.dataset, evaluation_protocol(args))
                     if evaluation_protocol(args) == PARTNER_PROTOCOL:
                         verify_partner_artifacts(record, folder, args.dataset)
+                    if native_val_mode(args):
+                        verify_native_val_artifacts(record, folder, args.dataset)
+                    if rect_parity_mode(args) and backend.startswith("trt"):
+                        verified_pair = verify_rect_trt_pt_input_pair(
+                            args, {"case": case, "seed": seed, "backend": backend,
+                                   "source": checkpoint_source(args, case, seed)},
+                            record["source_sha256"], record)
+                        require(all(record.get(k) == value for k, value in verified_pair.items()),
+                                "TRT paper-input paired PT reference changed")
                     records.append(record)
                 except (OSError, ValueError, TypeError, RuntimeError, KeyError) as error:
                     issues.append(f"{seed}: invalid result: {type(error).__name__}: {error}")
@@ -687,6 +1074,8 @@ def aggregate_report(args: argparse.Namespace) -> dict[str, Any]:
                     "device": records[0]["device"], "gpu_name": records[0]["gpu_name"],
                     "evaluator": records[0]["evaluator"], "status": "COMPLETE",
                 }
+                if evaluation_protocol(args) == RECT_PARITY_PROTOCOL:
+                    row["evaluation_protocol"] = RECT_PARITY_PROTOCOL
                 if evaluation_protocol(args) == PARTNER_PROTOCOL:
                     row["evaluation_protocol"] = PARTNER_PROTOCOL
                     partner_gt_by_case.setdefault(case, {})[backend] = tuple(
@@ -753,9 +1142,11 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--seeds", nargs="+", type=int, default=list(SEEDS))
     p.add_argument("--backends", nargs="+", default=list(DEFAULT_BACKENDS))
     p.add_argument("--scope", choices=("manual", "report"), default="manual")
-    p.add_argument("--evaluation-protocol", choices=(NATIVE_PROTOCOL, PARTNER_PROTOCOL),
-                   default=NATIVE_PROTOCOL,
-                   help="Partner uses independent predict + COCOeval (not comparable to Ultralytics AP).")
+    p.add_argument("--evaluation-protocol",
+                   choices=(RECT_PARITY_PROTOCOL, NATIVE_VAL_PROTOCOL, NATIVE_PROTOCOL, PARTNER_PROTOCOL),
+                   default=NATIVE_VAL_PROTOCOL,
+                   help="For LEVIR paper-accuracy parity use native_ultralytics_val_rect_parity_v3; "
+                        "V2/legacy/partner remain isolated for provenance.")
     p.add_argument("--report-manifest", type=Path, default=REPORT_MANIFEST,
                    help="Curated Main Results + A/B/C/D case manifest")
     p.add_argument("--platform", choices=("marimo_live", "local_server"), default="marimo_live",
@@ -809,10 +1200,24 @@ def main(argv: list[str] | None = None) -> None:
     require(args.batch > 0 and args.workers >= 0, "Invalid batch/workers")
     if evaluation_protocol(args) == PARTNER_PROTOCOL:
         require(args.batch == 1, "Partner deployment accuracy protocol requires batch=1")
+    if native_val_mode(args):
+        require(args.batch == 1, "Native val export batch remains 1; V3 PT validation uses fixed batch 8")
+    if rect_parity_mode(args):
+        require(args.dataset == "LEVIR-Ship",
+                "Rect/canvas V3 is verified only on LEVIR; do not apply to other datasets")
+        require(all(backend in ("pt32", "pt16", "trt32", "trt16")
+                    for backend in args.backends),
+                "Rect/canvas V3 supports only PyTorch/TensorRT until ORT input parity is verified")
     args.project = args.project.expanduser().resolve()
     if evaluation_protocol(args) == PARTNER_PROTOCOL:
         # Separate every artifact/cache/aggregate from the previous native protocol.
-        args.project = args.project / PARTNER_PROTOCOL
+        args.project = args.project / PARTNER_PROTOCOL / PARTNER_RUNTIME_REVISION
+    elif rect_parity_mode(args):
+        # New, isolated result namespace: do not reuse historical V2/partner low AP.
+        args.project = args.project / RECT_PARITY_PROTOCOL / RECT_PARITY_RUNTIME_REVISION
+    elif native_val_mode(args):
+        # Never reuse historic low-AP engine/results when validating the runtime fix.
+        args.project = args.project / NATIVE_VAL_PROTOCOL / NATIVE_VAL_RUNTIME_REVISION
     rows = planned(args)
     if args.phase == "plan":
         print(json.dumps({

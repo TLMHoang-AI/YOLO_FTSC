@@ -72,8 +72,9 @@ class TensorRTBackend(BaseBackend):
         self.output_names = []
         self.fp16 = False
         self.dynamic = False
-        # TensorRT 10 and 11 both drop the legacy binding API in favor of named I/O tensors
-        self.is_trt10 = not hasattr(engine, "num_bindings")
+        # TensorRT 10/11 use named I/O; select explicitly by runtime version,
+        # never by whether a compatibility binding attribute happens to exist.
+        self.is_trt10 = int(trt.__version__.split(".", 1)[0]) >= 10
         num = range(engine.num_io_tensors) if self.is_trt10 else range(engine.num_bindings)
 
         for i in num:
@@ -140,5 +141,21 @@ class TensorRTBackend(BaseBackend):
         assert im.shape == s, f"input size {im.shape} {'>' if self.dynamic else 'not equal to'} max model size {s}"
 
         self.binding_addrs["images"] = int(im.data_ptr())
-        self.context.execute_v2(list(self.binding_addrs.values()))
+        # Refresh pointers after any dynamic resize_ (it can reallocate outputs).
+        for name in self.output_names:
+            self.binding_addrs[name] = int(self.bindings[name].data.data_ptr())
+
+        if self.is_trt10:
+            # TensorRT 10/11 use named I/O tensors, not legacy binding indices.
+            # Execute on PyTorch's current stream so downstream CUDA operations
+            # consume these outputs after TensorRT kernels complete.
+            for name, address in self.binding_addrs.items():
+                if self.context.set_tensor_address(name, address) is False:
+                    raise RuntimeError(f"TensorRT could not bind I/O tensor {name}")
+            stream = torch.cuda.current_stream(device=self.device)
+            if self.context.execute_async_v3(stream_handle=stream.cuda_stream) is False:
+                raise RuntimeError("TensorRT execute_async_v3 returned failure")
+        else:
+            if self.context.execute_v2(list(self.binding_addrs.values())) is False:
+                raise RuntimeError("TensorRT execute_v2 returned failure")
         return [self.bindings[x].data for x in sorted(self.output_names)]

@@ -56,6 +56,249 @@ class DeploymentContractTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             deploy.main(["--dataset", "TinyPerson", "--seeds", "1", "--phase", "plan"])
 
+    def test_native_val_v2_is_the_default_paper_protocol(self):
+        args = deploy.parser().parse_args(["--dataset", "LEVIR-Ship", "--phase", "plan"])
+        self.assertEqual(args.evaluation_protocol, deploy.NATIVE_VAL_PROTOCOL)
+        self.assertEqual(
+            deploy.metric_keys("LEVIR-Ship", deploy.NATIVE_VAL_PROTOCOL),
+            ("test/metrics/mAP50(B)", "test/metrics/mAP50-95(B)",
+             "test_size/AP50-Small"),
+        )
+        self.assertNotEqual(
+            deploy.metric_keys("LEVIR-Ship", deploy.NATIVE_VAL_PROTOCOL),
+            deploy.metric_keys("LEVIR-Ship", deploy.PARTNER_PROTOCOL),
+        )
+        args.platform = "marimo_live"
+        identity = deploy.expected_identity(args, {
+            "case": "FTSC", "seed": 42, "backend": "trt32",
+            "source": "exact/source/best.pt",
+        })
+        self.assertEqual(identity["contract"], deploy.NATIVE_VAL_CONTRACT)
+        self.assertEqual(identity["validation_config"]["method"], "YOLO.val")
+        self.assertEqual(identity["validation_config"]["nms_iou"], 0.5)
+        self.assertEqual(identity["validation_config"]["rect"], False)
+        self.assertEqual(identity["runtime_revision"], deploy.NATIVE_VAL_RUNTIME_REVISION)
+
+    def test_native_val_json_detections_map_to_tinybenchmark_without_predict(self):
+        image_paths = [Path("/images/a.jpg"), Path("/images/b.jpg")]
+        converted = deploy.val_detections_to_size_predictions([
+            {"file_name": "b.jpg", "bbox": [10, 20, 30, 40],
+             "score": 0.81235, "category_id": 8},
+        ], image_paths)
+        self.assertEqual(converted, [
+            {"image_id": 2, "category_id": 1,
+             "bbox": [10.0, 20.0, 30.0, 40.0], "score": 0.81235},
+        ])
+        with self.assertRaisesRegex(RuntimeError, "not unique"):
+            deploy.val_detections_to_size_predictions([], [
+                Path("/foo/a.jpg"), Path("/bar/a.jpg"),
+            ])
+        with self.assertRaisesRegex(RuntimeError, "missing/ambiguous"):
+            deploy.val_detections_to_size_predictions([
+                {"file_name": "unknown.jpg", "bbox": [1, 2, 3, 4],
+                 "score": 0.5},
+            ], image_paths)
+        with self.assertRaisesRegex(RuntimeError, "Malformed"):
+            deploy.val_detections_to_size_predictions([
+                {"file_name": "a.jpg", "bbox": [1, 2, -3, 4],
+                 "score": 0.5},
+            ], image_paths)
+
+    def test_native_val_v2_plan_is_isolated_from_legacy_and_partner(self):
+        import contextlib
+        import io
+        stream = io.StringIO()
+        with contextlib.redirect_stdout(stream):
+            deploy.main([
+                "--dataset", "LEVIR-Ship", "--scope", "report",
+                "--cases", "FTSC", "--seeds", "42",
+                "--backends", "pt32", "trt32",
+                "--evaluation-protocol", deploy.NATIVE_VAL_PROTOCOL,
+                "--phase", "plan",
+            ])
+        plan = json.loads(stream.getvalue())
+        self.assertEqual(plan["evaluation_protocol"], deploy.NATIVE_VAL_PROTOCOL)
+        self.assertTrue(plan["project"].endswith(
+            "/" + deploy.NATIVE_VAL_PROTOCOL + "/" + deploy.NATIVE_VAL_RUNTIME_REVISION))
+        self.assertEqual(plan["evaluation_jobs"], 2)
+        with self.assertRaisesRegex(RuntimeError, "batch=1"):
+            deploy.main([
+                "--dataset", "LEVIR-Ship", "--scope", "report",
+                "--phase", "plan", "--batch", "2",
+                "--evaluation-protocol", deploy.NATIVE_VAL_PROTOCOL,
+            ])
+
+    def test_levir_rect_parity_v3_plan_is_isolated_and_paper_batch_is_locked(self):
+        import contextlib
+        import io
+        stream = io.StringIO()
+        with contextlib.redirect_stdout(stream):
+            deploy.main([
+                "--dataset", "LEVIR-Ship", "--scope", "report",
+                "--cases", "FTSC", "--seeds", "42",
+                "--backends", "pt32", "trt32",
+                "--evaluation-protocol", deploy.RECT_PARITY_PROTOCOL,
+                "--phase", "plan",
+            ])
+        plan = json.loads(stream.getvalue())
+        self.assertEqual(plan["evaluation_jobs"], 2)
+        self.assertEqual(plan["evaluation_protocol"], deploy.RECT_PARITY_PROTOCOL)
+        self.assertEqual([row["backend"] for row in plan["rows"]], ["pt32", "trt32"])
+        self.assertTrue(plan["project"].endswith(
+            "/" + deploy.RECT_PARITY_PROTOCOL + "/" +
+            deploy.RECT_PARITY_RUNTIME_REVISION))
+        args = deploy.parser().parse_args([
+            "--dataset", "LEVIR-Ship",
+            "--evaluation-protocol", deploy.RECT_PARITY_PROTOCOL,
+        ])
+        identity = deploy.expected_identity(args, {
+            "case": "FTSC", "seed": 42,
+            "backend": "trt32", "source": "exact/source/best.pt",
+        })
+        self.assertEqual(identity["contract"], deploy.RECT_PARITY_CONTRACT)
+        self.assertEqual(identity["validation_config"]["pt_val_batch"], 8)
+        self.assertEqual(identity["validation_config"]["engine_val_batch"], 1)
+        self.assertEqual(identity["validation_config"]["paper_preprocess_imgsz"], 512)
+        self.assertEqual(identity["validation_config"]["static_engine_canvas"], 544)
+        self.assertEqual(identity["validation_config"]["paper_preprocess_rect"], True)
+        self.assertIn("models_related/ultralytics/ultralytics/data/base.py",
+                      identity["source_code_sha256"])
+        self.assertEqual(
+            deploy.metric_keys("LEVIR-Ship", deploy.RECT_PARITY_PROTOCOL),
+            deploy.metric_keys("LEVIR-Ship", deploy.NATIVE_VAL_PROTOCOL),
+        )
+
+    def test_rect_parity_v3_refuses_unverified_datasets_and_backends(self):
+        for dataset in ("TinyPerson", "Varroa"):
+            with self.subTest(dataset=dataset):
+                with self.assertRaisesRegex(RuntimeError, "only on LEVIR"):
+                    deploy.main([
+                        "--dataset", dataset, "--scope", "report",
+                        "--cases", "FTSC", "--seeds", "42",
+                        "--backends", "pt32", "trt32",
+                        "--evaluation-protocol", deploy.RECT_PARITY_PROTOCOL,
+                        "--phase", "plan",
+                    ])
+        with self.assertRaisesRegex(RuntimeError, "only PyTorch/TensorRT"):
+            deploy.main([
+                "--dataset", "LEVIR-Ship", "--scope", "report",
+                "--cases", "FTSC", "--seeds", "42",
+                "--backends", "ort_cpu32",
+                "--evaluation-protocol", deploy.RECT_PARITY_PROTOCOL,
+                "--phase", "plan",
+            ])
+
+    def test_rect_parity_v3_custom_validator_restores_paper_dataset_settings(self):
+        import sys
+        import types
+        from unittest import mock
+
+        class FakeLoader:
+            def __init__(self, batch_shapes):
+                self.dataset = types.SimpleNamespace(
+                    batch_shapes=batch_shapes,
+                    rect=True,
+                    imgsz=deploy.RECT_PAPER_IMGSZ,
+                    stride=deploy.RECT_PAPER_STRIDE,
+                )
+                self.batch_shapes = batch_shapes
+
+            def __len__(self):
+                return len(self.batch_shapes)
+
+        class FakeDetectionValidator:
+            def get_dataloader(self, dataset_path, batch_size):
+                self._captured = (
+                    dataset_path, batch_size, self.args.imgsz,
+                    self.args.rect, self.stride,
+                )
+                return FakeLoader([(544, 544)] * 2)
+
+        # The custom validator must work via the actual Model.val(validator=Class)
+        # injection point; do not mutate the global Ultralytics implementation.
+        modules = {}
+        for name in ("ultralytics", "ultralytics.models",
+                     "ultralytics.models.yolo", "ultralytics.models.yolo.detect"):
+            module = types.ModuleType(name)
+            module.__path__ = []
+            modules[name] = module
+        module = types.ModuleType("ultralytics.models.yolo.detect.val")
+        module.DetectionValidator = FakeDetectionValidator
+        modules[module.__name__] = module
+        with mock.patch.dict(sys.modules, modules):
+            validator_type = deploy.paper_rect_static_validator()
+            v = validator_type()
+            v.args = types.SimpleNamespace(imgsz=544, batch=1, rect=False)
+            v.stride = 8  # TensorRT metadata stride; PT uses min 32.
+            loader = v.get_dataloader("/frozen/test", 1)
+            self.assertEqual(len(loader), 2)
+            self.assertEqual(v._captured, ("/frozen/test", 1, 512, True, 32))
+            with self.assertRaisesRegex(RuntimeError, "batch 1"):
+                bad = validator_type()
+                bad.args = types.SimpleNamespace(imgsz=544, batch=2, rect=False)
+                bad.stride = 8
+                bad.get_dataloader("/frozen/test", 2)
+
+    def test_rect_parity_v3_trt_must_match_all_pt_input_sha(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            args = argparse.Namespace(
+                dataset="LEVIR-Ship", platform="marimo_live",
+                evaluation_protocol=deploy.RECT_PARITY_PROTOCOL,
+                project=root,
+            )
+            row = {
+                "case": "FTSC", "seed": 42, "backend": "trt32",
+                "source": "LEVIR-Ship/historical_reconstructions/RECON_H2_V1/"
+                          "seed_42/weights/best.pt",
+            }
+            digest = "a" * 64
+            folder_pt = deploy.path_for(root, "LEVIR-Ship", "FTSC", 42, "pt32")
+            folder_trt = deploy.path_for(root, "LEVIR-Ship", "FTSC", 42, "trt32")
+            folder_pt.mkdir(parents=True)
+            folder_trt.mkdir(parents=True)
+            payload = {
+                "schema": "ftsc_levir_exact_paper_rect_input_pixels_v3",
+                "source_images_count": 2,
+                "image_sha256": {"a.png": "0" * 64, "b.png": "1" * 64},
+            }
+            raw = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+            lhs = folder_pt / "test_val_preprocessed_inputs_sha256.json"
+            rhs = folder_trt / "test_val_preprocessed_inputs_sha256.json"
+            lhs.write_text(raw, encoding="utf-8")
+            rhs.write_text(raw, encoding="utf-8")
+            expected = deploy.expected_identity(args, {
+                **row, "backend": "pt32",
+            })
+            pt_record = {
+                **expected, "source_sha256": digest,
+                "preprocessed_input_manifest_sha256": deploy.sha256(lhs),
+            }
+            (folder_pt / "metrics.json").write_text(
+                json.dumps(pt_record), encoding="utf-8")
+            proof = deploy.verify_rect_trt_pt_input_pair(
+                args, row, digest,
+                {"preprocessed_input_manifest_sha256": deploy.sha256(rhs)},
+            )
+            self.assertIs(proof["full_test_input_parity"], True)
+            self.assertEqual(proof["paired_pt32_preprocessed_manifest_sha256"],
+                             deploy.sha256(lhs))
+            payload["image_sha256"]["b.png"] = "2" * 64
+            rhs.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                           encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError,
+                                        "TRT preprocessing manifest hash changed"):
+                deploy.verify_rect_trt_pt_input_pair(
+                    args, row, digest,
+                    {"preprocessed_input_manifest_sha256": deploy.sha256(lhs)},
+                )
+            with self.assertRaisesRegex(RuntimeError,
+                                        "NOT the same paper validation protocol"):
+                deploy.verify_rect_trt_pt_input_pair(
+                    args, row, digest,
+                    {"preprocessed_input_manifest_sha256": deploy.sha256(rhs)},
+                )
+
     def test_partner_metric_contract_keeps_coco_separate_from_ultralytics(self):
         from utils import ftsc_partner_backend_metrics_v1 as partner
         self.assertEqual(partner.PREDICT_CONF, 0.001)
@@ -81,6 +324,9 @@ class DeploymentContractTests(unittest.TestCase):
             "case": "FTSC", "seed": 42, "backend": "trt32", "source": "exact/path.pt"})
         self.assertEqual(identity["contract"], deploy.PARTNER_CONTRACT)
         self.assertEqual(identity["evaluation_protocol"], deploy.PARTNER_PROTOCOL)
+        self.assertEqual(identity["runtime_revision"], deploy.PARTNER_RUNTIME_REVISION)
+        self.assertIn("models_related/ultralytics/ultralytics/nn/backends/tensorrt.py",
+                      identity["source_code_sha256"])
         args.evaluation_protocol = deploy.NATIVE_PROTOCOL
         self.assertEqual(deploy.expected_identity(args, {
             "case": "FTSC", "seed": 42, "backend": "trt32", "source": "exact/path.pt"})["contract"],
@@ -97,7 +343,8 @@ class DeploymentContractTests(unittest.TestCase):
         report = json.loads(stream.getvalue())
         self.assertEqual(report["evaluation_protocol"], deploy.PARTNER_PROTOCOL)
         self.assertEqual(report["evaluation_jobs"], 2)
-        self.assertTrue(report["project"].endswith("/" + deploy.PARTNER_PROTOCOL))
+        self.assertTrue(report["project"].endswith(
+            "/" + deploy.PARTNER_PROTOCOL + "/" + deploy.PARTNER_RUNTIME_REVISION))
         self.assertEqual(report["evaluator"], deploy.PARTNER_EVALUATOR["LEVIR-Ship"])
         self.assertTrue(all("/partner_predict_coco_v1/" in r["output"] for r in report["rows"]))
         with self.assertRaisesRegex(RuntimeError, "batch=1"):
@@ -279,9 +526,11 @@ class DeploymentContractTests(unittest.TestCase):
                 self.assertIn("'--report-manifest'", code)
                 self.assertIn("'--scope', 'report'", code)
                 self.assertIn(f"FTSC_DEPLOY_{suffix}_CASES = []", code)
-                self.assertIn(f"FTSC_DEPLOY_{suffix}_EVAL_PROTOCOL = 'partner_predict_coco_v1'", code)
+                selected_protocol = (deploy.RECT_PARITY_PROTOCOL if suffix == "LEVIR"
+                                     else deploy.NATIVE_VAL_PROTOCOL)
+                self.assertIn(f"FTSC_DEPLOY_{suffix}_EVAL_PROTOCOL = '{selected_protocol}'", code)
                 self.assertIn("'--evaluation-protocol', FTSC_DEPLOY_", code)
-                self.assertIn("utils/ftsc_partner_backend_metrics_v1.py", code)
+                self.assertIn("utils/ftsc_deployment_parity_probe_v1.py", code)
 
 
 if __name__ == "__main__":
