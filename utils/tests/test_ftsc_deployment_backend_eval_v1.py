@@ -524,17 +524,17 @@ class DeploymentContractTests(unittest.TestCase):
                 compile(code, str(path) + "#deployment", "exec")
                 self.assertIn(f"RUN_FTSC_DEPLOY_{suffix} = False", code)
                 self.assertIn(f"FTSC_DEPLOY_{suffix}_ALLOW_EVALUATE = False", code)
-                self.assertIn("FTSC_DEPLOY_EVAL_20261112_REPORT_V3", code)
                 self.assertIn(f"FTSC_DEPLOY_{suffix}_PLATFORM = 'marimo_live'", code)
                 self.assertNotIn(".train(", code)
                 self.assertNotIn("upload_file", code)
                 self.assertIn("'--report-manifest'", code)
-                self.assertIn("'--scope', 'report'", code)
                 selected_protocol = (deploy.RECT_PARITY_PROTOCOL if suffix == "LEVIR"
                                      else deploy.NATIVE_VAL_PROTOCOL)
                 self.assertIn(f"FTSC_DEPLOY_{suffix}_EVAL_PROTOCOL = '{selected_protocol}'", code)
-                self.assertIn("'--evaluation-protocol', FTSC_DEPLOY_", code)
                 if suffix == "LEVIR":
+                    self.assertIn("FTSC_DEPLOY_EVAL_20261112_REPORT_V3", code)
+                    self.assertIn("'--scope', 'report'", code)
+                    self.assertIn("'--evaluation-protocol', FTSC_DEPLOY_", code)
                     self.assertIn("FTSC_DEPLOY_LEVIR_STAGE = 'ftsc_fp32'", code)
                     self.assertIn("utils.ftsc_deployment_rect_parity_audit_v1", code)
                     self.assertIn("ftsc_all_precision", code)
@@ -542,8 +542,13 @@ class DeploymentContractTests(unittest.TestCase):
                     self.assertIn("if _dep_phase == 'audit':", code)
                     self.assertIn("if _dep_phase == 'evaluate':", code)
                 else:
-                    self.assertIn(f"FTSC_DEPLOY_{suffix}_CASES = []", code)
-                    self.assertIn("utils/ftsc_deployment_parity_probe_v1.py", code)
+                    self.assertIn(f"FTSC_DEPLOY_{suffix}_STAGE = 'ftsc_seed42_fp32'", code)
+                    self.assertIn("ftsc_deployment_other_dataset_workflow_v1", code)
+                    self.assertIn("ftsc_deployment_other_dataset_preflight_v1", code)
+                    self.assertIn("'--data-root'", code)
+                    self.assertIn("'--prepared-root'", code)
+                    self.assertIn(f"FTSC_DEPLOY_{suffix}_PHASE = 'plan'", code)
+                    self.assertIn(f"FTSC_DEPLOY_{suffix}_RUN_OFFLINE_TESTS = True", code)
 
 
 if __name__ == "__main__":
