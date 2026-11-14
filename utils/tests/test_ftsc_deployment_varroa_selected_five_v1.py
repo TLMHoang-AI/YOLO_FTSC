@@ -81,11 +81,13 @@ class VarroaPaperSelectedFive(unittest.TestCase):
 
     def test_process_local_contract_preserves_base_source(self):
         original_hashes = lambda: {"base.py": "a" * 64}
-        with patch.object(varroa.base, "source_hashes", original_hashes), \\
-             patch.object(varroa.base, "CONTRACT", "original"), \\
-             patch.object(varroa.base, "REVISION", "original"), \\
-             patch.object(varroa.base, "STAGES", {}), \\
-             patch.object(varroa.base, "PAPER_ANCHORS", {"Varroa": {}}):
+        with (
+            patch.object(varroa.base, "source_hashes", original_hashes),
+            patch.object(varroa.base, "CONTRACT", "original"),
+            patch.object(varroa.base, "REVISION", "original"),
+            patch.object(varroa.base, "STAGES", {}),
+            patch.object(varroa.base, "PAPER_ANCHORS", {"Varroa": {}}),
+        ):
             varroa.install_isolated_contract()
             observed = varroa.base.source_hashes()
             self.assertEqual(set(observed),
