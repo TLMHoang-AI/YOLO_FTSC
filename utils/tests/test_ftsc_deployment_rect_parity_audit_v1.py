@@ -66,6 +66,10 @@ class LevirFullParityAuditTests(unittest.TestCase):
             ),
             "evaluator": "ultralytics_paper_rect_native_val_with_static_engine_544_v3",
             "source_sha256": source["sha256"], "imgsz": 512,
+            "device": "cuda:0",
+            "gpu_name": "fixture_gpu",
+            "torch_version": "fixture_torch",
+            "cuda_version": "fixture_cuda",
             "data_yaml_sha256": "b" * 64,
             "preprocessed_input_canvas": 544, "preprocessed_input_count": 788,
             "metrics": {
