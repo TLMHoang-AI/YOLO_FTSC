@@ -11,6 +11,26 @@ from utils import ftsc_deployment_paper_backend_v1 as paper
 
 
 class PaperParityContracts(unittest.TestCase):
+    def test_named_sources_preserve_exif_pixels_and_input_order(self):
+        from PIL import Image, ImageOps
+        with tempfile.TemporaryDirectory() as td:
+            paths = []
+            for name, color in (("z.jpg", "red"), ("a.jpg", "blue")):
+                path = Path(td) / name
+                image = Image.new("RGB", (7, 5), color)
+                exif = image.getexif()
+                exif[274] = 6
+                image.save(path, exif=exif)
+                paths.append(path)
+            sources = paper.named_predictor_sources(paths)
+            self.assertEqual([s.filename for s in sources],
+                             [str(p.resolve()) for p in paths])
+            for path, actual in zip(paths, sources, strict=True):
+                with Image.open(path) as original:
+                    expected = ImageOps.exif_transpose(original)
+                self.assertEqual(actual.size, expected.size)
+                self.assertEqual(actual.tobytes(), expected.tobytes())
+
     def test_historical_protocols_do_not_conflate_main_and_small(self):
         self.assertEqual(paper.CONFIG["LEVIR-Ship"]["main"],"v3_rect_544")
         self.assertEqual(paper.CONFIG["LEVIR-Ship"]["small"],"predict512_conf025")

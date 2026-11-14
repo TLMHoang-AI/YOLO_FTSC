@@ -1,0 +1,60 @@
+{
+  "schema": "ftsc_report_driven_deployment_case_manifest_v1",
+  "report_source": "note/FTSC_CAPSTONE_REPORT_MAIN_RESULTS_ABLATION_ROADMAP_2026-11-09.md",
+  "repo_id": "TLMHoang/FTSC_results",
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "scope": "LEVIR paper re-evaluation ONLY: corrected C_H2_POSTFUSION_V2 and historical ES1, fixed two-case recovery",
+  "datasets": {
+    "LEVIR-Ship": {
+      "cases": {
+        "COLOR_CUE": {
+          "source_run": "LEVIR-Ship/journal_experiments/phase2/C_H2_POSTFUSION_V2",
+          "sections": [
+            "C:color"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "LEVIR-Ship/journal_experiments/phase2/C_H2_POSTFUSION_V2/seed_42/weights/best.pt",
+              "sha256": "f8527b339d059d5806dc13909e49ced8518518af0ffd78185c40f9d08f7cc39f"
+            },
+            "43": {
+              "path": "LEVIR-Ship/journal_experiments/phase2/C_H2_POSTFUSION_V2/seed_43/weights/best.pt",
+              "sha256": "ad0b8c0dac89aea17baa3a29798009e230d670292c8a7a900060ba46d4c21e21"
+            },
+            "44": {
+              "path": "LEVIR-Ship/journal_experiments/phase2/C_H2_POSTFUSION_V2/seed_44/weights/best.pt",
+              "sha256": "97ebbe0643eb190c5a7dc654345d0e82382b150d93c9f444a9493ce4b0eeccf2"
+            }
+          }
+        },
+        "EDGE_CUE": {
+          "source_run": "LEVIR-Ship/original_runs/ES1",
+          "sections": [
+            "C:edge:ES1"
+          ],
+          "framework": "ultralytics",
+          "seeds": {
+            "42": {
+              "path": "LEVIR-Ship/original_runs/ES1/seed_42/weights/best.pt",
+              "sha256": "32427262777cf7996b91c99ef8ec215a07da8b2215b29eadb33f0444536c4eab"
+            },
+            "43": {
+              "path": "LEVIR-Ship/original_runs/ES1/seed_43/weights/best.pt",
+              "sha256": "e1606a16a0246c3b1a9fb6e6edaa4c85ea26cfb29b8874d86bd38ba569fd87e1"
+            },
+            "44": {
+              "path": "LEVIR-Ship/original_runs/ES1/seed_44/weights/best.pt",
+              "sha256": "41fe24ecede62200c4e0b38941dde744347f3c5f1a3b26bcf368e7c04b9e2507"
+            }
+          }
+        }
+      },
+      "unresolved_main_results": []
+    }
+  }
+}

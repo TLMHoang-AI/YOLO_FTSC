@@ -35,7 +35,7 @@ from utils import ftsc_deployment_backend_eval_v1 as deploy
 
 ROOT = deploy.ROOT
 CONTRACT = "ftsc_historical_paper_backend_parity_v1"
-REVISION = "predict512_native_rect_dynamic_trt_v1"
+REVISION = "predict512_native_rect_dynamic_trt_source_identity_v2"
 BACKENDS = ("pt32", "trt32", "pt16", "trt16")
 CONFIG = {
     "LEVIR-Ship": {"imgsz": 512, "batch": 8, "main": "v3_rect_544", "small": "predict512_conf025"},
@@ -325,6 +325,22 @@ def export_trt(pt, digest, out, dataset, backend, device, batch):
     return engine, sha(manifest)
 
 
+def named_predictor_sources(paths):
+    """Keep the fork's PIL/EXIF pixels while preserving original source identity.
+
+    autocast_list's EXIF transpose drops PIL.filename, causing anonymous
+    imageN.jpg paths. Pre-transpose identically and restore each absolute path.
+    """
+    from PIL import Image, ImageOps
+    sources = []
+    for path in paths:
+        with Image.open(path) as original:
+            image = ImageOps.exif_transpose(original)
+        image.filename = str(Path(path).resolve())
+        sources.append(image)
+    return sources
+
+
 def _predict_native_small(model_file, backend, images, args, out):
     """Clone only historical _predictions source-list batching, with input hash."""
     from ultralytics import YOLO
@@ -350,7 +366,7 @@ def _predict_native_small(model_file, backend, images, args, out):
     for start in range(0, len(images), chunk_size):
         chunk = images[start:start+chunk_size]
         iterator = model.predict(
-            source=[str(p) for p in chunk],
+            source=named_predictor_sources(chunk),
             predictor=predictor, imgsz=CONFIG[args.dataset]["imgsz"],
             batch=batch, device=args.device, workers=args.workers,
             iou=0.5, verbose=False, stream=True,
@@ -430,7 +446,7 @@ def _predict_tiny(model_file, backend, args, out):
     for start in range(0,len(rows),chunk_size):
         current=rows[start:start+chunk_size]
         generator=model.predict(
-            source=[str(p) for p in image_paths[start:start+chunk_size]],
+            source=named_predictor_sources(image_paths[start:start+chunk_size]),
             predictor=predictor, imgsz=640, batch=batch,
             device=args.device, workers=args.workers,
             conf=0.001, iou=0.5, max_det=300, rect=True,
