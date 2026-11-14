@@ -82,10 +82,12 @@ class LevirPaperRecoveryContracts(unittest.TestCase):
     def test_paper_result_file_is_immutable(self):
         with tempfile.TemporaryDirectory() as td:
             path=Path(td)/"test.json"
-            recover.safe_write(path,{"small_ap":0.8})
-            recover.safe_write(path,{"small_ap":0.8})
-            with self.assertRaisesRegex(RuntimeError,"differs"):
+            original={"small_ap":0.8}
+            recover.safe_write(path,original)
+            recover.safe_write(path,original)
+            with self.assertRaises(RuntimeError):
                 recover.safe_write(path,{"small_ap":0.9})
+            self.assertEqual(json.loads(path.read_text()),original)
 
     def test_frozen_old_paper_revision_not_inherited_from_mutable_base(self):
         self.assertEqual(recover.ORIGINAL_PAPER_CONTRACT,
