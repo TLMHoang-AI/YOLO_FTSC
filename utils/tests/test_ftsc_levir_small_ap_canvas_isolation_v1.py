@@ -34,6 +34,34 @@ class CanvasIsolationContracts(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,"Source changed"):
                 isolate._get_report(p)
 
+    def test_phase_c_notebook_imports_real_modules_as_aliases(self):
+        import ast
+        notebook = Path(__file__).resolve().parents[3] / (
+            "FTSC_LEVIR_AP50Small_RootCause_Marimo_Live.ipynb"
+        )
+        if not notebook.is_file():
+            self.skipTest("Notebook not bundled with the Live yolo_code clone")
+        document = json.loads(notebook.read_text(encoding="utf-8"))
+        cells = [cell for cell in document["cells"]
+                 if cell.get("id") == "small-root-canvas-run"]
+        self.assertEqual(len(cells), 1)
+        source = "".join(cells[0]["source"])
+        compile(source, str(notebook) + "#small_root_canvas_run", "exec")
+        self.assertNotIn("    import _canvas_os,", source)
+        imports = [
+            (alias.name, alias.asname)
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        ]
+        for pair in (
+            ("os", "_canvas_os"),
+            ("subprocess", "_canvas_subprocess"),
+            ("sys", "_canvas_sys"),
+        ):
+            self.assertIn(pair, imports)
+        self.assertIn("RUN_CANVAS_ISOLATION = False", source)
+
     def test_unchanged_history_header_can_be_verified(self):
         from utils import ftsc_levir_small_ap_rootcause_v1 as previous
         with tempfile.TemporaryDirectory() as td:
