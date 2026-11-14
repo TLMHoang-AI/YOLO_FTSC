@@ -56,6 +56,58 @@ class PaperParityContracts(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 paper.validate_dynamic_profile_shapes(cases)
 
+    def test_historical_source_grouping_not_recomputed_per_trt_minibatch(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import sys
+        paths=[Path("/fake/legacy_"+str(i)+".jpg") for i in range(8)]
+        shape_by_path={
+            str(paths[i]): (512,640,3) if i<4 or i in (4,6) else (640,640,3)
+            for i in range(8)
+        }
+        fake_cv2=SimpleNamespace(
+            IMREAD_COLOR=1,
+            imread=lambda path, mode: SimpleNamespace(shape=shape_by_path[path]),
+        )
+        with patch.dict(sys.modules,{"cv2":fake_cv2}):
+            flags=paper.historical_source_auto_flags(paths,4)
+        self.assertTrue(all(flags[str(p)] for p in paths[:4]))
+        self.assertTrue(all(not flags[str(p)] for p in paths[4:]))
+
+    def test_original_test_image_bytes_are_part_of_frozen_preflight(self):
+        with tempfile.TemporaryDirectory() as td:
+            image=Path(td)/"sample.jpg"
+            image.write_bytes(b"image-version-1")
+            old=paper.image_inventory_digest([image])
+            image.write_bytes(b"image-version-2")
+            self.assertNotEqual(old,paper.image_inventory_digest([image]))
+            with self.assertRaisesRegex(RuntimeError,"Missing/duplicate"):
+                paper.image_inventory_digest([image,image])
+
+    def test_evaluation_requires_same_stage_preflight(self):
+        with tempfile.TemporaryDirectory() as td:
+            args=argparse.Namespace(
+                paper_root=Path(td),dataset="LEVIR-Ship",stage="ftsc_seed42_fp32",
+            )
+            with self.assertRaisesRegex(RuntimeError,"Run --phase preflight first"):
+                paper.verify_preflight(args)
+
+    def test_aggregate_blocks_accuracy_review_flags(self):
+        from unittest.mock import patch
+        report={
+            "status":"COMPLETE_NEEDS_ACCURACY_REVIEW",
+            "valid_jobs":6,"expected_jobs":6,"issues":[],
+            "accuracy_review_flags":[{"case":"FTSC"}],
+            "historical_reference_review_flags":[],"three_seed":[],
+        }
+        with tempfile.TemporaryDirectory() as td:
+            with patch.object(paper,"audit",return_value=report):
+                with self.assertRaisesRegex(RuntimeError,"aggregate blocked"):
+                    paper.main([
+                        "--dataset","LEVIR-Ship","--stage","ftsc_three_seed_fp32",
+                        "--phase","aggregate","--base-project",td,
+                    ])
+
     def test_no_trt_allowed_without_pt32_pixel_reference(self):
         with tempfile.TemporaryDirectory() as td:
             entry={"source_sha256":"a"*64,"small_input_manifest_sha256":"b"*64}

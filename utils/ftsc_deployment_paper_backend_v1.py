@@ -140,7 +140,34 @@ def normalize_row(image, pixel):
     return {"shape": list(map(int, arr.shape)), "sha256": hashlib.sha256(arr.tobytes()).hexdigest()}
 
 
-def paper_predictor(recorder, backend, *, dynamic_required=False):
+def historical_source_auto_flags(images, chunk_size):
+    """Record legacy YOLO.predict LetterBox(auto=...) grouping by source list.
+
+    Fork Predictor treats a list of paths as one batch. TensorRT with a
+    smaller engine batch must apply the *same* original 64/100-image
+    auto/rect decision, not recompute same_shapes on 4/8-image subchunks.
+    """
+    import cv2
+    need(chunk_size > 0 and images, "Legacy predictor received empty inventory")
+    by_image = {}
+    for start in range(0, len(images), chunk_size):
+        chunk = images[start:start + chunk_size]
+        shapes = []
+        for path in chunk:
+            image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+            need(image is not None, f"Cannot decode historical source image: {path}")
+            shapes.append(tuple(int(x) for x in image.shape))
+        auto = len(set(shapes)) == 1
+        for path in chunk:
+            key = str(Path(path).resolve())
+            need(key not in by_image, f"Duplicate source in legacy predictor: {key}")
+            by_image[key] = auto
+    need(len(by_image) == len(images), "Historical auto/rect inventory incomplete")
+    return by_image
+
+
+def paper_predictor(recorder, backend, *, dynamic_required=False,
+                    historical_auto_by_image=None):
     """Subclass the fork predictor to hash ACTUAL images from pre_transform.
 
     Unlike a guessed LetterBox simulation, hashes the transformed tensors
@@ -167,9 +194,25 @@ def paper_predictor(recorder, backend, *, dynamic_required=False):
                  "Unexpected prediction stride >32; inspect historical fork")
             self.model.stride = 32
         def pre_transform(self, im):
-            output = super().pre_transform(im)
             need(self.batch is not None, "Predictor did not provide source paths")
             names = self.batch[0]
+            if backend.startswith("trt") and historical_auto_by_image is not None:
+                modes = {historical_auto_by_image.get(str(Path(name).resolve()))
+                         for name in names}
+                need(None not in modes and len(modes) == 1,
+                     "TRT source sub-batch crosses original legacy auto/rect boundary")
+                legacy_auto = next(iter(modes))
+                old_rect = self.args.rect
+                try:
+                    # Historical PT had rect=True but auto=False on mixed
+                    # source lists. A TRT subchunk could look homogeneous;
+                    # forcing rect=False then recreates exactly the PT pixels.
+                    self.args.rect = bool(legacy_auto)
+                    output = super().pre_transform(im)
+                finally:
+                    self.args.rect = old_rect
+            else:
+                output = super().pre_transform(im)
             need(len(names) == len(output), "Predictor preprocessing batch/path mismatch")
             import numpy as np
             for name, raw in zip(names, output, strict=True):
@@ -288,7 +331,12 @@ def _predict_native_small(model_file, backend, images, args, out):
     from evaluate_test.size_bucket_evaluator import MAX_SOURCE_LIST_CHUNK
     from evaluate_test.size_bucket_evaluator import _coco_ground_truth, _evaluate_coco
     recorder = {}
-    predictor = paper_predictor(recorder, backend, dynamic_required=args.dataset == "Varroa")
+    expected_auto = (historical_source_auto_flags(images, MAX_SOURCE_LIST_CHUNK)
+                     if backend.startswith("trt") else None)
+    predictor = paper_predictor(
+        recorder, backend, dynamic_required=args.dataset == "Varroa",
+        historical_auto_by_image=expected_auto,
+    )
     model = YOLO(str(model_file), task="detect")
     detections = []
     batch = CONFIG[args.dataset]["batch"]
@@ -308,8 +356,11 @@ def _predict_native_small(model_file, backend, images, args, out):
             iou=0.5, verbose=False, stream=True,
             **({"half": backend=="pt16"} if backend.startswith("pt") else {}),
         )
+        seen_chunk=0
         for offset, result in enumerate(iterator):
-            need(start + offset < len(images), "Predictor emitted extra native image")
+            seen_chunk+=1
+            need(offset < len(chunk) and start + offset < len(images),
+                 "Predictor emitted extra native image")
             need(str(Path(result.path).resolve()) == str(chunk[offset].resolve()),
                  "Historical predictor results no longer follow input order")
             boxes = result.boxes
@@ -319,6 +370,8 @@ def _predict_native_small(model_file, backend, images, args, out):
                 detections.append({"image_id":start+offset+1,"category_id":1,
                     "bbox":[x1,y1,max(0,x2-x1),max(0,y2-y1)],
                     "score":float(score)})
+        need(seen_chunk==len(chunk),
+             f"Native predictor omitted outputs: {seen_chunk}/{len(chunk)}")
     need(len(recorder) == len(images), "Missing native historical predictor input")
     input_meta = seal_inputs(out/"small_inputs.json", recorder, images,
                              "YOLO.predict/imgsz/conf_default_025/rect_true")
@@ -361,11 +414,19 @@ def _predict_tiny(model_file, backend, args, out):
     need(len(rows)>0 and all(p.is_file() for p in image_paths),
          "Missing official TinyPerson corner crop")
     recorder={}
-    predictor=paper_predictor(recorder,backend,dynamic_required=True)
+    batch=CONFIG["TinyPerson"]["batch"]
+    original_chunk_size=max(batch*8,32)
+    expected_auto=(historical_source_auto_flags(image_paths,original_chunk_size)
+                   if backend.startswith("trt") else None)
+    predictor=paper_predictor(
+        recorder,backend,dynamic_required=True,
+        historical_auto_by_image=expected_auto)
     model=YOLO(str(model_file),task="detect")
     by_original=collections.defaultdict(list)
-    batch=CONFIG["TinyPerson"]["batch"]
-    chunk_size=max(batch*8,32)
+    # PT historical uses 64-source batches. TRT uses max 8 actual inputs,
+    # but retains each original 64-source LetterBox auto decision via the
+    # predictor wrapper above. Exact resulting pixels must still match PT.
+    chunk_size=batch if backend.startswith("trt") else original_chunk_size
     for start in range(0,len(rows),chunk_size):
         current=rows[start:start+chunk_size]
         generator=model.predict(
@@ -493,6 +554,30 @@ def _verify_v3_main(args,case,seed,backend,ckpt_sha):
     }
 
 
+def historical_predict_canvas_shapes(images, chunk_size, imgsz):
+    """Count real post-LetterBox shapes under original source-list grouping.
+
+    This mirrors the fork predictor grouping (TinyPerson 64, native 100),
+    rather than preflighting isolated images whose auto-padding may differ.
+    """
+    from ultralytics.data.augment import LetterBox
+    import cv2
+    flags = historical_source_auto_flags(images, chunk_size)
+    shapes = collections.Counter()
+    for path in images:
+        key = str(Path(path).resolve())
+        decoded = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        need(decoded is not None, f"Cannot decode test image: {path}")
+        padded = LetterBox(
+            new_shape=(imgsz, imgsz), auto=flags[key],
+            stride=32, scaleup=True,
+        )(image=decoded)
+        shapes[f"{padded.shape[0]}x{padded.shape[1]}"] += 1
+    need(sum(shapes.values()) == len(images),
+         "Historical preprocessing counted fewer test images")
+    return dict(sorted(shapes.items()))
+
+
 def validate_dynamic_profile_shapes(shape_counts, imgsz=640):
     """Reject data shapes the repository's dynamic TensorRT exporter cannot represent.
 
@@ -527,6 +612,85 @@ def _native_test_yaml(args,seed):
     return p,images
 
 
+def preflight_path(args):
+    return (args.paper_root/args.dataset/"_preflights"/
+            f"{args.stage}_historical_eval.json")
+
+
+def image_inventory_digest(paths):
+    """Content-address every image in its historical order, not just YAML names."""
+    digest=hashlib.sha256()
+    need(bool(paths),"Cannot fingerprint empty source image set")
+    seen=set()
+    for item in paths:
+        path=Path(item).resolve()
+        need(path.is_file() and str(path) not in seen,
+             f"Missing/duplicate source test image: {path}")
+        seen.add(str(path))
+        digest.update(f"{path}\t{sha(path)}\n".encode())
+    return digest.hexdigest()
+
+
+def native_label_inventory_digest(images):
+    """Lock native YOLO test labels, including intentionally absent background files."""
+    from evaluate_test.size_bucket_evaluator import _label_path
+    digest=hashlib.sha256()
+    for image in images:
+        label=_label_path(Path(image)).resolve()
+        digest.update(f"{label}\t{sha(label) if label.is_file() else 'ABSENT'}\n".encode())
+    return digest.hexdigest()
+
+
+def data_fingerprint(args):
+    """Lock split, GT labels and image bytes, plus source code and scoped cases."""
+    result={
+        "contract":CONTRACT,"revision":REVISION,
+        "dataset":args.dataset,"stage":args.stage,
+        "cases":list(args.cases),"seeds":list(args.seeds),
+        "backends":list(args.backends),
+        "report_manifest_sha256":sha(args.report_manifest),
+        "source_files_sha256":source_hashes(),
+    }
+    if args.dataset=="TinyPerson":
+        from train_tinyperson_scripts.train_all_tinyperson import (
+            TEST_CORNER_JSON,TEST_MERGED_JSON)
+        manifest=args.tiny_test_out/"corner_manifest.json"
+        rows=json.loads(manifest.read_text(encoding="utf-8"))["images"]
+        paths=[args.tiny_test_out/"images"/f"test_{r['image_id']}.jpg"
+               for r in rows]
+        need(paths and all(x.is_file() for x in paths),"Tiny test corner set incomplete")
+        result["dataset_sha256"]={
+            "corner_gt":sha(args.data_root/TEST_CORNER_JSON),
+            "original_gt":sha(args.data_root/TEST_MERGED_JSON),
+            "corner_manifest":sha(manifest),
+            "corner_count":len(paths),
+            "corner_image_bytes_sha256":image_inventory_digest(paths),
+        }
+    else:
+        result["dataset_sha256"]={}
+        for seed in args.seeds:
+            yaml_path,paths=_native_test_yaml(args,seed)
+            result["dataset_sha256"][str(seed)]={
+                "yaml":sha(yaml_path),"images":len(paths),
+                "image_names_sha256":hashlib.sha256(
+                    "\n".join(str(x.resolve()) for x in paths).encode()).hexdigest(),
+                "image_bytes_sha256":image_inventory_digest(paths),
+                "label_bytes_sha256":native_label_inventory_digest(paths),
+            }
+    return result
+
+
+def verify_preflight(args):
+    path=preflight_path(args)
+    need(path.is_file(),f"Missing stage preflight. Run --phase preflight first: {path}")
+    recorded=json.loads(path.read_text(encoding="utf-8"))
+    need(recorded.get("status")=="HISTORICAL_PREPROCESSING_IDENTIFIED" and
+         recorded.get("fingerprint")==data_fingerprint(args) and
+         bool(recorded.get("checked_shapes")),
+         "Dataset/source/shape provenance changed since preflight; BLOCK evaluation")
+    return recorded
+
+
 def evaluate_job(args,archive,case,seed,backend):
     dataset=args.dataset
     paper=directory(args.paper_root,dataset,case,seed,backend)
@@ -538,6 +702,7 @@ def evaluate_job(args,archive,case,seed,backend):
         "dataset":dataset,"case":case,"seed":seed,"backend":backend,
         "platform":args.platform,"source":expected["path"],
         "source_sha256":expected["sha256"],
+        "device":args.device,"hardware":deploy.hardware_identity(args.device),
         "source_files_sha256":source_hashes(),
         "configuration":CONFIG[dataset],
     }
@@ -594,6 +759,10 @@ def evaluate_job(args,archive,case,seed,backend):
         prov=deploy.source_restore(args_restore,archive,case,seed)
     ckpt=Path(prov["checkpoint"])
     need(sha(ckpt)==expected["sha256"],"Source checkpoint mismatch after restore")
+    # LEVIR V3 main-metric contract is a prerequisite, NOT a fallback.
+    # Check before the expensive new static512 TensorRT export.
+    verified_v3_main=(_verify_v3_main(args,case,seed,backend,expected["sha256"])
+                      if dataset=="LEVIR-Ship" else None)
     engine_meta=None
     if backend.startswith("trt"):
         model_file,engine_meta=export_trt(
@@ -608,7 +777,8 @@ def evaluate_job(args,archive,case,seed,backend):
     if dataset!="TinyPerson":
         yaml_path,images=_native_test_yaml(args,seed)
     if dataset=="LEVIR-Ship":
-        main,main_meta=_verify_v3_main(args,case,seed,backend,expected["sha256"])
+        need(verified_v3_main is not None,"Missing frozen V3 main reference")
+        main,main_meta=verified_v3_main
         small,small_meta=_predict_native_small(model_file,backend,images,args,paper)
         metrics={**main,**small}
     elif dataset=="Varroa":
@@ -663,7 +833,9 @@ def audit(args):
                          and row.get("source_files_sha256")==source_hashes()
                          and row.get("source_sha256")==inv[case][seed]["sha256"]
                          and row.get("source")==inv[case][seed]["path"]
-                         and row.get("platform")==args.platform,
+                         and row.get("platform")==args.platform
+                         and row.get("device")==args.device
+                         and row.get("hardware")==deploy.hardware_identity(args.device),
                          "Stale/wrong source/contract/host")
                     model_path=Path(row["model_path"])
                     need(model_path.is_file() and
@@ -812,9 +984,13 @@ def main(argv=None):
             path.write_text(json.dumps(report,indent=2,sort_keys=True)+"\n",encoding="utf-8")
             print(json.dumps({**report,"audit_path":str(path)},indent=2))
             return 0 if report["status"]=="PASS_COMPLETE" else 2
-        need(args.seeds==[42,43,44] and not report["issues"] and
+        need(args.seeds==[42,43,44] and
+             report["status"]=="PASS_COMPLETE" and not report["issues"] and
+             not report["accuracy_review_flags"] and
+             not report["historical_reference_review_flags"] and
              report["valid_jobs"]==report["expected_jobs"],
-             "Three-seed aggregate blocked: missing/invalid jobs")
+             "Paper-compatible aggregate blocked: incomplete/invalid jobs or "
+             "unresolved backend/historical AP drift; inspect --phase audit")
         dest=args.paper_root/args.dataset
         dest.mkdir(parents=True,exist_ok=True)
         # Save both reported score and explicit review flags, never hide them.
@@ -837,7 +1013,8 @@ def main(argv=None):
         cfg=argparse.Namespace(dataset=args.dataset,project=args.paper_root,
               cases=args.cases,seeds=args.seeds,manifest_cases=args.inventory)
         verified=deploy.verify_sources(cfg,archive)
-        print(json.dumps({"status":"HF_VERIFIED_READ_ONLY",
+        print(json.dumps({"status":"HF_MANIFEST_PATHS_VERIFIED_BYTES_PENDING",
+               "note":"Checkpoint bytes SHA-256 verified during restore before inference.",
                "count":len(verified),"rows":verified},indent=2))
         return 0
     need(args.data_root is not None or args.dataset=="LEVIR-Ship",
@@ -865,13 +1042,25 @@ def main(argv=None):
             from utils.ftsc_deployment_other_dataset_preflight_v1 import check_tiny
             summary=check_tiny(args.data_root,args.tiny_test_out)
             # Static mismatch is EXPECTED and not a failure when using dynamic TRT.
-            count=summary["source_corner_count"]
-            shape_hint=summary["pt_canvas_shapes"]
+            manifest=args.tiny_test_out/"corner_manifest.json"
+            records=json.loads(manifest.read_text(encoding="utf-8"))["images"]
+            paths=[args.tiny_test_out/"images"/f"test_{row['image_id']}.jpg"
+                   for row in records]
+            count=len(paths)
+            need(count==summary["source_corner_count"],
+                 "TinyPerson official prepared corner inventory changed")
+            shape_hint=historical_predict_canvas_shapes(
+                paths,max(CONFIG["TinyPerson"]["batch"]*8,32),640)
         elif args.dataset=="Varroa":
             from utils.ftsc_deployment_other_dataset_preflight_v1 import check_varroa
             summary=check_varroa(args.data_yaml_template,args.seeds,CONFIG["Varroa"]["batch"])
             count=summary["total_images"]
             shape_hint={str(x["seed"]):x["pt_canvas_shapes"] for x in summary["seeds"]}
+            small_shape_hint={}
+            for seed in args.seeds:
+                _yaml, _paths=_native_test_yaml(args,seed)
+                small_shape_hint[str(seed)]=historical_predict_canvas_shapes(
+                    _paths,100,CONFIG["Varroa"]["imgsz"])
         else:
             yaml,images=_native_test_yaml(args,args.seeds[0])
             count=len(images)
@@ -880,20 +1069,40 @@ def main(argv=None):
         if args.dataset!="LEVIR-Ship":
             if args.dataset=="Varroa":
                 dynamic_profile={
-                    str(seed):validate_dynamic_profile_shapes(hint)
-                    for seed,hint in shape_hint.items()
+                    str(seed):{
+                        "main_val":validate_dynamic_profile_shapes(hint),
+                        "small_predict":validate_dynamic_profile_shapes(
+                            small_shape_hint[str(seed)]),
+                    } for seed,hint in shape_hint.items()
                 }
             else:
                 dynamic_profile=validate_dynamic_profile_shapes(shape_hint)
-        print(json.dumps({"status":"HISTORICAL_PREPROCESSING_IDENTIFIED",
-              "dataset":args.dataset,"images":count,"pt_canvas_shapes":shape_hint,
-              "engine_type":"dynamic" if args.dataset!="LEVIR-Ship" else "static512_small_plus_existing_v3_main",
-              "trt_dynamic_profile":dynamic_profile,
-              "warning":"This is a source-code/data preflight, not PT/TRT runtime input parity. "
-                        "The evaluate phase compares actual backend input SHA and fails closed."},indent=2))
+        if args.dataset=="LEVIR-Ship":
+            need(count==788,"LEVIR frozen 788-image test inventory changed")
+            true_shape=historical_predict_canvas_shapes(images,100,512)
+            need(true_shape=={"512x512":788},
+                 f"LEVIR paper prediction must be native512, not {true_shape}")
+        result={
+            "status":"HISTORICAL_PREPROCESSING_IDENTIFIED",
+            "fingerprint":data_fingerprint(args),
+            "dataset":args.dataset,"images":count,"checked_shapes":shape_hint,
+            "small_predict_canvas_shapes":small_shape_hint if args.dataset=="Varroa" else (
+                shape_hint if args.dataset=="TinyPerson" else None),
+            "engine_type":"dynamic" if args.dataset!="LEVIR-Ship" else "static512_small_plus_existing_v3_main",
+            "trt_dynamic_profile":dynamic_profile,
+            "warning":"Source/data/profile preflight only. Runtime backend "
+                      "input SHA parity remains mandatory in evaluate phase.",
+        }
+        location=preflight_path(args)
+        write_new_json(location,result)
+        print(json.dumps({**result,"preflight_path":str(location)},indent=2))
         return 0
     need(args.phase=="evaluate" and args.allow_evaluate,
          "Evaluation requires explicit --allow-evaluate and cannot train")
+    # A plan/verify flag alone is not permission to export or publish AP.
+    # Require a recorded matching dataset-source-shape preflight per stage.
+    preflight=verify_preflight(args)
+    print("PAPER_PRECHECK_VERIFIED",str(preflight_path(args)),flush=True)
     if args.run_offline_tests:
         import subprocess
         subprocess.run([sys.executable,"-m","unittest",
