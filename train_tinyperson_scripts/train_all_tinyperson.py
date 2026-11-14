@@ -384,7 +384,9 @@ def decode_ultralytics_result(result) -> tuple[list[list[float]], list[float], l
 
 
 def predict_merged_test(run_dir: Path, test_out_dir: Path, data_root: Path, args: argparse.Namespace,
-                        *, model_path: Path | None = None, half: bool | None = None) -> Path:
+                        *, model_path: Path | None = None, half: bool | None = None,
+                        predict_iou: float = 0.5,
+                        predict_rect: bool = True) -> Path:
     """Run backend on corners, translate boxes, NMS, emit original-image detections.
 
     Optional model_path supports independent .pt/.engine/.onnx evaluation. The
@@ -405,6 +407,9 @@ def predict_merged_test(run_dir: Path, test_out_dir: Path, data_root: Path, args
     by_original: dict[int, list[dict]] = defaultdict(list)
     model = YOLO(str(model_path if model_path is not None else run_dir / "weights/best.pt"), task="detect")
     chunk_size = max(args.batch_size * 8, 32)
+    # Source lists form one batch; static TensorRT engines use exported batch size.
+    if str(model_path if model_path is not None else "").endswith(".engine"):
+        chunk_size = max(1, args.batch_size)
     for start in range(0, len(records), chunk_size):
         chunk_records = records[start : start + chunk_size]
         predictions = model.predict(
@@ -414,13 +419,17 @@ def predict_merged_test(run_dir: Path, test_out_dir: Path, data_root: Path, args
             device=args.device,
             workers=args.workers,
             conf=0.001,
-            iou=0.5,
+            iou=predict_iou,
             max_det=300,
+            rect=predict_rect,
             stream=True,
             verbose=False,
             **({"half": half} if half is not None else {}),
         )
-        for record, result in zip(chunk_records, predictions):
+        # Fail closed: stream=True is a generator, and plain zip() silently
+        # truncates if inference yields fewer/more windows than the manifest.
+        # Missing windows must never be published as valid merged AP.
+        for record, result in zip(chunk_records, predictions, strict=True):
             original_id = original_id_by_name[record["file_name"]]
             corner = record["corner"]
             xyxy, scores, classes = decode_ultralytics_result(result)

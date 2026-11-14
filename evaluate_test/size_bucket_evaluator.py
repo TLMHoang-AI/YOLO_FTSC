@@ -128,8 +128,13 @@ def _predictions(
     detections = []
     # Chunking changes only source-list residency.  In particular, image IDs
     # are offset by the original list position rather than restarted per chunk.
-    for start in range(0, len(image_paths), MAX_SOURCE_LIST_CHUNK):
-        chunk = image_paths[start : start + MAX_SOURCE_LIST_CHUNK]
+    # Source image lists are loaded as one batch by Ultralytics.
+    # Static TensorRT engines must respect their exported batch capacity.
+    source_chunk_size = MAX_SOURCE_LIST_CHUNK
+    if str(getattr(model, "model", "")).endswith(".engine"):
+        source_chunk_size = min(source_chunk_size, max(1, batch))
+    for start in range(0, len(image_paths), source_chunk_size):
+        chunk = image_paths[start : start + source_chunk_size]
         results = model.predict(
             source=[str(path) for path in chunk], imgsz=imgsz, batch=batch,
             device=device, workers=workers, iou=0.5, verbose=False, stream=True,

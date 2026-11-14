@@ -28,6 +28,10 @@ from utils.ftsc_hf_layout import (
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "FTSC_DEPLOY_EVAL_20261112_REPORT_V3"
+PARTNER_CONTRACT = "FTSC_DEPLOY_PARTNER_PREDICT_COCO_V1"
+PARTNER_PROTOCOL = "partner_predict_coco_v1"
+NATIVE_PROTOCOL = "native_ultralytics_v1"
+TINY_MERGED_CONTRACT = "tinybenchmark_merged_original_iou50_95_v2"
 DEFAULT_BACKENDS = ("pt32", "pt16", "trt32", "trt16")
 BACKENDS = DEFAULT_BACKENDS + ("ort_cpu32", "ort_cpu16")
 METRIC_KEYS = {
@@ -40,6 +44,30 @@ EVALUATOR = {
     "TinyPerson": "tinybenchmark_merged_original_iou50_95_v2",
     "Varroa": "ultralytics_test_plus_tinybenchmark_native_small_50_75_v1",
 }
+
+
+PARTNER_METRIC_KEYS = {
+    "LEVIR-Ship": ("test_coco/AP50", "test_coco/mAP50-95", "test_size/AP50-Small"),
+    "TinyPerson": METRIC_KEYS["TinyPerson"],
+    "Varroa": ("test_coco/AP50", "test_coco/mAP50-95", "test_size/AP50-Small"),
+}
+PARTNER_EVALUATOR = {
+    "LEVIR-Ship": "partner_predict_coco_50_95_plus_tinybenchmark_native_ap50_small_v1",
+    "TinyPerson": "partner_predict_tinybenchmark_merged_original_50_95_v1",
+    "Varroa": "partner_predict_coco_50_95_plus_tinybenchmark_native_ap50_small_v1",
+}
+
+
+def evaluation_protocol(args: argparse.Namespace) -> str:
+    return getattr(args, "evaluation_protocol", NATIVE_PROTOCOL)
+
+
+def evaluator_name(args: argparse.Namespace) -> str:
+    return (PARTNER_EVALUATOR if evaluation_protocol(args) == PARTNER_PROTOCOL else EVALUATOR)[args.dataset]
+
+
+def metric_keys(dataset: str, protocol: str = NATIVE_PROTOCOL) -> tuple[str, str, str]:
+    return (PARTNER_METRIC_KEYS if protocol == PARTNER_PROTOCOL else METRIC_KEYS)[dataset]
 
 
 def require(condition: bool, message: str) -> None:
@@ -265,7 +293,7 @@ def hardware_identity(device: str) -> dict[str, str]:
 
 
 def cache_export(pt: Path, digest: str, backend: str, output_dir: Path, imgsz: int,
-                 device: str) -> Path:
+                 device: str, protocol: str = NATIVE_PROTOCOL) -> Path:
     """Export to isolated cache, never modifying the HF checkpoint."""
     from evaluate_test.standard_detection_metrics import ensure_local_ultralytics
     ensure_local_ultralytics()
@@ -291,6 +319,9 @@ def cache_export(pt: Path, digest: str, backend: str, output_dir: Path, imgsz: i
     # TensorRT engine artifacts are bound to device/toolchain. Re-export on Jetson.
     fingerprint = {"source_sha256": digest, "backend": backend, "imgsz": imgsz,
                    "gpu_name": gpu_name, "device": device, "torch": str(torch.__version__)}
+    if protocol == PARTNER_PROTOCOL:
+        fingerprint["export_protocol"] = PARTNER_PROTOCOL
+        fingerprint["simplify"] = False
     if is_trt:
         require(torch.cuda.is_available() and device != "cpu",
                 "TensorRT export requires CUDA on the target machine")
@@ -308,10 +339,11 @@ def cache_export(pt: Path, digest: str, backend: str, output_dir: Path, imgsz: i
     # Preserve source data. Backend precision is baked into export, not inferred
     # from PyTorch checkpoint dtype. Disable embedded NMS to keep predictor NMS.
     model = YOLO(str(staged), task="detect")
+    partner_kwargs = {"simplify": False, "int8": False, "verbose": False} if protocol == PARTNER_PROTOCOL else {}
     exported = Path(model.export(
         format="engine" if is_trt else "onnx",
         imgsz=imgsz, batch=1, half=backend.endswith("16"), device=device,
-        dynamic=False, nms=False,
+        dynamic=False, nms=False, **partner_kwargs,
     )).resolve()
     require(exported == expected.resolve() and expected.is_file(),
             f"Export returned an unexpected artifact: {exported} != {expected}")
@@ -333,7 +365,8 @@ def prepare_backend(args: argparse.Namespace, provenance: dict[str, Any],
     elif backend == "ort_cpu16":
         # ONNX FP16 export needs CUDA; CPU EP may not implement all FP16 ops.
         require(args.device != "cpu", "ORT CPU FP16 export requires CUDA; CPU execution may still be unsupported")
-    return cache_export(pt, provenance["sha256"], backend, output_dir, imgsz, export_device)
+    return cache_export(pt, provenance["sha256"], backend, output_dir, imgsz, export_device,
+                        evaluation_protocol(args))
 
 
 def native_metrics(args: argparse.Namespace, model_file: Path, backend: str,
@@ -397,6 +430,8 @@ def tiny_metrics(args: argparse.Namespace, model_file: Path, backend: str,
                            device=backend_device(backend, args.device)),
         model_path=model_file,
         half=(backend == "pt16") if backend.startswith("pt") else None,
+        predict_iou=0.7 if evaluation_protocol(args) == PARTNER_PROTOCOL else 0.5,
+        predict_rect=evaluation_protocol(args) != PARTNER_PROTOCOL,
     )
     metrics = evaluate_tiny_benchmark(prediction, merged_gt)
     return metrics, {
@@ -405,20 +440,52 @@ def tiny_metrics(args: argparse.Namespace, model_file: Path, backend: str,
     }
 
 
-def validate_metric_values(metrics: dict[str, Any], dataset: str) -> None:
-    for key in METRIC_KEYS[dataset]:
+def validate_metric_values(metrics: dict[str, Any], dataset: str,
+                           protocol: str = NATIVE_PROTOCOL) -> None:
+    if dataset == "TinyPerson":
+        require(metrics.get("test_merged/evaluator_contract") == TINY_MERGED_CONTRACT,
+                "TinyPerson deployment accuracy requires original-image merged TinyBenchmark evaluator")
+    for key in metric_keys(dataset, protocol):
         value = metrics.get(key)
         require(type(value) in (int, float) and math.isfinite(value) and 0.0 <= value <= 1.0,
                 f"Missing/invalid deployment metric {key}: {value!r}")
     # Small AP -1 indicates no valid objects in the bucket; never silently
     # substitute overall AP or write a paper number from a missing bucket.
-    require(metrics[METRIC_KEYS[dataset][2]] >= 0, "Small-object AP is unavailable")
+    require(metrics[metric_keys(dataset, protocol)[2]] >= 0, "Small-object AP is unavailable")
 
 
 def expected_identity(args: argparse.Namespace, row: dict[str, Any]) -> dict[str, Any]:
-    return {"contract": VERSION, "dataset": args.dataset, "case": row["case"],
-            "seed": row["seed"], "backend": row["backend"],
-            "source": row["source"], "platform": args.platform}
+    partner = evaluation_protocol(args) == PARTNER_PROTOCOL
+    identity = {"contract": PARTNER_CONTRACT if partner else VERSION,
+                "dataset": args.dataset, "case": row["case"],
+                "seed": row["seed"], "backend": row["backend"],
+                "source": row["source"], "platform": args.platform}
+    if partner:
+        from utils.ftsc_partner_backend_metrics_v1 import PARTNER_REPO, PARTNER_COMMIT
+        identity["evaluation_protocol"] = PARTNER_PROTOCOL
+        identity["partner_source"] = f"{PARTNER_REPO}@{PARTNER_COMMIT}"
+        identity["predict_config"] = {
+            "conf": 0.001, "nms_iou": 0.7, "max_det": 300,
+            "batch": 1, "rect": False,
+            "tiny_merge_nms_iou": 0.5 if args.dataset == "TinyPerson" else None,
+        }
+    return identity
+
+
+def verify_partner_artifacts(record: dict[str, Any], folder: Path, dataset: str) -> None:
+    """A saved partner accuracy result is valid only with its own prediction files."""
+    if dataset == "TinyPerson":
+        paths = {"predictions_sha256": folder / "evaluation/test_merged_predictions.json"}
+    else:
+        paths = {
+            "predictions_sha256": folder / "partner_test_predictions.json",
+            "small_predictions_sha256": folder / "partner_test_size_predictions.json",
+            "gt_sha256": folder / "partner_test_coco_ground_truth.json",
+            "small_gt_sha256": folder / "partner_test_size_ground_truth.json",
+        }
+    for key, artifact in paths.items():
+        require(artifact.is_file() and record.get(key) == sha256(artifact),
+                f"Saved partner prediction/GT fingerprint invalid: {artifact}")
 
 
 def evaluate_one(args: argparse.Namespace, archive: Any, row: dict[str, Any]) -> dict[str, Any]:
@@ -429,7 +496,9 @@ def evaluate_one(args: argparse.Namespace, archive: Any, row: dict[str, Any]) ->
         cached = json.loads(metrics_path.read_text(encoding="utf-8"))
         require(all(cached.get(k) == v for k, v in expected_identity(args, row).items()),
                 f"Cached deployment result has different identity: {metrics_path}")
-        validate_metric_values(cached["metrics"], args.dataset)
+        validate_metric_values(cached["metrics"], args.dataset, evaluation_protocol(args))
+        if evaluation_protocol(args) == PARTNER_PROTOCOL:
+            verify_partner_artifacts(cached, output_dir, args.dataset)
         require(cached.get("device") == backend_device(backend, args.device),
                 f"Cached evaluation was run on a different device: {metrics_path}")
         actual_host = hardware_identity(backend_device(backend, args.device))
@@ -469,13 +538,16 @@ def evaluate_one(args: argparse.Namespace, archive: Any, row: dict[str, Any]) ->
     args.current_seed = seed
     if args.dataset == "TinyPerson":
         metrics, fingerprints = tiny_metrics(args, model_file, backend, output_dir, imgsz)
+    elif evaluation_protocol(args) == PARTNER_PROTOCOL:
+        from utils.ftsc_partner_backend_metrics_v1 import partner_native_metrics
+        metrics, fingerprints = partner_native_metrics(args, model_file, backend, output_dir, imgsz)
     else:
         metrics, fingerprints = native_metrics(args, model_file, backend, output_dir, imgsz)
-    validate_metric_values(metrics, args.dataset)
+    validate_metric_values(metrics, args.dataset, evaluation_protocol(args))
     record: dict[str, Any] = {
         **expected_identity(args, row), "source_sha256": provenance["sha256"],
         "hf_revision": provenance["revision"], "model_artifact_sha256": sha256(model_file),
-        "evaluator": EVALUATOR[args.dataset], "imgsz": imgsz,
+        "evaluator": evaluator_name(args), "imgsz": imgsz,
         "device": backend_device(backend, args.device),
         **hardware_identity(backend_device(backend, args.device)),
         "metrics": metrics, **fingerprints,
@@ -503,10 +575,12 @@ def aggregate(args: argparse.Namespace) -> list[dict[str, Any]]:
                 })
                 require(all(record.get(k) == v for k,v in identity.items()),
                         f"Mismatched backend result: {path}")
-                require(record.get("evaluator") == EVALUATOR[args.dataset], f"Evaluator mismatch: {path}")
+                require(record.get("evaluator") == evaluator_name(args), f"Evaluator mismatch: {path}")
                 require(record.get("imgsz") == (512 if args.dataset == "LEVIR-Ship" else 640),
                         f"Resolution mismatch: {path}")
-                validate_metric_values(record["metrics"], args.dataset)
+                validate_metric_values(record["metrics"], args.dataset, evaluation_protocol(args))
+                if evaluation_protocol(args) == PARTNER_PROTOCOL:
+                    verify_partner_artifacts(record, path.parent, args.dataset)
                 found.append(record)
             require(len({x["gt_sha256"] for x in found}) == 1 if args.dataset == "TinyPerson" else True,
                     "Different merged GT hashes across TinyPerson seeds")
@@ -521,10 +595,13 @@ def aggregate(args: argparse.Namespace) -> list[dict[str, Any]]:
                 "platform": args.platform, "device": found[0]["device"],
                 "host_machine": found[0]["host_machine"],
                 "gpu_name": found[0]["gpu_name"], "n": 3,
-                "evaluator": EVALUATOR[args.dataset],
+                "evaluator": evaluator_name(args),
                 "imgsz": found[0]["imgsz"],
             }
-            for label, key in zip(("AP50", "mAP50_95", "AP50_small"), METRIC_KEYS[args.dataset]):
+            if evaluation_protocol(args) == PARTNER_PROTOCOL:
+                data["evaluation_protocol"] = PARTNER_PROTOCOL
+            for label, key in zip(("AP50", "mAP50_95", "AP50_small"),
+                                  metric_keys(args.dataset, evaluation_protocol(args))):
                 vals = [100 * x["metrics"][key] for x in found]
                 data[label + "_mean_pct"] = round(statistics.fmean(vals), 6)
                 data[label + "_sample_std_pct"] = round(statistics.stdev(vals), 6)
@@ -543,6 +620,7 @@ def aggregate_report(args: argparse.Namespace) -> dict[str, Any]:
     """Partial-safe report aggregation: only complete three-seed rows get numbers."""
     results: list[dict[str, Any]] = []
     blockers: list[dict[str, Any]] = []
+    partner_gt_by_case: dict[str, dict[str, tuple[str, ...]]] = {}
     require(tuple(sorted(args.seeds)) == SEEDS,
             "Report means require all three seeds 42/43/44")
     for case in args.cases:
@@ -572,7 +650,7 @@ def aggregate_report(args: argparse.Namespace) -> dict[str, Any]:
                     })
                     require(all(record.get(k) == v for k, v in identity.items()),
                             "different checkpoint identity or platform")
-                    require(record.get("evaluator") == EVALUATOR[args.dataset],
+                    require(record.get("evaluator") == evaluator_name(args),
                             "evaluator contract mismatch")
                     require(record.get("imgsz") == (512 if args.dataset == "LEVIR-Ship" else 640),
                             "input resolution mismatch")
@@ -580,7 +658,9 @@ def aggregate_report(args: argparse.Namespace) -> dict[str, Any]:
                             (args.manifest_cases[case][seed]["sha256"]
                              if case in args.manifest_cases else record.get("source_sha256")),
                             "checkpoint SHA changed from report inventory")
-                    validate_metric_values(record["metrics"], args.dataset)
+                    validate_metric_values(record["metrics"], args.dataset, evaluation_protocol(args))
+                    if evaluation_protocol(args) == PARTNER_PROTOCOL:
+                        verify_partner_artifacts(record, folder, args.dataset)
                     records.append(record)
                 except (OSError, ValueError, TypeError, RuntimeError, KeyError) as error:
                     issues.append(f"{seed}: invalid result: {type(error).__name__}: {error}")
@@ -607,7 +687,13 @@ def aggregate_report(args: argparse.Namespace) -> dict[str, Any]:
                     "device": records[0]["device"], "gpu_name": records[0]["gpu_name"],
                     "evaluator": records[0]["evaluator"], "status": "COMPLETE",
                 }
-                for label, key in zip(("AP50", "mAP50_95", "AP50_small"), METRIC_KEYS[args.dataset]):
+                if evaluation_protocol(args) == PARTNER_PROTOCOL:
+                    row["evaluation_protocol"] = PARTNER_PROTOCOL
+                    partner_gt_by_case.setdefault(case, {})[backend] = tuple(
+                        x["gt_sha256"] for x in records
+                    )
+                for label, key in zip(("AP50", "mAP50_95", "AP50_small"),
+                                      metric_keys(args.dataset, evaluation_protocol(args))):
                     values = [100.0 * float(x["metrics"][key]) for x in records]
                     row[label + "_mean_pct"] = round(statistics.fmean(values), 6)
                     row[label + "_sample_std_pct"] = round(statistics.stdev(values), 6)
@@ -616,6 +702,17 @@ def aggregate_report(args: argparse.Namespace) -> dict[str, Any]:
                 blockers.append({
                     "case": case, "backend": backend, "report_sections": args.report_sections.get(case, []),
                     "issues": [f"Three-seed comparability failure: {type(error).__name__}: {error}"],
+                    "status": "INVALID_NOT_PAPER_READY",
+                })
+    if evaluation_protocol(args) == PARTNER_PROTOCOL:
+        # Paired backends must have evaluated exactly the same GT for EACH seed.
+        for case, per_backend in partner_gt_by_case.items():
+            if len(set(per_backend.values())) > 1:
+                results = [row for row in results if row["case"] != case]
+                blockers.append({
+                    "case": case, "backend": "CROSS_BACKEND",
+                    "report_sections": args.report_sections.get(case, []),
+                    "issues": ["Partner test GT SHA differs across backends for at least one seed"],
                     "status": "INVALID_NOT_PAPER_READY",
                 })
     destination = args.project / args.dataset
@@ -635,6 +732,7 @@ def aggregate_report(args: argparse.Namespace) -> dict[str, Any]:
                    "SELECTED_CASES_COMPLETE_WITH_UNRESOLVED_MAIN" if args.unresolved_main else
                    "REPORT_ALL_SELECTED_COMPLETE"),
         "scope": "report", "dataset": args.dataset, "platform": args.platform,
+        "evaluation_protocol": evaluation_protocol(args),
         "complete_case_backend_rows": len(results), "blocked_case_backend_rows": len(blockers),
         "unresolved_main_results": args.unresolved_main,
         "protocol_warnings": args.protocol_warnings,
@@ -655,6 +753,9 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--seeds", nargs="+", type=int, default=list(SEEDS))
     p.add_argument("--backends", nargs="+", default=list(DEFAULT_BACKENDS))
     p.add_argument("--scope", choices=("manual", "report"), default="manual")
+    p.add_argument("--evaluation-protocol", choices=(NATIVE_PROTOCOL, PARTNER_PROTOCOL),
+                   default=NATIVE_PROTOCOL,
+                   help="Partner uses independent predict + COCOeval (not comparable to Ultralytics AP).")
     p.add_argument("--report-manifest", type=Path, default=REPORT_MANIFEST,
                    help="Curated Main Results + A/B/C/D case manifest")
     p.add_argument("--platform", choices=("marimo_live", "local_server"), default="marimo_live",
@@ -706,11 +807,18 @@ def main(argv: list[str] | None = None) -> None:
                 or all(seed in args.manifest_cases[case] for seed in args.seeds)
                 for case in args.cases), "Manifest lacks requested seed checkpoint mapping")
     require(args.batch > 0 and args.workers >= 0, "Invalid batch/workers")
+    if evaluation_protocol(args) == PARTNER_PROTOCOL:
+        require(args.batch == 1, "Partner deployment accuracy protocol requires batch=1")
     args.project = args.project.expanduser().resolve()
+    if evaluation_protocol(args) == PARTNER_PROTOCOL:
+        # Separate every artifact/cache/aggregate from the previous native protocol.
+        args.project = args.project / PARTNER_PROTOCOL
     rows = planned(args)
     if args.phase == "plan":
         print(json.dumps({
             "status": "PLAN_ONLY", "scope": args.scope,
+            "evaluation_protocol": evaluation_protocol(args),
+            "evaluator": evaluator_name(args), "project": str(args.project),
             "case_count": len(args.cases), "checkpoint_count": len(args.cases) * len(args.seeds),
             "evaluation_jobs": len(rows),
             "unresolved_main_results": args.unresolved_main,

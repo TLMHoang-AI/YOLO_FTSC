@@ -34,10 +34,10 @@ class TensorRTBackend(BaseBackend):
             check_requirements("numpy==1.23.5")
 
         try:
-            import ultralytics.nn.backends.tensorrt as trt
+            import tensorrt as trt
         except ImportError:
             check_tensorrt()
-            import ultralytics.nn.backends.tensorrt as trt
+            import tensorrt as trt
 
         check_version(trt.__version__, ">=7.0.0", hard=True)
         check_version(trt.__version__, "!=10.2.0", msg="https://github.com/ultralytics/ultralytics/pull/24367")

@@ -56,15 +56,128 @@ class DeploymentContractTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             deploy.main(["--dataset", "TinyPerson", "--seeds", "1", "--phase", "plan"])
 
+    def test_partner_metric_contract_keeps_coco_separate_from_ultralytics(self):
+        from utils import ftsc_partner_backend_metrics_v1 as partner
+        self.assertEqual(partner.PREDICT_CONF, 0.001)
+        self.assertEqual(partner.PREDICT_IOU, 0.7)
+        self.assertEqual(partner.PREDICT_MAX_DET, 300)
+        self.assertEqual(partner.PREDICT_BATCH, 1)
+        self.assertEqual(deploy.metric_keys("LEVIR-Ship", deploy.PARTNER_PROTOCOL),
+                         ("test_coco/AP50", "test_coco/mAP50-95", "test_size/AP50-Small"))
+        self.assertNotEqual(deploy.metric_keys("LEVIR-Ship"),
+                            deploy.metric_keys("LEVIR-Ship", deploy.PARTNER_PROTOCOL))
+        proper = {"test_coco/AP50": .81, "test_coco/mAP50-95": .31,
+                  "test_size/AP50-Small": .82}
+        deploy.validate_metric_values(proper, "LEVIR-Ship", deploy.PARTNER_PROTOCOL)
+        with self.assertRaisesRegex(RuntimeError, "Missing/invalid"):
+            deploy.validate_metric_values(
+                {"test/metrics/mAP50(B)": .81, "test/metrics/mAP50-95(B)": .31,
+                 "test_size/AP50-Small": .82},
+                "LEVIR-Ship", deploy.PARTNER_PROTOCOL,
+            )
+        args = argparse.Namespace(dataset="LEVIR-Ship", platform="marimo_live",
+                                  evaluation_protocol=deploy.PARTNER_PROTOCOL)
+        identity = deploy.expected_identity(args, {
+            "case": "FTSC", "seed": 42, "backend": "trt32", "source": "exact/path.pt"})
+        self.assertEqual(identity["contract"], deploy.PARTNER_CONTRACT)
+        self.assertEqual(identity["evaluation_protocol"], deploy.PARTNER_PROTOCOL)
+        args.evaluation_protocol = deploy.NATIVE_PROTOCOL
+        self.assertEqual(deploy.expected_identity(args, {
+            "case": "FTSC", "seed": 42, "backend": "trt32", "source": "exact/path.pt"})["contract"],
+            deploy.VERSION)
+
+    def test_partner_plan_is_namespaced_and_requires_batch_one(self):
+        import contextlib
+        import io
+        stream = io.StringIO()
+        with contextlib.redirect_stdout(stream):
+            deploy.main(["--dataset", "LEVIR-Ship", "--scope", "report", "--cases", "FTSC",
+                         "--seeds", "42", "--backends", "pt32", "trt32",
+                         "--evaluation-protocol", deploy.PARTNER_PROTOCOL, "--phase", "plan"])
+        report = json.loads(stream.getvalue())
+        self.assertEqual(report["evaluation_protocol"], deploy.PARTNER_PROTOCOL)
+        self.assertEqual(report["evaluation_jobs"], 2)
+        self.assertTrue(report["project"].endswith("/" + deploy.PARTNER_PROTOCOL))
+        self.assertEqual(report["evaluator"], deploy.PARTNER_EVALUATOR["LEVIR-Ship"])
+        self.assertTrue(all("/partner_predict_coco_v1/" in r["output"] for r in report["rows"]))
+        with self.assertRaisesRegex(RuntimeError, "batch=1"):
+            deploy.main(["--dataset", "LEVIR-Ship", "--scope", "report", "--phase", "plan",
+                         "--batch", "2", "--evaluation-protocol", deploy.PARTNER_PROTOCOL])
+
+    def test_partner_prediction_artifacts_are_sha_checked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            files = {
+                "predictions_sha256": "partner_test_predictions.json",
+                "small_predictions_sha256": "partner_test_size_predictions.json",
+                "gt_sha256": "partner_test_coco_ground_truth.json",
+                "small_gt_sha256": "partner_test_size_ground_truth.json",
+            }
+            record = {}
+            for key, name in files.items():
+                target = root / name
+                target.write_text("[]\\n", encoding="utf-8")
+                record[key] = deploy.sha256(target)
+            deploy.verify_partner_artifacts(record, root, "LEVIR-Ship")
+            (root / "partner_test_predictions.json").write_text("[1]\\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "fingerprint"):
+                deploy.verify_partner_artifacts(record, root, "LEVIR-Ship")
+
+    def test_partner_coco_perfect_prediction_if_pycocotools_available(self):
+        import importlib.util
+        if importlib.util.find_spec("pycocotools") is None:
+            self.skipTest("pycocotools not installed in this test environment")
+        from utils.ftsc_partner_backend_metrics_v1 import partner_coco_metrics
+        with tempfile.TemporaryDirectory() as td:
+            gt_path = Path(td) / "gt.json"
+            det_path = Path(td) / "detections.json"
+            gt_path.write_text(json.dumps({
+                "info": {}, "images": [{"id": 1, "file_name": "synthetic.jpg", "width": 100, "height": 100}],
+                "annotations": [{"id": 1, "image_id": 1, "category_id": 1,
+                                 "bbox": [10, 10, 20, 20], "area": 400, "iscrowd": 0}],
+                "categories": [{"id": 1, "name": "target"}],
+            }), encoding="utf-8")
+            det_path.write_text(json.dumps([{
+                "image_id": 1, "category_id": 1,
+                "bbox": [10, 10, 20, 20], "score": 0.99,
+            }]), encoding="utf-8")
+            metrics = partner_coco_metrics(gt_path, det_path)
+            self.assertAlmostEqual(metrics["test_coco/AP50"], 1.0)
+            self.assertAlmostEqual(metrics["test_coco/mAP50-95"], 1.0)
+
     def test_backend_selection_and_metric_contract(self):
         self.assertEqual(deploy.backend_device("ort_cpu32", "cuda:0"), "cpu")
         self.assertEqual(deploy.backend_device("trt16", "cuda:0"), "cuda:0")
         m = {"test_merged/AP50": .57, "test_merged/mAP50-95": .215,
-             "test_merged/AP50-Small": .69}
+             "test_merged/AP50-Small": .69,
+             "test_merged/evaluator_contract": deploy.TINY_MERGED_CONTRACT}
         deploy.validate_metric_values(m, "TinyPerson")
         for bad in (float("nan"), -1, 1.5):
             with self.assertRaises(RuntimeError):
                 deploy.validate_metric_values({**m, "test_merged/AP50-Small": bad}, "TinyPerson")
+
+    def test_tinyperson_partner_requires_merged_original_metrics(self):
+        self.assertEqual(deploy.metric_keys("TinyPerson", deploy.NATIVE_PROTOCOL),
+                         deploy.metric_keys("TinyPerson", deploy.PARTNER_PROTOCOL))
+        self.assertEqual(deploy.metric_keys("TinyPerson", deploy.PARTNER_PROTOCOL),
+                         ("test_merged/AP50", "test_merged/mAP50-95",
+                          "test_merged/AP50-Small"))
+        merged = {"test_merged/AP50": .57, "test_merged/mAP50-95": .215,
+                  "test_merged/AP50-Small": .69,
+                  "test_merged/evaluator_contract": deploy.TINY_MERGED_CONTRACT}
+        for protocol in (deploy.NATIVE_PROTOCOL, deploy.PARTNER_PROTOCOL):
+            deploy.validate_metric_values(merged, "TinyPerson", protocol)
+            with self.assertRaisesRegex(RuntimeError, "merged TinyBenchmark"):
+                deploy.validate_metric_values({
+                    **merged, "test_merged/evaluator_contract": "crop_level"
+                }, "TinyPerson", protocol)
+            with self.assertRaisesRegex(RuntimeError, "Missing/invalid"):
+                deploy.validate_metric_values({
+                    "test/metrics/mAP50(B)": .57,
+                    "test/metrics/mAP50-95(B)": .215,
+                    "test_size/AP50-Small": .69,
+                    "test_merged/evaluator_contract": deploy.TINY_MERGED_CONTRACT,
+                }, "TinyPerson", protocol)
 
     def test_manifest_no_override_audited_canonical_mapping(self):
         with tempfile.TemporaryDirectory() as td:
@@ -166,6 +279,9 @@ class DeploymentContractTests(unittest.TestCase):
                 self.assertIn("'--report-manifest'", code)
                 self.assertIn("'--scope', 'report'", code)
                 self.assertIn(f"FTSC_DEPLOY_{suffix}_CASES = []", code)
+                self.assertIn(f"FTSC_DEPLOY_{suffix}_EVAL_PROTOCOL = 'partner_predict_coco_v1'", code)
+                self.assertIn("'--evaluation-protocol', FTSC_DEPLOY_", code)
+                self.assertIn("utils/ftsc_partner_backend_metrics_v1.py", code)
 
 
 if __name__ == "__main__":
