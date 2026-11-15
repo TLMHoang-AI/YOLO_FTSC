@@ -1,0 +1,239 @@
+{
+  "schema": "ftsc_levir_validation_all_paper_cases_v1",
+  "dataset": "LEVIR-Ship",
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "repo_id": "TLMHoang/FTSC_results",
+  "split": "val",
+  "frozen_split_seed": 42,
+  "scope": "Main Results and A/B/C/D ablations only; excludes augmentation compatibility",
+  "cases": {
+    "FTSC": {
+      "source_run": "LEVIR-Ship/historical_reconstructions/RECON_H2_V1",
+      "sections": [
+        "main:YOLOv8n+FTSC",
+        "A:on",
+        "B:P23",
+        "C:reference",
+        "D:alpha6"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "LEVIR-Ship/historical_reconstructions/RECON_H2_V1/seed_42/weights/best.pt",
+          "sha256": "e658614e617378110a280fe62927eb0df6f708162a5117865fe45efe66612805"
+        },
+        "43": {
+          "path": "LEVIR-Ship/historical_reconstructions/RECON_H2_V1/seed_43/weights/best.pt",
+          "sha256": "3987e53a33e1e23bef5c84ce56fd1d4ffe7535efa645893412e8e8606004c414"
+        },
+        "44": {
+          "path": "LEVIR-Ship/historical_reconstructions/RECON_H2_V1/seed_44/weights/best.pt",
+          "sha256": "2ee720fee5cc1d68444b94a61c8a74c05908d31e712cfc9c2eb5c69f4e3b26ba"
+        }
+      }
+    },
+    "FTSC_YOLOV9T": {
+      "source_run": "LEVIR-Ship/cross_yolo_portability/yolov9t/FTSC_H2",
+      "sections": [
+        "main:YOLOv9t+FTSC"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "LEVIR-Ship/cross_yolo_portability/yolov9t/FTSC_H2/seed_42/weights/best.pt",
+          "sha256": "56a3375ddbe7e1dc3e6a52e8d4d489613241368ade202481f5501c6fba2754fd"
+        },
+        "43": {
+          "path": "LEVIR-Ship/cross_yolo_portability/yolov9t/FTSC_H2/seed_43/weights/best.pt",
+          "sha256": "66f8786b2aebbb9c5386a6c8998cc3fd32bc6dd236d792dd06178ff6ed4ae3e8"
+        },
+        "44": {
+          "path": "LEVIR-Ship/cross_yolo_portability/yolov9t/FTSC_H2/seed_44/weights/best.pt",
+          "sha256": "57ea4da74330b0da013e2b2bacbe88982484f7286a19d164f8b655f604a90749"
+        }
+      }
+    },
+    "FTSC_YOLO11N": {
+      "source_run": "LEVIR-Ship/cross_yolo_portability/yolo11n/FTSC_H2",
+      "sections": [
+        "main:YOLO11n+FTSC"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "LEVIR-Ship/cross_yolo_portability/yolo11n/FTSC_H2/seed_42/weights/best.pt",
+          "sha256": "879f867d7022c0afc734a3bb34e72f6a0c5f1ddf95c3aa486e73523389ca9966"
+        },
+        "43": {
+          "path": "LEVIR-Ship/cross_yolo_portability/yolo11n/FTSC_H2/seed_43/weights/best.pt",
+          "sha256": "937a2e85bfe1512f340068a669fff4fc660e31bf69e7be28504b4a55dadf162a"
+        },
+        "44": {
+          "path": "LEVIR-Ship/cross_yolo_portability/yolo11n/FTSC_H2/seed_44/weights/best.pt",
+          "sha256": "1e5277f8a5647fb9011c0130a6efbfad58be002a0b38e06535e94fda5f9d31fd"
+        }
+      }
+    },
+    "FTSC_OFF": {
+      "source_run": "LEVIR-Ship/journal_experiments/ftsc_off_hf_first_v1/V8_B1_P23_NOFTSC",
+      "sections": [
+        "A:off"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "LEVIR-Ship/journal_experiments/ftsc_off_hf_first_v1/V8_B1_P23_NOFTSC/seed_42/weights/best.pt",
+          "sha256": "10e318a3c48f9e7dcd619a61c8e96d1a12f2cd8a33c90f14a402fa1a2b806e0f"
+        },
+        "43": {
+          "path": "LEVIR-Ship/journal_experiments/ftsc_off_hf_first_v1/V8_B1_P23_NOFTSC/seed_43/weights/best.pt",
+          "sha256": "6ec2f7175eda3c27f63d02ee27222489abfc48c6ddbcbd166c29c69e101360df"
+        },
+        "44": {
+          "path": "LEVIR-Ship/journal_experiments/ftsc_off_hf_first_v1/V8_B1_P23_NOFTSC/seed_44/weights/best.pt",
+          "sha256": "eb8ba316269d831fc118de25094b5120039f158437243c5923d197dc0696a864"
+        }
+      }
+    },
+    "HEAD_H0": {
+      "source_run": "LEVIR-Ship/historical_reconstructions/RECON_H0_V1",
+      "sections": [
+        "B:P2345"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "LEVIR-Ship/historical_reconstructions/RECON_H0_V1/seed_42/weights/best.pt",
+          "sha256": "521d6dd288a9cd508552c5c42a5bf4a4b58245b78caad0ec9a69a0676c59271a"
+        },
+        "43": {
+          "path": "LEVIR-Ship/historical_reconstructions/RECON_H0_V1/seed_43/weights/best.pt",
+          "sha256": "410329de45ae11bb450a6cd82707621e74a6de8c39f8f3b4c6ca2ebac44e0bb3"
+        },
+        "44": {
+          "path": "LEVIR-Ship/historical_reconstructions/RECON_H0_V1/seed_44/weights/best.pt",
+          "sha256": "8296c6e22f8bcf14be5144c2084ea00919832465adf7b2d3dba5aaa79c137814"
+        }
+      }
+    },
+    "HEAD_H1": {
+      "source_run": "LEVIR-Ship/historical_reconstructions/RECON_H1_V1",
+      "sections": [
+        "B:P234"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "LEVIR-Ship/historical_reconstructions/RECON_H1_V1/seed_42/weights/best.pt",
+          "sha256": "99c08fb527f57cef139cbce48fc0ef712802a26fb999f274a06817cc597e4b58"
+        },
+        "43": {
+          "path": "LEVIR-Ship/historical_reconstructions/RECON_H1_V1/seed_43/weights/best.pt",
+          "sha256": "4fbfe4614e519a9d689e19acaa88eb95b3772e6fc0381b58ac45cd4bad0813ca"
+        },
+        "44": {
+          "path": "LEVIR-Ship/historical_reconstructions/RECON_H1_V1/seed_44/weights/best.pt",
+          "sha256": "7597cf39040ce579a2e787ee3ee784d781741f0d4655e647690418c7cccc52d7"
+        }
+      }
+    },
+    "HEAD_H3": {
+      "source_run": "LEVIR-Ship/historical_reconstructions/RECON_H3_V1",
+      "sections": [
+        "B:P2"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "LEVIR-Ship/historical_reconstructions/RECON_H3_V1/seed_42/weights/best.pt",
+          "sha256": "afb4d36141bceae9d0d63190f728858c80b8d7169dcba594425e750cb88b6d8a"
+        },
+        "43": {
+          "path": "LEVIR-Ship/historical_reconstructions/RECON_H3_V1/seed_43/weights/best.pt",
+          "sha256": "6ede1cf91fab579c2f9b259009679ac2b9220421d9d1459745aeffd63dcdc6ad"
+        },
+        "44": {
+          "path": "LEVIR-Ship/historical_reconstructions/RECON_H3_V1/seed_44/weights/best.pt",
+          "sha256": "412e1b23b6156fcd16e260a98eb5195228004962c7c3a114bec37df78c7205cc"
+        }
+      }
+    },
+    "EDGE_CUE": {
+      "source_run": "LEVIR-Ship/original_runs/ES1",
+      "sections": [
+        "C:edge:ES1"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "LEVIR-Ship/original_runs/ES1/seed_42/weights/best.pt",
+          "sha256": "32427262777cf7996b91c99ef8ec215a07da8b2215b29eadb33f0444536c4eab"
+        },
+        "43": {
+          "path": "LEVIR-Ship/original_runs/ES1/seed_43/weights/best.pt",
+          "sha256": "e1606a16a0246c3b1a9fb6e6edaa4c85ea26cfb29b8874d86bd38ba569fd87e1"
+        },
+        "44": {
+          "path": "LEVIR-Ship/original_runs/ES1/seed_44/weights/best.pt",
+          "sha256": "41fe24ecede62200c4e0b38941dde744347f3c5f1a3b26bcf368e7c04b9e2507"
+        }
+      }
+    },
+    "COLOR_CUE": {
+      "source_run": "LEVIR-Ship/journal_experiments/phase2/C_H2_POSTFUSION_V2",
+      "sections": [
+        "C:color"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "LEVIR-Ship/journal_experiments/phase2/C_H2_POSTFUSION_V2/seed_42/weights/best.pt",
+          "sha256": "f8527b339d059d5806dc13909e49ced8518518af0ffd78185c40f9d08f7cc39f"
+        },
+        "43": {
+          "path": "LEVIR-Ship/journal_experiments/phase2/C_H2_POSTFUSION_V2/seed_43/weights/best.pt",
+          "sha256": "ad0b8c0dac89aea17baa3a29798009e230d670292c8a7a900060ba46d4c21e21"
+        },
+        "44": {
+          "path": "LEVIR-Ship/journal_experiments/phase2/C_H2_POSTFUSION_V2/seed_44/weights/best.pt",
+          "sha256": "97ebbe0643eb190c5a7dc654345d0e82382b150d93c9f444a9493ce4b0eeccf2"
+        }
+      }
+    },
+    "ALPHA4": {
+      "source_run": "LEVIR-Ship/journal_experiments/alpha_sensitivity/ALPHA4_rerun",
+      "sections": [
+        "D:alpha4"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "LEVIR-Ship/journal_experiments/alpha_sensitivity/ALPHA4_rerun/seed_42/weights/best.pt",
+          "sha256": "fe43e096cacaf351d96efbeaf0bde0f004785102b2c1f66ac130fb1f2bce5726"
+        },
+        "43": {
+          "path": "LEVIR-Ship/journal_experiments/alpha_sensitivity/ALPHA4_rerun/seed_43/weights/best.pt",
+          "sha256": "5c520d81590e677835705e5631f3554020c6b8e6bf5a1dac0d3b964e04815270"
+        },
+        "44": {
+          "path": "LEVIR-Ship/journal_experiments/alpha_sensitivity/ALPHA4_rerun/seed_44/weights/best.pt",
+          "sha256": "96f6d21d475fb7167b48be16b781a9c71e057916b337d03957c552478488e87e"
+        }
+      }
+    },
+    "ALPHA8": {
+      "source_run": "LEVIR-Ship/journal_experiments/alpha_sensitivity/ALPHA8_rerun",
+      "sections": [
+        "D:alpha8"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "LEVIR-Ship/journal_experiments/alpha_sensitivity/ALPHA8_rerun/seed_42/weights/best.pt",
+          "sha256": "bb2a4806b5e17fae55f1798a3a14df8f6fbccec6d4a58aa08a9391a4b278085b"
+        },
+        "43": {
+          "path": "LEVIR-Ship/journal_experiments/alpha_sensitivity/ALPHA8_rerun/seed_43/weights/best.pt",
+          "sha256": "3ba6c4f4db8921374e946801904f9eeb2cac3c6dce664a3e59fc07e876375729"
+        },
+        "44": {
+          "path": "LEVIR-Ship/journal_experiments/alpha_sensitivity/ALPHA8_rerun/seed_44/weights/best.pt",
+          "sha256": "b0868a3dc4b45bfe85fd06d8ab0f83e0b66292bfd92a3317fea6bc3e58dfb919"
+        }
+      }
+    }
+  }
+}
