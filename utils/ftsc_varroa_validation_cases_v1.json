@@ -1,0 +1,288 @@
+{
+  "schema": "ftsc_varroa_validation_all_paper_cases_v1",
+  "dataset": "Varroa",
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "repo_id": "TLMHoang/FTSC_results",
+  "split": "val",
+  "split_policy": {
+    "seed_specific": true,
+    "gt_source": "gt_one",
+    "only_positives": true,
+    "class_policy": "map-3-to-1",
+    "expected_counts": {
+      "train": 2762,
+      "val": 592,
+      "test": 592
+    }
+  },
+  "scope": "Main Results and A/B/C/D ablations only; excludes augmentation compatibility",
+  "cases": {
+    "FTSC": {
+      "source_run": "Varroa/original_runs/V1_FTSC",
+      "sections": [
+        "main:YOLOv8n+FTSC",
+        "A:on",
+        "C:reference",
+        "D:alpha6"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "Varroa/original_runs/V1_FTSC/seed_42/weights/best.pt",
+          "sha256": "161b6ad89d1d4ca759b9a4565ee8a710b3d1e790c52b7ad2e1f74bb33507915e"
+        },
+        "43": {
+          "path": "Varroa/original_runs/V1_FTSC/seed_43/weights/best.pt",
+          "sha256": "4677fb5708d2657340d231c52069eb0116e7f25a85769abb37ec099f840982b9"
+        },
+        "44": {
+          "path": "Varroa/original_runs/V1_FTSC/seed_44/weights/best.pt",
+          "sha256": "65a7a4e2251051eecd08acd8192f66679193b496dbb996cab526bd6cd0bf7f66"
+        }
+      }
+    },
+    "FTSC_YOLOV9T": {
+      "source_run": "Varroa/cross_yolo_portability/yolov9t/yolov9t__FTSC_H2",
+      "sections": [
+        "main:YOLOv9t+FTSC"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "Varroa/cross_yolo_portability/yolov9t/yolov9t__FTSC_H2/seed_42/weights/best.pt",
+          "sha256": "bfb182f00633fc0b383f47c780a2e9d88bf3cf5c37f65934df680e040befd7b2"
+        },
+        "43": {
+          "path": "Varroa/cross_yolo_portability/yolov9t/yolov9t__FTSC_H2/seed_43/weights/best.pt",
+          "sha256": "5ff2acde1a01ea521ba83c544fc2187deb8b497dc60437a1439df6d71476ff15"
+        },
+        "44": {
+          "path": "Varroa/cross_yolo_portability/yolov9t/yolov9t__FTSC_H2/seed_44/weights/best.pt",
+          "sha256": "3c3ae667009411a71d612695a09cf9ea02f50207c631bf6c375ef3cd7e817c1e"
+        }
+      }
+    },
+    "FTSC_YOLO11N": {
+      "source_run": "Varroa/cross_yolo_portability/yolo11n/yolo11n__FTSC_H2",
+      "sections": [
+        "main:YOLO11n+FTSC"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "Varroa/cross_yolo_portability/yolo11n/yolo11n__FTSC_H2/seed_42/weights/best.pt",
+          "sha256": "85098d9a849962f5a5e7b0d2e749f1b3517d02f6ab4b881d8ee1e33511cc4255"
+        },
+        "43": {
+          "path": "Varroa/cross_yolo_portability/yolo11n/yolo11n__FTSC_H2/seed_43/weights/best.pt",
+          "sha256": "cd3bba4d70fc58cdb09161bab239e562d73b492b0dfdd7499b5584e92e94ddb8"
+        },
+        "44": {
+          "path": "Varroa/cross_yolo_portability/yolo11n/yolo11n__FTSC_H2/seed_44/weights/best.pt",
+          "sha256": "078834b6539e963cd3f2b3ec7181ec3e09ee5b85ce2cdc574d05384c4969252b"
+        }
+      }
+    },
+    "FTSC_OFF": {
+      "source_run": "Varroa/original_runs/V0_NOFTSC",
+      "sections": [
+        "A:off"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "Varroa/original_runs/V0_NOFTSC/seed_42/weights/best.pt",
+          "sha256": "e55cefa4644318491dcac5d2fe6a5fb9e7a58dd0e067808fe7ca5f754b93ed51"
+        },
+        "43": {
+          "path": "Varroa/original_runs/V0_NOFTSC/seed_43/weights/best.pt",
+          "sha256": "3d7d1122e77ec4215ab727b38963d660aa1eb309d34f82d7c5762cf842594c81"
+        },
+        "44": {
+          "path": "Varroa/original_runs/V0_NOFTSC/seed_44/weights/best.pt",
+          "sha256": "b1e93f043a2f1401a0f05f4d944d0c4f66faf4f81db351548edaf38a065b70d3"
+        }
+      }
+    },
+    "HEAD_H0": {
+      "source_run": "Varroa/journal_experiments/phase2/VR_STRUCT_H0_P2345",
+      "sections": [
+        "B:P2345"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H0_P2345/seed_42/weights/best.pt",
+          "sha256": "a3957532e1cfa93b764223d4e775c3f2cc1f86ce960e82d86cf185db19f252d2"
+        },
+        "43": {
+          "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H0_P2345/seed_43/weights/best.pt",
+          "sha256": "d859775209a4546106676b14269ad5b2e91f3580f12b086abe0552affc007083"
+        },
+        "44": {
+          "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H0_P2345/seed_44/weights/best.pt",
+          "sha256": "d1c0c8988ac16d21ab289737cbc3790edac4920c2f508012466362eab6e95d5e"
+        }
+      }
+    },
+    "HEAD_H1": {
+      "source_run": "Varroa/journal_experiments/phase2/VR_STRUCT_H1_P234",
+      "sections": [
+        "B:P234"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H1_P234/seed_42/weights/best.pt",
+          "sha256": "5ff5459dbaa18af9fdbb78da0196bf116d89f6ece3473dcc4fc29e6cb7d1afc2"
+        },
+        "43": {
+          "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H1_P234/seed_43/weights/best.pt",
+          "sha256": "f1cc58f6d6f254ff74e805fbb45ec723f0bb231081333a7ca175f7c8d436da9d"
+        },
+        "44": {
+          "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H1_P234/seed_44/weights/best.pt",
+          "sha256": "3ca613b866cfc317e83f96cd3fb9cd64957e1bdb6541c61a92c336165e63be53"
+        }
+      }
+    },
+    "HEAD_H2": {
+      "source_run": "Varroa/journal_experiments/phase2/VR_STRUCT_H2_P23",
+      "sections": [
+        "B:P23-structural"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H2_P23/seed_42/weights/best.pt",
+          "sha256": "41be2a19e412dc7b85d1dcd17817ae8699f8715fb0abc224b92af492a846490d"
+        },
+        "43": {
+          "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H2_P23/seed_43/weights/best.pt",
+          "sha256": "4d0eae9f4bae221122d27e9c1fabe54e37bfb1588a7707eb29e225843decb3be"
+        },
+        "44": {
+          "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H2_P23/seed_44/weights/best.pt",
+          "sha256": "29c5638472ba665ae2567d0659bccb29740cc7f84e9b6dda252b20c6ddf0fe5a"
+        }
+      }
+    },
+    "HEAD_H3": {
+      "source_run": "Varroa/journal_experiments/phase2/VR_STRUCT_H3_P2",
+      "sections": [
+        "B:P2"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H3_P2/seed_42/weights/best.pt",
+          "sha256": "96280874dba1227196efdd3bae1c870fbec853c7dbbce1b42ba05c6140fe6d80"
+        },
+        "43": {
+          "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H3_P2/seed_43/weights/best.pt",
+          "sha256": "4d86622005a8c2353aac2ad10d28e629036650a34b2a463e8baedfa8d8c70bc4"
+        },
+        "44": {
+          "path": "Varroa/journal_experiments/phase2/VR_STRUCT_H3_P2/seed_44/weights/best.pt",
+          "sha256": "993927cbb04c76d20e9c24bf506a01bc1cf15bcad2b3bece08d08f93455b43e5"
+        }
+      }
+    },
+    "EDGE_P2": {
+      "source_run": "Varroa/additional_ablations/varroa_ftsc_edge_placement_headscale/EDGE_P2_DETECT_ONLY",
+      "sections": [
+        "C:edge-p2"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "Varroa/additional_ablations/varroa_ftsc_edge_placement_headscale/EDGE_P2_DETECT_ONLY/seed_42/weights/best.pt",
+          "sha256": "90ed2c900e3c7e34a1a3ef44d545b0bca611e4d486ccedbd05e223ec0fe92184"
+        },
+        "43": {
+          "path": "Varroa/additional_ablations/varroa_ftsc_edge_placement_headscale/EDGE_P2_DETECT_ONLY/seed_43/weights/best.pt",
+          "sha256": "8462ac578df5fa3190b22b05793338777dbe1377d7232d0196bf906d74648f26"
+        },
+        "44": {
+          "path": "Varroa/additional_ablations/varroa_ftsc_edge_placement_headscale/EDGE_P2_DETECT_ONLY/seed_44/weights/best.pt",
+          "sha256": "8a8304cb67a843f80b24256cb0d58f70e1b9386d7f33c4eba97d0f98371b8414"
+        }
+      }
+    },
+    "EDGE_P3": {
+      "source_run": "Varroa/additional_ablations/varroa_ftsc_edge_placement_headscale/EDGE_P3_DETECT_ONLY",
+      "sections": [
+        "C:edge-p3"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "Varroa/additional_ablations/varroa_ftsc_edge_placement_headscale/EDGE_P3_DETECT_ONLY/seed_42/weights/best.pt",
+          "sha256": "0f0a209a649c833455160e1879334d10316b8dfea992b8638816aa42ffd685fa"
+        },
+        "43": {
+          "path": "Varroa/additional_ablations/varroa_ftsc_edge_placement_headscale/EDGE_P3_DETECT_ONLY/seed_43/weights/best.pt",
+          "sha256": "b10cec3b5bd96a473de14a0a5582c5f00557d6f329df4bdf0647ce1c16dc9b42"
+        },
+        "44": {
+          "path": "Varroa/additional_ablations/varroa_ftsc_edge_placement_headscale/EDGE_P3_DETECT_ONLY/seed_44/weights/best.pt",
+          "sha256": "2ed3c0bbc92fd7aeeb5a62be1b8f126e2c1b8d9acb65fc834b5f41825dcc3335"
+        }
+      }
+    },
+    "COLOR_CUE": {
+      "source_run": "Varroa/original_runs/V3_COLOR",
+      "sections": [
+        "C:color"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "Varroa/original_runs/V3_COLOR/seed_42/weights/best.pt",
+          "sha256": "3d4d0365dcb00eebc9f8c88a7b4d6d81d0b6d771b456ad6073f1e04c42c15528"
+        },
+        "43": {
+          "path": "Varroa/original_runs/V3_COLOR/seed_43/weights/best.pt",
+          "sha256": "187462df4cd6238e32ece0fdae0b21ef0d8da2a94f0c5f11bee8197caf0b91d3"
+        },
+        "44": {
+          "path": "Varroa/original_runs/V3_COLOR/seed_44/weights/best.pt",
+          "sha256": "c7b8eec985b152bd4e90315a3f1955f714be5dac1e80af7ab16b89021c96600e"
+        }
+      }
+    },
+    "ALPHA4": {
+      "source_run": "Varroa/journal_experiments/alpha_sensitivity/ALPHA4_rerun",
+      "sections": [
+        "D:alpha4"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "Varroa/journal_experiments/alpha_sensitivity/ALPHA4_rerun/seed_42/weights/best.pt",
+          "sha256": "81719c364144a8e26205e3bb235767d79a9747a129c885feb8c1d0734d377a2c"
+        },
+        "43": {
+          "path": "Varroa/journal_experiments/alpha_sensitivity/ALPHA4_rerun/seed_43/weights/best.pt",
+          "sha256": "ac91eb0ecd8882c288b6dd34ccbcfc6f120c084cfbf7ba8d197b10d3691cf568"
+        },
+        "44": {
+          "path": "Varroa/journal_experiments/alpha_sensitivity/ALPHA4_rerun/seed_44/weights/best.pt",
+          "sha256": "f4abae50cd36222a249717ed127444e5ca7fff911dee02b9428f87cdbf67ff40"
+        }
+      }
+    },
+    "ALPHA8": {
+      "source_run": "Varroa/journal_experiments/alpha_sensitivity/ALPHA8_rerun",
+      "sections": [
+        "D:alpha8"
+      ],
+      "checkpoints": {
+        "42": {
+          "path": "Varroa/journal_experiments/alpha_sensitivity/ALPHA8_rerun/seed_42/weights/best.pt",
+          "sha256": "efb357bd267d2a89d06ff3d129d298fab26a0a9ed2534e15669f704890cad486"
+        },
+        "43": {
+          "path": "Varroa/journal_experiments/alpha_sensitivity/ALPHA8_rerun/seed_43/weights/best.pt",
+          "sha256": "f7bd1688c4b60db0daae27f71c7cc1fbbe902858fec8832935d0baca17530be9"
+        },
+        "44": {
+          "path": "Varroa/journal_experiments/alpha_sensitivity/ALPHA8_rerun/seed_44/weights/best.pt",
+          "sha256": "58ce82244570b3f0a3391df99248b38dfedd464833dda4fbdab980104963bba1"
+        }
+      }
+    }
+  }
+}
