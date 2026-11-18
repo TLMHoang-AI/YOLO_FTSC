@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import os
 import tempfile
 import unittest
@@ -23,6 +24,24 @@ class HeadFactorialTests(unittest.TestCase):
             self.assertFalse(a["ftsc"]["enabled"])
             self.assertTrue(b["ftsc"]["enabled"])
             self.assertEqual(a["head"][-1][0], factor.DETECT[head])
+
+    def test_upsample_none_normalization_preserves_architecture(self):
+        original = factor.load(factor.STOCK_YAML)
+        original["scale"] = "n"
+        snapshot = deepcopy(original)
+        equivalent = deepcopy(original)
+        for layer in equivalent["head"]:
+            if layer[2] == "nn.Upsample":
+                layer[3][0] = None
+        self.assertEqual(factor.graph(original), factor.graph(equivalent))
+        self.assertEqual(original, snapshot)
+        changed_scale = deepcopy(equivalent)
+        next(layer for layer in changed_scale["head"]
+             if layer[2] == "nn.Upsample")[3][1] = 3
+        self.assertNotEqual(factor.graph(original), factor.graph(changed_scale))
+        changed_detect = deepcopy(equivalent)
+        changed_detect["head"][-1][0] = [0]
+        self.assertNotEqual(factor.graph(original), factor.graph(changed_detect))
 
     def test_training_protocol_no_mosaic(self):
         args = argparse.Namespace(epochs=100, imgsz=512, batch_size=8,

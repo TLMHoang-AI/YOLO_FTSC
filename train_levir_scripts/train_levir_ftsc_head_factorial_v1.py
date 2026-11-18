@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from copy import deepcopy
 import hashlib
 import json
 import math
@@ -84,7 +85,15 @@ def load(path: Path) -> dict[str, Any]:
 
 
 def graph(payload: dict[str, Any]) -> dict[str, Any]:
-    return {key: payload[key] for key in ("nc", "scale", "scales", "backbone", "head")}
+    result = deepcopy({key: payload[key] for key in ("nc", "scale", "scales", "backbone", "head")})
+    # parse_model evaluates the stock YAML string "None" to Python None.
+    # Normalize only Upsample's size argument; preserve all architecture checks.
+    for section in ("backbone", "head"):
+        for layer in result[section]:
+            module, args = layer[2], layer[3]
+            if module == "nn.Upsample" and args and args[0] == "None":
+                args[0] = None
+    return result
 
 
 def source_preflight() -> dict[str, Any]:
