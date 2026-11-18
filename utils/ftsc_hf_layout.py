@@ -48,6 +48,7 @@ NAMESPACE_ROOTS = {
     "varroa_ftsc_next_ablation_suite": "Varroa/additional_ablations/varroa_ftsc_next_ablation_suite",
     "levir_ftsc_journal_phase2_v1": "LEVIR-Ship/journal_experiments/phase2",
     "levir_v8_p23_ftsc_off_hf_first_v1": "LEVIR-Ship/journal_experiments/ftsc_off_hf_first_v1",
+    "levir_ftsc_head_factorial_v1": "LEVIR-Ship/journal_experiments/head_factorial_v1",
     "levir_v8_p23_portability_backfill_v1": "LEVIR-Ship/journal_experiments/causal_backfill",
     "levir_ftsc_position_alpha_historical_h2_v1_rerun_d3e60b1e59d2": "LEVIR-Ship/journal_experiments/alpha_sensitivity",
     "tinyperson_ftsc_causal_suite": "TinyPerson/original_runs",
