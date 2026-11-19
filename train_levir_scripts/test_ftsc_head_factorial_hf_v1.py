@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 from train_levir_scripts import ftsc_head_factorial_hf_v1 as hf
@@ -24,6 +25,20 @@ class FakeHub:
 
 
 class HeadFactorialHubTests(unittest.TestCase):
+    def test_transient_upload_retry_refreshes_inventory(self):
+        error = RuntimeError("temporary server error")
+        error.response = SimpleNamespace(status_code=500)
+        with patch.object(hf, "_publish_or_verify_once", side_effect=[error, {"status": "verified"}]) as publish, patch("time.sleep"):
+            self.assertEqual(hf.publish_or_verify(None, "secret", None, "P345_FTSC", 42, None, {}), {"status": "verified"})
+            self.assertEqual(publish.call_count, 2)
+
+    def test_contract_failure_is_not_retried(self):
+        with patch.object(hf, "_publish_or_verify_once", side_effect=RuntimeError("partial remote archive")) as publish, patch("time.sleep"):
+            with self.assertRaisesRegex(RuntimeError, "partial remote"):
+                hf.publish_or_verify(None, "secret", None, "P345_FTSC", 42, None, {})
+            self.assertEqual(publish.call_count, 1)
+
+
     def test_canonical_namespace_does_not_overlap_legacy_runs(self):
         path = hf.remote_prefix("P345_FTSC", 42)
         self.assertEqual(path, "LEVIR-Ship/journal_experiments/head_factorial_v1/P345_FTSC/seed_42")

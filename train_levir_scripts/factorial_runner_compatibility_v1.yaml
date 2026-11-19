@@ -1,0 +1,4 @@
+# Audited orchestration fixes: completion classification and checkpoint-preserving resume.
+compatible_pairs:
+- after: a02ea34368f92e442db7aad0ed096bb9c099b07cb6ce337e7668a290ce0c6794
+  before: 31383ab942e1effd7776430fa1374014398aa2348bafb2cbf9b052f1fd89b238

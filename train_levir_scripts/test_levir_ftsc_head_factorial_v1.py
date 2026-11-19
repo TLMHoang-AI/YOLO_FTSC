@@ -6,6 +6,9 @@ from copy import deepcopy
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
+import json
 from pathlib import Path
 
 from train_levir_scripts import train_levir_ftsc_head_factorial_v1 as factor
@@ -42,6 +45,72 @@ class HeadFactorialTests(unittest.TestCase):
         changed_detect = deepcopy(equivalent)
         changed_detect["head"][-1][0] = [0]
         self.assertNotEqual(factor.graph(original), factor.graph(changed_detect))
+
+    def test_interrupted_and_finalized_checkpoint_states(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            (run / "weights").mkdir()
+            for name in ("best.pt", "last.pt"):
+                (run / "weights" / name).write_bytes(b"checkpoint")
+            (run / "results.csv").write_text("epoch,loss\n5,1.0\n")
+            expected = {"schema": "test"}
+            for name in ("factorial_contract.json", "experiment_manifest.json"):
+                factor.write_json(run / name, expected)
+            checkpoint = {"epoch": 4, "optimizer": {}, "train_args": {"epochs": 100}}
+            with patch.dict("sys.modules", {"torch": SimpleNamespace(load=lambda *a, **k: checkpoint)}):
+                self.assertEqual(factor.current_state(run, expected), "PARTIAL_TRAINING")
+                (run / "evaluation_metrics_extended.json").write_text("{}")
+                factor.write_json(run / "factorial_completion.json", {
+                    "contract_sha256": factor.sha(run / "factorial_contract.json"),
+                    "best_sha256": factor.sha(run / "weights/best.pt"),
+                    "metrics_sha256": factor.sha(run / "evaluation_metrics_extended.json"),
+                })
+                with self.assertRaisesRegex(RuntimeError, "Invalid completion marker"):
+                    factor.current_state(run, expected)
+                (run / "factorial_completion.json").unlink()
+                checkpoint.update(epoch=-1, optimizer=None)
+                self.assertEqual(factor.current_state(run, expected), "EVALUATE")
+                self.assertEqual(factor.training_end(run)["reason"], "finalized_early_stop")
+                checkpoint.update(epoch=99, optimizer={})
+                (run / "results.csv").write_text("epoch,loss\n100,1.0\n")
+                self.assertEqual(factor.current_state(run, expected), "EVALUATE")
+                self.assertEqual(factor.training_end(run)["reason"], "epoch_limit")
+
+    def test_only_audited_runner_migration_is_compatible(self):
+        pair = factor.load(factor.ROOT / "train_levir_scripts/factorial_runner_compatibility_v1.yaml")["compatible_pairs"][0]
+        key = "train_levir_scripts/train_levir_ftsc_head_factorial_v1.py"
+        saved = {"source_sha256": {key: pair["before"]}, "epochs": 100}
+        expected = {"source_sha256": {key: pair["after"]}, "epochs": 100}
+        self.assertTrue(factor.contracts_compatible(saved, expected))
+        expected["epochs"] = 5
+        self.assertFalse(factor.contracts_compatible(saved, expected))
+        expected["epochs"] = 100
+        expected["source_sha256"][key] = "unknown"
+        self.assertFalse(factor.contracts_compatible(saved, expected))
+
+    def test_resume_setup_preserves_checkpoint_weights(self):
+        class Tensor:
+            def __init__(self, value): self.value = value
+            def detach(self): return self
+            def cpu(self): return self
+        class Model:
+            def float(self): return self
+            def state_dict(self): return {"weight": Tensor(42)}
+        class Base:
+            def setup_model(self):
+                self.observed_pretrained = self.args.pretrained
+                self.model = Model()
+                return {"ema": Model()}
+        with patch.dict("sys.modules", {
+            "ultralytics.models.yolo.detect.train": SimpleNamespace(DetectionTrainer=Base),
+            "torch": SimpleNamespace(equal=lambda a, b: a.value == b.value),
+        }):
+            trainer = factor.resume_trainer_class()()
+            trainer.args = SimpleNamespace(pretrained="yolov8n.pt")
+            trainer.resume = True
+            trainer.setup_model()
+            self.assertIs(trainer.observed_pretrained, True)
+            self.assertEqual(trainer.args.pretrained, "yolov8n.pt")
 
     def test_training_protocol_no_mosaic(self):
         args = argparse.Namespace(epochs=100, imgsz=512, batch_size=8,

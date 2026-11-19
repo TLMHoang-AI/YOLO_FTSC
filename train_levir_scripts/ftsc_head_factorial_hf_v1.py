@@ -92,7 +92,7 @@ def restore_available(uploader: FTSCResultsUploader, inventory_report: dict[str,
     return restored
 
 
-def publish_or_verify(uploader: FTSCResultsUploader, token: str, args: Any,
+def _publish_or_verify_once(uploader: FTSCResultsUploader, token: str, args: Any,
                       case: str, seed: int, data_yaml: Path,
                       source: dict[str, Any]) -> dict[str, Any]:
     """Archive immediately after each finished run; reject all remote collisions."""
@@ -133,3 +133,19 @@ def publish_or_verify(uploader: FTSCResultsUploader, token: str, args: Any,
     (run / "factorial_hf_publication.json").write_text(
         json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     return record
+
+
+def publish_or_verify(uploader: FTSCResultsUploader, token: str, args: Any,
+                      case: str, seed: int, data_yaml: Path,
+                      source: dict[str, Any]) -> dict[str, Any]:
+    """Refresh remote inventory before each transient-error retry; never retrain."""
+    import time
+    for attempt in range(4):
+        try:
+            return _publish_or_verify_once(uploader, token, args, case, seed, data_yaml, source)
+        except Exception as error:
+            status = getattr(getattr(error, "response", None), "status_code", None)
+            if status not in (429, 500, 502, 503, 504) or attempt == 3:
+                raise
+            time.sleep(5 * (2 ** attempt))
+    raise AssertionError("unreachable")

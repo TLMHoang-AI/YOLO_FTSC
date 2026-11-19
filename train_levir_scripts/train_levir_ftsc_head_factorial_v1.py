@@ -198,15 +198,54 @@ def write_json(path: Path, value: Any) -> None:
     temp.replace(path)
 
 
+def training_end(run: Path) -> dict[str, Any] | None:
+    """Only finalized checkpoints or a recorded final epoch prove termination."""
+    import torch
+    checkpoint = torch.load(run / "weights/last.pt", map_location="cpu", weights_only=False)
+    require(isinstance(checkpoint, dict), f"Invalid last checkpoint: {run}")
+    epochs = checkpoint.get("train_args", {}).get("epochs")
+    require(isinstance(epochs, int) and epochs > 0, f"Missing checkpoint epoch budget: {run}")
+    with (run / "results.csv").open(newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    require(bool(rows), f"Empty training results: {run}")
+    final_epoch = int(float(rows[-1]["epoch"]))
+    epoch = checkpoint.get("epoch")
+    finalized = epoch == -1 and checkpoint.get("optimizer") is None
+    reached_limit = isinstance(epoch, int) and epoch + 1 >= epochs and final_epoch >= epochs
+    if not finalized and not reached_limit:
+        return None
+    return {"last_epoch": final_epoch, "requested_epochs": epochs,
+            "reason": "epoch_limit" if final_epoch >= epochs else "finalized_early_stop",
+            "last_sha256": sha(run / "weights/last.pt")}
+
+
+def contracts_compatible(saved: dict[str, Any], expected: dict[str, Any]) -> bool:
+    if saved == expected:
+        return True
+    # Explicitly audited orchestration-only migration; all other fields stay exact.
+    prior, current = deepcopy(saved), deepcopy(expected)
+    key = "train_levir_scripts/train_levir_ftsc_head_factorial_v1.py"
+    try:
+        before = prior["source_sha256"][key]
+        after = current["source_sha256"][key]
+        registry = load(ROOT / "train_levir_scripts/factorial_runner_compatibility_v1.yaml")
+        if {"before": before, "after": after} not in registry["compatible_pairs"]:
+            return False
+        prior["source_sha256"][key] = after
+    except (KeyError, FileNotFoundError):
+        return False
+    return prior == current
+
+
 def current_state(run: Path, expected: dict[str, Any]) -> str:
     if not run.exists():
         return "NEW"
     require((run / "factorial_contract.json").is_file(),
             f"Non-empty or orphan run has no contract: {run}")
     saved = json.loads((run / "factorial_contract.json").read_text(encoding="utf-8"))
-    require(saved == expected, f"Scientific contract mismatch; refusing overwrite: {run}")
+    require(contracts_compatible(saved, expected), f"Scientific contract mismatch; refusing overwrite: {run}")
     manifest = run / "experiment_manifest.json"
-    require(manifest.is_file() and json.loads(manifest.read_text(encoding="utf-8")) == expected,
+    require(manifest.is_file() and json.loads(manifest.read_text(encoding="utf-8")) == saved,
             f"Canonical HF experiment manifest missing or mismatched: {run}")
     completion = run / "factorial_completion.json"
     if completion.is_file():
@@ -215,9 +254,10 @@ def current_state(run: Path, expected: dict[str, Any]) -> str:
                 and result["best_sha256"] == sha(run / "weights/best.pt")
                 and result["metrics_sha256"] == sha(run / "evaluation_metrics_extended.json"),
                 f"Completed artifacts changed: {run}")
+        require(training_end(run) is not None, f"Invalid completion marker on interrupted training: {run}")
         return "COMPLETE"
     if (run / "weights/best.pt").is_file() and (run / "weights/last.pt").is_file() and (run / "results.csv").is_file():
-        return "EVALUATE"
+        return "EVALUATE" if training_end(run) is not None else "PARTIAL_TRAINING"
     if (run / "weights/last.pt").is_file():
         return "PARTIAL_TRAINING"
     return "ORPHAN_OR_PREPARING"
@@ -271,6 +311,34 @@ def model_preflight(pretrained: Path | None = None) -> dict[str, Any]:
     return reports
 
 
+def resume_trainer_class():
+    """Prevent the fork's pretrained override from replacing resumed model weights."""
+    from ultralytics.models.yolo.detect.train import DetectionTrainer
+
+    class CheckpointResumeTrainer(DetectionTrainer):
+        def setup_model(self):
+            pretrained = self.args.pretrained
+            if self.resume:
+                self.args.pretrained = True  # use checkpoint selected by args.model
+            try:
+                checkpoint = super().setup_model()
+            finally:
+                self.args.pretrained = pretrained
+            if self.resume:
+                import torch
+                saved_model = checkpoint.get("ema") or checkpoint.get("model")
+                require(saved_model is not None, "Resume checkpoint has no model weights")
+                expected = saved_model.float().state_dict()
+                actual = self.model.state_dict()
+                require(actual.keys() == expected.keys() and all(
+                    torch.equal(actual[key].detach().cpu(), expected[key].detach().cpu())
+                    for key in expected), "Resume model weights differ from last.pt")
+                print("[RESUME VERIFIED] All model tensors match last.pt", flush=True)
+            return checkpoint
+
+    return CheckpointResumeTrainer
+
+
 def train_and_evaluate(args: argparse.Namespace, case: str, seed: int, data_yaml: Path,
                        source: dict[str, Any]) -> None:
     run = args.project / case / f"seed_{seed}"
@@ -310,7 +378,8 @@ def train_and_evaluate(args: argparse.Namespace, case: str, seed: int, data_yaml
         for key in ("seed", "epochs", "imgsz", "batch", "optimizer", "mosaic", "close_mosaic"):
             require(str(prior.get(key)) == str(options[key]),
                     f"Resume train_args mismatch for {key}: {run}")
-        YOLO(str(run / "weights/last.pt")).train(resume=True, device=args.device, workers=args.workers)
+        YOLO(str(run / "weights/last.pt")).train(resume=True, device=args.device, workers=args.workers,
+                                                trainer=resume_trainer_class())
         require((run / "weights/best.pt").is_file(), f"Resume produced no best checkpoint: {run}")
     if state in ("NEW", "PARTIAL_TRAINING", "EVALUATE"):
         from evaluate_test.standard_detection_metrics import evaluate_run, load_merged_metrics
@@ -330,6 +399,7 @@ def train_and_evaluate(args: argparse.Namespace, case: str, seed: int, data_yaml
             shutil.copy2(CASES[case], config_copy)
         write_json(run / "factorial_completion.json", {
             "state": "COMPLETE",
+            "training_end": training_end(run),
             "contract_sha256": sha(run / "factorial_contract.json"),
             "best_sha256": sha(run / "weights/best.pt"),
             "metrics_sha256": sha(run / "evaluation_metrics_extended.json"),
