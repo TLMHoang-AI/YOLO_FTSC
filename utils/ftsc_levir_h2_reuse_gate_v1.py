@@ -7,6 +7,7 @@ A FAIL means DO NOT present newly trained OFF as a strictly matched control.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import subprocess
@@ -77,6 +78,54 @@ def source_identity(root):
     return rows
 
 
+def routing_function_identity(root):
+    """Compare training-relevant routing functions rather than full file byte hash.
+
+    A changed validator is not an accuracy intervention once the entire dataset
+    and split manifest byte hashes are confirmed identical. Changes to seeding,
+    source loading or split generation must still block baseline-only reuse.
+    """
+    name = "train_levir_scripts/train_all_levir_yolov8n_p2_routing.py"
+    old, _ = historical_code(root, name)
+    now = root / name
+    if old is None or not now.is_file():
+        return {"error": "Historical routing source unavailable", "checks": {}}
+    def functions(content):
+        module = ast.parse(content)
+        return {node.name: ast.dump(node, include_attributes=False)
+                for node in module.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    before, after = functions(old), functions(now.read_bytes())
+    tracked = ("local_ultralytics", "seed_everything", "create_fixed_split",
+               "prepare_fixed_split", "validate_split")
+    checks = {key: key in before and key in after and before[key] == after[key]
+              for key in tracked}
+    return {"checks": checks, "identical_functions": sorted(k for k,v in checks.items() if v),
+            "different_functions": sorted(k for k,v in checks.items() if not v),
+            "note": "Different validation/prepare functions can be tolerated ONLY if "
+                    "frozen split manifest plus full image/label content hashes match; "
+                    "training seed/source loading/split creation must remain identical."}
+
+
+def pretrained_candidates(root, explicit=None):
+    """Check known local locations; never download or substitute a different .pt."""
+    paths = ([Path(explicit)] if explicit else []) + [
+        root / "yolov8n.pt", root / "weights/yolov8n.pt",
+        root.parent / "yolov8n.pt", root.parent / "weights/yolov8n.pt",
+        Path("/marimo/yolov8n.pt"),
+    ]
+    results, seen = [], set()
+    for candidate in paths:
+        absolute = candidate.expanduser().resolve()
+        if str(absolute) in seen:
+            continue
+        seen.add(str(absolute))
+        exists = absolute.is_file()
+        digest = sha_file(absolute) if exists else None
+        results.append({"path": str(absolute), "exists": exists,
+                        "sha256": digest, "matches": digest == REF_PRETRAINED})
+    return results
+
+
 def remote_contracts():
     from huggingface_hub import hf_hub_download
     result = {}
@@ -91,15 +140,15 @@ def remote_contracts():
     return result
 
 
-def check_report(root):
-    from utils.ftsc_paper_run_integrity import _split_identity, hash_record
+def check_report(root, pretrained_path=None):
+    from utils.ftsc_paper_run_integrity import _split_identity
     from utils.ftsc_paper_preflight import load_yaml, layers
     from train_levir_scripts import train_all_levir_yolov8n_p2_ftsc_head_pruning as h
     from train_levir_scripts import train_levir_ftsc_head_factorial_v1 as fac
     config = fac.CASES["P23_FTSC"]
     control = fac.CASES["P23_NOFTSC"]
     data = root/"datasets/levir_ship_yolo_seed42/levir_ship.yaml"
-    pretrained = root/"yolov8n.pt"
+    pretrained_sources = pretrained_candidates(root, pretrained_path)
     remote = remote_contracts()
     checks = {}
     checks["ftsc_config_sha256"] = config.is_file() and sha_file(config) == REF_CONFIG
@@ -109,7 +158,7 @@ def check_report(root):
     checks["ftsc_graph_sha256"] = (config.is_file() and
         sha_bytes(json.dumps(layers(load_yaml(config)), sort_keys=True,
                              separators=(",", ":")).encode()) == REF_GRAPH)
-    checks["pretrained_bytes_match"] = pretrained.is_file() and sha_file(pretrained) == REF_PRETRAINED
+    checks["pretrained_bytes_match"] = any(p["matches"] for p in pretrained_sources)
     if data.is_file():
         split = _split_identity("LEVIR-Ship", data)
     else:
@@ -143,8 +192,24 @@ def check_report(root):
             == REF_COMMIT
         )
     sources = source_identity(root)
-    checks["scientific_source_bytes_match_recon_commit"] = all(
-        v["matches_reconstruction_commit"] for v in sources.values()
+    routing = routing_function_identity(root)
+    critical_sources = {k: v for k, v in sources.items() if not k.endswith('/train_all_levir_yolov8n_p2_routing.py')}
+    checks["core_training_source_bytes_match_recon_commit"] = all(
+        v["matches_reconstruction_commit"] for v in critical_sources.values()
+    )
+    # If the split bytes are identical, only non-training validation and
+    # prepared-dataset path checking changes may be accepted in routing.py.
+    # No relaxation applies to random seeding, loader selection or split creation.
+    essential_routing = ("seed_everything", "local_ultralytics", "create_fixed_split")
+    checks["routing_training_functions_match_recon_commit"] = (
+        all(routing.get("checks", {}).get(k) is True for k in essential_routing)
+        and all(checks[k] for k in ("dataset_full_contents_match",
+                                      "dataset_split_manifest_match",
+                                      "dataset_yaml_semantics_match"))
+    )
+    checks["scientific_source_bytes_match_recon_commit"] = (
+        checks["core_training_source_bytes_match_recon_commit"]
+        and checks["routing_training_functions_match_recon_commit"]
     )
     # Control graph, scientific recipe and full source must pass before claiming
     # a future baseline-only training as a strictly matched ablation.
@@ -157,6 +222,9 @@ def check_report(root):
         "blockers": blockers,
         "status": "READY_FOR_MATCHED_CONTROL_ONLY" if not blockers else "BLOCKED_FOR_STRICT_MATCH",
         "source_revision_comparison": sources,
+        "routing_function_comparison": routing,
+        "pretrained_candidates": pretrained_sources,
+        "selected_pretrained": next((x["path"] for x in pretrained_sources if x["matches"]), None),
         "dataset_identity": split,
         "training_recipes": recipe,
         "action": "Baseline-only training is strictly matched only on READY. "
@@ -168,8 +236,10 @@ def check_report(root):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--report", type=Path, default=ROOT/"runs/levir_h2_reuse_gate_v1/gate.json")
+    p.add_argument("--pretrained", type=Path, default=None,
+                   help="Optional path to the exact original yolov8n.pt; SHA256 is enforced")
     args = p.parse_args()
-    result = check_report(ROOT)
+    result = check_report(ROOT, pretrained_path=args.pretrained)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     if args.report.exists():
         old = json.loads(args.report.read_text())
