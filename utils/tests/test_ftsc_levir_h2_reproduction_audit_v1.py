@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 PATH = ROOT / "utils/ftsc_levir_h2_reproduction_audit_v1.py"
@@ -31,6 +32,20 @@ class H2AuditOffline(unittest.TestCase):
         a = SimpleNamespace(cases=["RECON_H2_V1"], seeds=[42])
         b = SimpleNamespace(cases=["RECON_H2_V1"], seeds=[42, 43, 44])
         self.assertNotEqual(MOD.selection_id(a), MOD.selection_id(b))
+
+    def test_immutable_json_roundtrip_and_real_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "inventory.json"
+            data = {"historical_per_seed_pct": {42: {"AP50": 81.25}}}
+            MOD.immutable_json(path, data)
+            original = path.read_bytes()
+            MOD.immutable_json(path, data)
+            self.assertEqual(path.read_bytes(), original)
+            MOD.immutable_json(path, json.loads(original))
+            self.assertEqual(path.read_bytes(), original)
+            with self.assertRaisesRegex(RuntimeError, "Existing output differs"):
+                MOD.immutable_json(path, {"historical_per_seed_pct": {42: {"AP50": 82.0}}})
+            self.assertEqual(path.read_bytes(), original)
 
     def test_no_training_entrypoint(self):
         import inspect

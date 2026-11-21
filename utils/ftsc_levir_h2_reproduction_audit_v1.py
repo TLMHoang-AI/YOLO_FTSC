@@ -45,6 +45,8 @@ def require(ok, msg):
 
 
 def immutable_json(path, obj):
+    # Compare the JSON representation: integer keys become strings on disk.
+    obj = json.loads(json.dumps(obj, sort_keys=True, default=str))
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         prior = json.loads(path.read_text(encoding="utf-8"))
