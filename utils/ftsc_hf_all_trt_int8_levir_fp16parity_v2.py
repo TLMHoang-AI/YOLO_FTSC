@@ -35,7 +35,7 @@ ROOT = common.ROOT
 DATASET = "LEVIR-Ship"
 HF_REPO = common.HF_REPO
 CONTRACT = "FTSC_LEVIR_INT8_STATIC_FP16_GEOMETRY_PIXEL_PARITY_V2"
-DEFAULT_PROJECT = ROOT / "runs/ftsc_hf_int8_levir_static_fp16parity_v2"
+DEFAULT_PROJECT = ROOT / "runs/ftsc_hf_int8_levir_static_fp16parity_v2_callfix"
 ROLES = {"main": 544, "small": 512}
 METRIC_KEYS = common.METRICS[DATASET]
 SCORE_NAMES = common.SCORE_NAMES
@@ -367,7 +367,7 @@ def evaluate_one(args, pinned: dict, row: dict, source_files: dict,
     yaml_file, images, dataset_provenance, calibration = context
     if final.is_file():
         doc = json.loads(final.read_text(encoding="utf-8"))
-        verify_completed(where, row, pinned, doc, source_files, runtime,
+        verify_completed(where, row, pinned, doc, source_files,
                          dataset_provenance, calibration)
         return {"status": "REUSED_VERIFIED", "source": row["path"]}
     checkpoint, digest = common.existing_sha_source(
@@ -449,7 +449,7 @@ def evaluate_one(args, pinned: dict, row: dict, source_files: dict,
             key: 100. * (measured[key] - reference[key]) for key in METRIC_KEYS},
         "engine_provenance": provenance,
     }
-    verify_completed(where, row, pinned, report, source_files, runtime,
+    verify_completed(where, row, pinned, report, source_files,
                      dataset_provenance, calibration)
     common.atomic_json(final, report)
     return {"status": report["status"], "source": row["path"],

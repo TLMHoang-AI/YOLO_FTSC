@@ -5,6 +5,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
+from types import SimpleNamespace
+from contextlib import ExitStack
 
 from utils import ftsc_hf_all_trt_int8_levir_fp16parity_v2 as mod
 from utils import ftsc_hf_all_trt_int8_paper_v1 as legacy
@@ -96,6 +99,73 @@ class PixelParityUnitTests(unittest.TestCase):
         self.assertIn("pt32_reference/test_val_preprocessed_inputs_sha256.json",src)
         self.assertIn('prior.read_bytes() == now.read_bytes()',src)
         self.assertNotIn(".train(", src)
+
+
+
+class EvaluateOneRegressionTests(unittest.TestCase):
+    def test_reuse_calls_verifier_with_supported_arguments(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            row = {"path": "checkpoint", "kind": "best.pt"}
+            pinned, sources, runtime = {"repo": "repo"}, {"code": "sha"}, {"gpu": "test"}
+            dataset, calibration = {"split": "test"}, {"split": "train"}
+            saved = {"status": "COMPLETE_INT8_STATIC_PARITY"}
+            (folder/"metrics_int8.json").write_text(json.dumps(saved))
+            with mock.patch.object(mod, "path_for", return_value=folder), mock.patch.object(
+                mod, "verify_completed", autospec=True
+            ) as verify:
+                result = mod.evaluate_one(SimpleNamespace(project=folder), pinned, row,
+                                          sources, runtime, (None, [], dataset, calibration))
+            verify.assert_called_once_with(folder, row, pinned, saved, sources, dataset, calibration)
+            self.assertEqual(result["status"], "REUSED_VERIFIED")
+
+    def _new_result(self, reject=False):
+        with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
+            folder = Path(td)
+            (folder/"pt32_reference").mkdir()
+            for relative in ("test_val_preprocessed_inputs_sha256.json",
+                             "pt32_reference/test_val_preprocessed_inputs_sha256.json"):
+                (folder/relative).write_text("identical pixels")
+            row = {"path": "checkpoint", "kind": "best.pt", "checkpoint_seed": 42,
+                   "seed_resolution": "checkpoint_path"}
+            pinned = {"repo": "repo", "hf_revision": "a"*40}
+            sources, runtime = {"code": "sha"}, {"gpu": "test"}
+            dataset, calibration = {"split": "test"}, {"split": "train"}
+            metrics = {key: .5 for key in mod.METRIC_KEYS}
+            pixels = {"preprocessed_input_manifest_sha256": "hash",
+                      "input_manifest_sha256": "hash", "gt_sha256": "hash",
+                      "predictions_sha256": "hash"}
+            stack.enter_context(mock.patch.object(mod, "path_for", return_value=folder))
+            stack.enter_context(mock.patch("evaluate_test.standard_detection_metrics.ensure_local_ultralytics"))
+            stack.enter_context(mock.patch.object(mod.common, "existing_sha_source",
+                                                 return_value=(folder/"best.pt", "digest")))
+            stack.enter_context(mock.patch.object(mod.common, "sha256", return_value="hash"))
+            stack.enter_context(mock.patch.object(mod, "static_engine_for",
+                return_value=(folder/"source.engine", {"engine_sha256": "enginehash"})))
+            for name in ("evaluate_main_pt32", "evaluate_main_int8", "predict_small"):
+                stack.enter_context(mock.patch.object(mod, name, return_value=(metrics, pixels)))
+            stack.enter_context(mock.patch.object(mod, "verify_small_parity",
+                return_value={"main_and_small_input_pixel_parity": True}))
+            verify = stack.enter_context(mock.patch.object(mod, "verify_completed", autospec=True))
+            if reject:
+                verify.side_effect = RuntimeError("invalid evidence")
+                with self.assertRaisesRegex(RuntimeError, "invalid evidence"):
+                    mod.evaluate_one(SimpleNamespace(project=folder, device="cuda:0", workers=0),
+                                     pinned, row, sources, runtime, (None, [], dataset, calibration))
+                self.assertFalse((folder/"metrics_int8.json").exists())
+            else:
+                result = mod.evaluate_one(SimpleNamespace(project=folder, device="cuda:0", workers=0),
+                                          pinned, row, sources, runtime, (None, [], dataset, calibration))
+                saved = json.loads((folder/"metrics_int8.json").read_text())
+                verify.assert_called_once_with(folder, row, pinned, saved, sources, dataset, calibration)
+                self.assertEqual(saved["runtime"], runtime)
+                self.assertEqual(result["status"], "COMPLETE_INT8_STATIC_PARITY")
+
+    def test_new_result_is_verified_then_saved(self):
+        self._new_result()
+
+    def test_failed_verification_does_not_save_metrics(self):
+        self._new_result(reject=True)
 
 
 if __name__ == "__main__":
