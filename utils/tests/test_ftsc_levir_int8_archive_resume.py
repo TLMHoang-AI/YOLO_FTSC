@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from contextlib import nullcontext
 from unittest import mock
 from types import SimpleNamespace
 from utils import ftsc_levir_int8_archive_resume as mod
@@ -22,7 +23,8 @@ class ArchiveDriverTests(unittest.TestCase):
              mock.patch.object(mod.evaluator, 'source_hashes', return_value={}), \
              mock.patch.object(mod.core, 'runtime_identity', return_value={}), \
              mock.patch.object(mod.evaluator, 'evaluate_one', return_value={}) as evaluate, \
-             mock.patch.object(mod.evaluator, 'dataset_context', return_value=(None, [], {}, {})):
+             mock.patch.object(mod.evaluator, 'dataset_context', return_value=(None, [], {}, {})), \
+             mock.patch.object(mod, 'legacy_detect_support', return_value=nullcontext()):
             store = cls.return_value
             store.inventory.return_value = {'checkpoints':rows}
             store.publish.side_effect = RuntimeError('HF unavailable')

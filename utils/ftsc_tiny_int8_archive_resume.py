@@ -13,6 +13,7 @@ import tempfile
 
 from utils import ftsc_hf_all_trt_int8_paper_v1 as core
 from utils.hf_result_archive import HFResultArchive, MARKER_FILENAME, RUN_SUMMARY_FILENAME
+from utils.ftsc_hf_upload_policy import RateLimitedArchive, upload_report_bundle
 
 DATASET = 'TinyPerson'
 VARIANT = 'int8_ptq_paper_v1'
@@ -35,7 +36,8 @@ class Persistence:
         from huggingface_hub import HfApi
         self.args = args
         self.api = HfApi(token=os.environ.get('HF_TOKEN'))
-        self.archive = HFResultArchive(repo_id=args.repo, api=self.api,
+        self.remote_prefix = PREFIX
+        self.archive = RateLimitedArchive(repo_id=args.repo, api=self.api,
                                        cache_dir=args.project/'hf_restore_cache', retries=3,
                                        retry_backoff_seconds=2)
         self.revision = self.api.repo_info(repo_id=args.repo, repo_type='dataset').sha
@@ -131,9 +133,8 @@ class Persistence:
 
     def reports(self, inventory, hashes):
         report = core.aggregate(self.args, best_inventory(inventory), hashes)
-        for name in ('summary.json', 'all_checkpoint_status.csv', 'measured_int8_metrics.csv',
-                     'complete_three_seed_best_aggregate.csv'):
-            self.upload_file(self.args.project/DATASET/name, f'{PREFIX}/reports/{name}')
+        upload_report_bundle(self, ('summary.json', 'all_checkpoint_status.csv',
+                                    'measured_int8_metrics.csv', 'complete_three_seed_best_aggregate.csv'))
         return report
 
 
@@ -175,7 +176,8 @@ def main(argv=None):
             result = core.evaluate_job(args, inventory, row, hashes, hardware, cache)
             print(json.dumps(result), flush=True)
             store.publish(row, hashes)  # upload failure propagates; never continue unprotected
-            store.reports(inventory, hashes)
+            if result['status'] != 'REUSED_IDENTICAL':
+                store.reports(inventory, hashes)
             import gc, torch
             gc.collect()
             torch.cuda.empty_cache()
